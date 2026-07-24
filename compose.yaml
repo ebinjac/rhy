@@ -1,0 +1,185 @@
+name: rhythm
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: rhythm
+      POSTGRES_USER: rhythm
+      POSTGRES_PASSWORD: rhythm-local
+    ports:
+      - "${RHYTHM_POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - rhythm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rhythm -d rhythm"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${RHYTHM_REDIS_PORT:-56379}:6379"
+    volumes:
+      - rhythm_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  opensearch:
+    image: opensearchproject/opensearch:3.7.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "${RHYTHM_OPENSEARCH_PORT:-19200}:9200"
+    volumes:
+      - rhythm_opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 1g
+    restart: unless-stopped
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.7.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "${RHYTHM_OPENSEARCH_DASHBOARDS_PORT:-15601}:5601"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  elf-seed:
+    image: curlimages/curl:8.16.0
+    entrypoint: ["/bin/sh", "/seed/seed-elf.sh"]
+    volumes:
+      - ./scripts/seed-elf.sh:/seed/seed-elf.sh:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    restart: "no"
+
+  demo-log-generator:
+    image: curlimages/curl:8.16.0
+    entrypoint: ["/bin/sh", "/generator/generate-demo-logs.sh"]
+    environment:
+      DEMO_LOG_INTERVAL_SECONDS: "10"
+    volumes:
+      - ./scripts/generate-demo-logs.sh:/generator/generate-demo-logs.sh:ro
+    depends_on:
+      elf-seed:
+        condition: service_completed_successfully
+    init: true
+    restart: unless-stopped
+
+  migrate:
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    entrypoint: ["/usr/local/bin/rhythm-migrate"]
+    environment:
+      RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    environment:
+      RHYTHM_HTTP_ADDR: :8080
+      RHYTHM_ALLOWED_ORIGIN: http://localhost:${RHYTHM_WEB_PORT:-3100}
+      RHYTHM_DEVELOPMENT_ACTOR_ID: local-admin
+      RHYTHM_STORAGE_MODE: postgres
+      RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
+      RHYTHM_REDIS_URL: redis://redis:6379/0
+      RHYTHM_SCRIPT_RUNNER_URL: http://script-runner:8090
+      RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
+
+      RHYTHM_ALLOW_PRIVATE_TARGETS: "true"
+      RHYTHM_ELF_BOOTSTRAP_URL: http://opensearch:9200
+    ports:
+      - "${RHYTHM_API_PORT:-18080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      script-runner:
+        condition: service_healthy
+      elf-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    init: true
+    restart: unless-stopped
+
+  script-runner:
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    entrypoint: ["/usr/local/bin/rhythm-script-runner"]
+    environment:
+      RHYTHM_SCRIPT_RUNNER_ADDR: :8090
+      RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
+    expose:
+      - "8090"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 256m
+    init: true
+    restart: unless-stopped
+
+  web:
+    image: rhythm-web:local
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    environment:
+      RHYTHM_API_URL: http://api:8080
+    ports:
+      - "${RHYTHM_WEB_PORT:-3100}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/monitors"]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+    init: true
+    restart: unless-stopped
+
+volumes:
+  rhythm_postgres_data:
+  rhythm_redis_data:
+  rhythm_opensearch_data:

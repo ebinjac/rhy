@@ -1,0 +1,12 @@
+DROP INDEX IF EXISTS monitor_step_runs_baseline_idx;
+DROP TABLE IF EXISTS run_events;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS retry_backoff_ms;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS redirects_json;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS proxy_summary_json;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS tls_summary_json;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS timing_json;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS response_summary_json;
+ALTER TABLE step_attempts DROP COLUMN IF EXISTS request_summary_json;
+ALTER TABLE monitor_runs DROP COLUMN IF EXISTS alert_impact_json;
+ALTER TABLE monitor_runs DROP COLUMN IF EXISTS execution_context_json;
+ALTER TABLE monitor_runs DROP COLUMN IF EXISTS queue_delay_ms;

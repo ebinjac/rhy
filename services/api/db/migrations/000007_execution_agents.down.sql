@@ -1,0 +1,2 @@
+ALTER TABLE monitor_runs DROP COLUMN IF EXISTS agent_id;
+DROP TABLE IF EXISTS agents;

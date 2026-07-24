@@ -8,59 +8,503 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from "./routes/__root"
-import { Route as IndexRouteImport } from "./routes/index"
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as SuitesRouteImport } from './routes/suites'
+import { Route as ElfRouteImport } from './routes/elf'
+import { Route as ConfigurationRouteImport } from './routes/configuration'
+import { Route as AuditRouteImport } from './routes/audit'
+import { Route as ApplicationsRouteImport } from './routes/applications'
+import { Route as AlertsRouteImport } from './routes/alerts'
+import { Route as AgentsRouteImport } from './routes/agents'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as MonitorsIndexRouteImport } from './routes/monitors/index'
+import { Route as ElfIndexRouteImport } from './routes/elf/index'
+import { Route as MonitorsNewRouteImport } from './routes/monitors/new'
+import { Route as ElfSettingsRouteImport } from './routes/elf/settings'
+import { Route as ElfRunsRouteImport } from './routes/elf/runs'
+import { Route as ElfQueryIdRouteImport } from './routes/elf/$queryId'
+import { Route as DeploymentRunsDeploymentRunIdRouteImport } from './routes/deployment-runs/$deploymentRunId'
+import { Route as MonitorsMonitorIdRunsRouteImport } from './routes/monitors/$monitorId/runs'
+import { Route as MonitorsMonitorIdRevisionsRouteImport } from './routes/monitors/$monitorId/revisions'
+import { Route as MonitorsMonitorIdMetricsRouteImport } from './routes/monitors/$monitorId/metrics'
+import { Route as MonitorsMonitorIdEditRouteImport } from './routes/monitors/$monitorId/edit'
+import { Route as MonitorsMonitorIdRunsIndexRouteImport } from './routes/monitors/$monitorId/runs/index'
+import { Route as MonitorsMonitorIdRunsRunIdRouteImport } from './routes/monitors/$monitorId/runs/$runId'
 
-const IndexRoute = IndexRouteImport.update({
-  id: "/",
-  path: "/",
+const SuitesRoute = SuitesRouteImport.update({
+  id: '/suites',
+  path: '/suites',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ElfRoute = ElfRouteImport.update({
+  id: '/elf',
+  path: '/elf',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConfigurationRoute = ConfigurationRouteImport.update({
+  id: '/configuration',
+  path: '/configuration',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuditRoute = AuditRouteImport.update({
+  id: '/audit',
+  path: '/audit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApplicationsRoute = ApplicationsRouteImport.update({
+  id: '/applications',
+  path: '/applications',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AlertsRoute = AlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsRoute = AgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitorsIndexRoute = MonitorsIndexRouteImport.update({
+  id: '/monitors/',
+  path: '/monitors/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ElfIndexRoute = ElfIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ElfRoute,
+} as any)
+const MonitorsNewRoute = MonitorsNewRouteImport.update({
+  id: '/monitors/new',
+  path: '/monitors/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ElfSettingsRoute = ElfSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => ElfRoute,
+} as any)
+const ElfRunsRoute = ElfRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => ElfRoute,
+} as any)
+const ElfQueryIdRoute = ElfQueryIdRouteImport.update({
+  id: '/$queryId',
+  path: '/$queryId',
+  getParentRoute: () => ElfRoute,
+} as any)
+const DeploymentRunsDeploymentRunIdRoute =
+  DeploymentRunsDeploymentRunIdRouteImport.update({
+    id: '/deployment-runs/$deploymentRunId',
+    path: '/deployment-runs/$deploymentRunId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const MonitorsMonitorIdRunsRoute = MonitorsMonitorIdRunsRouteImport.update({
+  id: '/monitors/$monitorId/runs',
+  path: '/monitors/$monitorId/runs',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitorsMonitorIdRevisionsRoute =
+  MonitorsMonitorIdRevisionsRouteImport.update({
+    id: '/monitors/$monitorId/revisions',
+    path: '/monitors/$monitorId/revisions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const MonitorsMonitorIdMetricsRoute =
+  MonitorsMonitorIdMetricsRouteImport.update({
+    id: '/monitors/$monitorId/metrics',
+    path: '/monitors/$monitorId/metrics',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const MonitorsMonitorIdEditRoute = MonitorsMonitorIdEditRouteImport.update({
+  id: '/monitors/$monitorId/edit',
+  path: '/monitors/$monitorId/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitorsMonitorIdRunsIndexRoute =
+  MonitorsMonitorIdRunsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => MonitorsMonitorIdRunsRoute,
+  } as any)
+const MonitorsMonitorIdRunsRunIdRoute =
+  MonitorsMonitorIdRunsRunIdRouteImport.update({
+    id: '/$runId',
+    path: '/$runId',
+    getParentRoute: () => MonitorsMonitorIdRunsRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
-  "/": typeof IndexRoute
+  '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
+  '/alerts': typeof AlertsRoute
+  '/applications': typeof ApplicationsRoute
+  '/audit': typeof AuditRoute
+  '/configuration': typeof ConfigurationRoute
+  '/elf': typeof ElfRouteWithChildren
+  '/suites': typeof SuitesRoute
+  '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/elf/$queryId': typeof ElfQueryIdRoute
+  '/elf/runs': typeof ElfRunsRoute
+  '/elf/settings': typeof ElfSettingsRoute
+  '/monitors/new': typeof MonitorsNewRoute
+  '/elf/': typeof ElfIndexRoute
+  '/monitors/': typeof MonitorsIndexRoute
+  '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
+  '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
+  '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
+  '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
 }
 export interface FileRoutesByTo {
-  "/": typeof IndexRoute
+  '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
+  '/alerts': typeof AlertsRoute
+  '/applications': typeof ApplicationsRoute
+  '/audit': typeof AuditRoute
+  '/configuration': typeof ConfigurationRoute
+  '/suites': typeof SuitesRoute
+  '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/elf/$queryId': typeof ElfQueryIdRoute
+  '/elf/runs': typeof ElfRunsRoute
+  '/elf/settings': typeof ElfSettingsRoute
+  '/monitors/new': typeof MonitorsNewRoute
+  '/elf': typeof ElfIndexRoute
+  '/monitors': typeof MonitorsIndexRoute
+  '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
+  '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
+  '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
+  '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  "/": typeof IndexRoute
+  '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
+  '/alerts': typeof AlertsRoute
+  '/applications': typeof ApplicationsRoute
+  '/audit': typeof AuditRoute
+  '/configuration': typeof ConfigurationRoute
+  '/elf': typeof ElfRouteWithChildren
+  '/suites': typeof SuitesRoute
+  '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/elf/$queryId': typeof ElfQueryIdRoute
+  '/elf/runs': typeof ElfRunsRoute
+  '/elf/settings': typeof ElfSettingsRoute
+  '/monitors/new': typeof MonitorsNewRoute
+  '/elf/': typeof ElfIndexRoute
+  '/monitors/': typeof MonitorsIndexRoute
+  '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
+  '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
+  '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
+  '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/"
+  fullPaths:
+    | '/'
+    | '/agents'
+    | '/alerts'
+    | '/applications'
+    | '/audit'
+    | '/configuration'
+    | '/elf'
+    | '/suites'
+    | '/deployment-runs/$deploymentRunId'
+    | '/elf/$queryId'
+    | '/elf/runs'
+    | '/elf/settings'
+    | '/monitors/new'
+    | '/elf/'
+    | '/monitors/'
+    | '/monitors/$monitorId/edit'
+    | '/monitors/$monitorId/metrics'
+    | '/monitors/$monitorId/revisions'
+    | '/monitors/$monitorId/runs'
+    | '/monitors/$monitorId/runs/$runId'
+    | '/monitors/$monitorId/runs/'
   fileRoutesByTo: FileRoutesByTo
-  to: "/"
-  id: "__root__" | "/"
+  to:
+    | '/'
+    | '/agents'
+    | '/alerts'
+    | '/applications'
+    | '/audit'
+    | '/configuration'
+    | '/suites'
+    | '/deployment-runs/$deploymentRunId'
+    | '/elf/$queryId'
+    | '/elf/runs'
+    | '/elf/settings'
+    | '/monitors/new'
+    | '/elf'
+    | '/monitors'
+    | '/monitors/$monitorId/edit'
+    | '/monitors/$monitorId/metrics'
+    | '/monitors/$monitorId/revisions'
+    | '/monitors/$monitorId/runs/$runId'
+    | '/monitors/$monitorId/runs'
+  id:
+    | '__root__'
+    | '/'
+    | '/agents'
+    | '/alerts'
+    | '/applications'
+    | '/audit'
+    | '/configuration'
+    | '/elf'
+    | '/suites'
+    | '/deployment-runs/$deploymentRunId'
+    | '/elf/$queryId'
+    | '/elf/runs'
+    | '/elf/settings'
+    | '/monitors/new'
+    | '/elf/'
+    | '/monitors/'
+    | '/monitors/$monitorId/edit'
+    | '/monitors/$monitorId/metrics'
+    | '/monitors/$monitorId/revisions'
+    | '/monitors/$monitorId/runs'
+    | '/monitors/$monitorId/runs/$runId'
+    | '/monitors/$monitorId/runs/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentsRoute: typeof AgentsRoute
+  AlertsRoute: typeof AlertsRoute
+  ApplicationsRoute: typeof ApplicationsRoute
+  AuditRoute: typeof AuditRoute
+  ConfigurationRoute: typeof ConfigurationRoute
+  ElfRoute: typeof ElfRouteWithChildren
+  SuitesRoute: typeof SuitesRoute
+  DeploymentRunsDeploymentRunIdRoute: typeof DeploymentRunsDeploymentRunIdRoute
+  MonitorsNewRoute: typeof MonitorsNewRoute
+  MonitorsIndexRoute: typeof MonitorsIndexRoute
+  MonitorsMonitorIdEditRoute: typeof MonitorsMonitorIdEditRoute
+  MonitorsMonitorIdMetricsRoute: typeof MonitorsMonitorIdMetricsRoute
+  MonitorsMonitorIdRevisionsRoute: typeof MonitorsMonitorIdRevisionsRoute
+  MonitorsMonitorIdRunsRoute: typeof MonitorsMonitorIdRunsRouteWithChildren
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/": {
-      id: "/"
-      path: "/"
-      fullPath: "/"
+    '/suites': {
+      id: '/suites'
+      path: '/suites'
+      fullPath: '/suites'
+      preLoaderRoute: typeof SuitesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/elf': {
+      id: '/elf'
+      path: '/elf'
+      fullPath: '/elf'
+      preLoaderRoute: typeof ElfRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/configuration': {
+      id: '/configuration'
+      path: '/configuration'
+      fullPath: '/configuration'
+      preLoaderRoute: typeof ConfigurationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audit': {
+      id: '/audit'
+      path: '/audit'
+      fullPath: '/audit'
+      preLoaderRoute: typeof AuditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/applications': {
+      id: '/applications'
+      path: '/applications'
+      fullPath: '/applications'
+      preLoaderRoute: typeof ApplicationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/alerts': {
+      id: '/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AlertsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents': {
+      id: '/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AgentsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/monitors/': {
+      id: '/monitors/'
+      path: '/monitors'
+      fullPath: '/monitors/'
+      preLoaderRoute: typeof MonitorsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/elf/': {
+      id: '/elf/'
+      path: '/'
+      fullPath: '/elf/'
+      preLoaderRoute: typeof ElfIndexRouteImport
+      parentRoute: typeof ElfRoute
+    }
+    '/monitors/new': {
+      id: '/monitors/new'
+      path: '/monitors/new'
+      fullPath: '/monitors/new'
+      preLoaderRoute: typeof MonitorsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/elf/settings': {
+      id: '/elf/settings'
+      path: '/settings'
+      fullPath: '/elf/settings'
+      preLoaderRoute: typeof ElfSettingsRouteImport
+      parentRoute: typeof ElfRoute
+    }
+    '/elf/runs': {
+      id: '/elf/runs'
+      path: '/runs'
+      fullPath: '/elf/runs'
+      preLoaderRoute: typeof ElfRunsRouteImport
+      parentRoute: typeof ElfRoute
+    }
+    '/elf/$queryId': {
+      id: '/elf/$queryId'
+      path: '/$queryId'
+      fullPath: '/elf/$queryId'
+      preLoaderRoute: typeof ElfQueryIdRouteImport
+      parentRoute: typeof ElfRoute
+    }
+    '/deployment-runs/$deploymentRunId': {
+      id: '/deployment-runs/$deploymentRunId'
+      path: '/deployment-runs/$deploymentRunId'
+      fullPath: '/deployment-runs/$deploymentRunId'
+      preLoaderRoute: typeof DeploymentRunsDeploymentRunIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId/runs': {
+      id: '/monitors/$monitorId/runs'
+      path: '/monitors/$monitorId/runs'
+      fullPath: '/monitors/$monitorId/runs'
+      preLoaderRoute: typeof MonitorsMonitorIdRunsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId/revisions': {
+      id: '/monitors/$monitorId/revisions'
+      path: '/monitors/$monitorId/revisions'
+      fullPath: '/monitors/$monitorId/revisions'
+      preLoaderRoute: typeof MonitorsMonitorIdRevisionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId/metrics': {
+      id: '/monitors/$monitorId/metrics'
+      path: '/monitors/$monitorId/metrics'
+      fullPath: '/monitors/$monitorId/metrics'
+      preLoaderRoute: typeof MonitorsMonitorIdMetricsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId/edit': {
+      id: '/monitors/$monitorId/edit'
+      path: '/monitors/$monitorId/edit'
+      fullPath: '/monitors/$monitorId/edit'
+      preLoaderRoute: typeof MonitorsMonitorIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId/runs/': {
+      id: '/monitors/$monitorId/runs/'
+      path: '/'
+      fullPath: '/monitors/$monitorId/runs/'
+      preLoaderRoute: typeof MonitorsMonitorIdRunsIndexRouteImport
+      parentRoute: typeof MonitorsMonitorIdRunsRoute
+    }
+    '/monitors/$monitorId/runs/$runId': {
+      id: '/monitors/$monitorId/runs/$runId'
+      path: '/$runId'
+      fullPath: '/monitors/$monitorId/runs/$runId'
+      preLoaderRoute: typeof MonitorsMonitorIdRunsRunIdRouteImport
+      parentRoute: typeof MonitorsMonitorIdRunsRoute
     }
   }
 }
 
+interface ElfRouteChildren {
+  ElfQueryIdRoute: typeof ElfQueryIdRoute
+  ElfRunsRoute: typeof ElfRunsRoute
+  ElfSettingsRoute: typeof ElfSettingsRoute
+  ElfIndexRoute: typeof ElfIndexRoute
+}
+
+const ElfRouteChildren: ElfRouteChildren = {
+  ElfQueryIdRoute: ElfQueryIdRoute,
+  ElfRunsRoute: ElfRunsRoute,
+  ElfSettingsRoute: ElfSettingsRoute,
+  ElfIndexRoute: ElfIndexRoute,
+}
+
+const ElfRouteWithChildren = ElfRoute._addFileChildren(ElfRouteChildren)
+
+interface MonitorsMonitorIdRunsRouteChildren {
+  MonitorsMonitorIdRunsRunIdRoute: typeof MonitorsMonitorIdRunsRunIdRoute
+  MonitorsMonitorIdRunsIndexRoute: typeof MonitorsMonitorIdRunsIndexRoute
+}
+
+const MonitorsMonitorIdRunsRouteChildren: MonitorsMonitorIdRunsRouteChildren = {
+  MonitorsMonitorIdRunsRunIdRoute: MonitorsMonitorIdRunsRunIdRoute,
+  MonitorsMonitorIdRunsIndexRoute: MonitorsMonitorIdRunsIndexRoute,
+}
+
+const MonitorsMonitorIdRunsRouteWithChildren =
+  MonitorsMonitorIdRunsRoute._addFileChildren(
+    MonitorsMonitorIdRunsRouteChildren,
+  )
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentsRoute: AgentsRoute,
+  AlertsRoute: AlertsRoute,
+  ApplicationsRoute: ApplicationsRoute,
+  AuditRoute: AuditRoute,
+  ConfigurationRoute: ConfigurationRoute,
+  ElfRoute: ElfRouteWithChildren,
+  SuitesRoute: SuitesRoute,
+  DeploymentRunsDeploymentRunIdRoute: DeploymentRunsDeploymentRunIdRoute,
+  MonitorsNewRoute: MonitorsNewRoute,
+  MonitorsIndexRoute: MonitorsIndexRoute,
+  MonitorsMonitorIdEditRoute: MonitorsMonitorIdEditRoute,
+  MonitorsMonitorIdMetricsRoute: MonitorsMonitorIdMetricsRoute,
+  MonitorsMonitorIdRevisionsRoute: MonitorsMonitorIdRevisionsRoute,
+  MonitorsMonitorIdRunsRoute: MonitorsMonitorIdRunsRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from "./router.tsx"
-import type { createStart } from "@tanstack/react-start"
-declare module "@tanstack/react-start" {
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
+declare module '@tanstack/react-start' {
   interface Register {
     ssr: true
     router: Awaited<ReturnType<typeof getRouter>>

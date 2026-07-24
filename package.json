@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "build": "turbo build",
+    "dev:api": "cd services/api && go run ./cmd/api",
     "dev": "turbo dev",
+    "migrate:api": "cd services/api && go run ./cmd/migrate",
+    "test:api": "cd services/api && go test ./...",
     "lint": "turbo lint",
     "format": "turbo format",
     "typecheck": "turbo typecheck"

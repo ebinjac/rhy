@@ -1,0 +1,11 @@
+.git
+.impeccable
+.turbo
+**/.turbo
+**/node_modules
+**/dist
+**/.output
+**/.tanstack
+*.local
+.env*
+.DS_Store

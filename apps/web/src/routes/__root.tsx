@@ -1,6 +1,7 @@
-import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router"
+import { HeadContent, ScriptOnce, Scripts, createRootRoute } from "@tanstack/react-router"
 
 import appCss from "@workspace/ui/globals.css?url"
+import { AppShell } from "@/components/app-shell/app-shell"
 
 export const Route = createRootRoute({
   head: () => ({
@@ -13,7 +14,7 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "TanStack Start Starter",
+        title: "Rhythm — Synthetic Monitoring & Validation",
       },
     ],
     links: [
@@ -34,14 +35,17 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
       <body>
-        {children}
+        <ScriptOnce children={themeScript} />
+        <AppShell>{children}</AppShell>
         <Scripts />
       </body>
     </html>
   )
 }
+
+const themeScript = `(function(){try{var stored=localStorage.getItem("rhythm-theme");var theme=stored==="dark"||stored==="light"?stored:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.classList.toggle("dark",theme==="dark");document.documentElement.style.colorScheme=theme;}catch(_){}})();`
