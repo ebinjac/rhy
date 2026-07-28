@@ -40,6 +40,89 @@ func NewService(monitors *monitors.Service, repository Repository, executor *HTT
 
 func (s *Service) SetAgentRouter(router AgentRouter) { s.agents = router }
 
+type DraftPreview struct {
+	Status          Status          `json:"status"`
+	DurationMS      int64           `json:"durationMs"`
+	FailureCategory string          `json:"failureCategory,omitempty"`
+	FailureReason   string          `json:"failureReason,omitempty"`
+	Steps           []StepRun       `json:"steps"`
+	SetupScript     *scripts.Result `json:"setupScript,omitempty"`
+}
+
+// PreviewDefinition executes an unsaved definition without creating a monitor,
+// revision, run, event, or database record. Evidence is masked by the same
+// executor used for persisted runs.
+func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) (DraftPreview, error) {
+	if len(definition.Steps) == 0 {
+		return DraftPreview{}, errors.New("draft has no workflow steps")
+	}
+	started := s.now()
+	preview := DraftPreview{Status: StatusSuccess, Steps: []StepRun{}}
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return DraftPreview{}, fmt.Errorf("create preview cookie jar: %w", err)
+	}
+	values := map[string]string{}
+	if strings.TrimSpace(definition.Scripts.PreRequest.Code) != "" {
+		result, next := s.executor.ExecuteSetupScript(ctx, definition.Scripts.PreRequest, values, scripts.Info{EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}, 10000)
+		preview.SetupScript, values = &result, next
+		if result.Status != "SUCCESS" {
+			preview.Status = StatusFailed
+			preview.FailureCategory = result.ErrorCategory
+			preview.FailureReason = result.ErrorMessage
+		}
+	}
+	for index, step := range definition.Steps {
+		if preview.Status != StatusSuccess || !step.Enabled {
+			continue
+		}
+		shouldRun, conditionErr := evaluateCondition(step.Condition, values)
+		if conditionErr != nil {
+			preview.Status, preview.FailureCategory, preview.FailureReason = StatusFailed, "CONDITION_EVALUATION_FAILURE", conditionErr.Error()
+			break
+		}
+		if !shouldRun {
+			continue
+		}
+		var stepResult StepRun
+		switch step.Type {
+		case "ACTION":
+			var produced map[string]string
+			stepResult, produced = s.executor.ExecuteActions(ctx, step, values)
+			for key, value := range produced {
+				values[key] = value
+				values["steps."+step.ID+".outputs."+key] = value
+			}
+		case "HTTP_REQUEST":
+			stepResult = s.executor.ExecuteWithScriptState(ctx, step, jar, values, ScriptExecutionContext{StepID: step.ID, StepName: step.Name})
+		case "METRIC_VALIDATION":
+			stepResult = s.executor.ExecuteMetric(ctx, step)
+		default:
+			stepResult = StepRun{StepDefinitionID: step.ID, StepName: step.Name, StepType: step.Type, Status: StatusFailed, FailureCategory: "CONFIGURATION_ERROR", ErrorMessage: "Unsupported workflow step type."}
+		}
+		stepResult.StepOrder = index + 1
+		preview.Steps = append(preview.Steps, stepResult)
+		for _, extractor := range stepResult.Extractors {
+			if extractor.Success && !extractor.Sensitive {
+				rendered := fmt.Sprint(extractor.Value)
+				values[extractor.Variable] = rendered
+				values["steps."+step.ID+".outputs."+extractor.Variable] = rendered
+			}
+		}
+		for key, value := range stepResult.PrivateOutputs {
+			values[key] = value
+			values["steps."+step.ID+".outputs."+key] = value
+		}
+		if stepResult.Status != StatusSuccess && stepResult.Status != StatusSuccessWithWarnings {
+			preview.Status = stepResult.Status
+			preview.FailureCategory = stepResult.FailureCategory
+			preview.FailureReason = stepResult.ErrorMessage
+		}
+	}
+	preview.DurationMS = s.now().Sub(started).Milliseconds()
+	return preview, nil
+}
+
 func (s *Service) Monitor(ctx context.Context, monitorID string) (monitors.Monitor, error) {
 	return s.monitors.Get(ctx, monitorID)
 }
@@ -215,10 +298,11 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		workflowValues, run.SetupScript = values, &setupResult
 		if setupResult.Status != "SUCCESS" {
 			run.Status, run.FailureCategory, run.FailureReason = StatusFailed, setupResult.ErrorCategory, setupResult.ErrorMessage
-			appendRunEvent(&run, "PRE_REQUEST_SCRIPT_FAILED", StatusFailed, "Monitor setup script failed.", setupResult.ErrorCategory, map[string]any{"scope": "monitor", "durationMs": setupResult.DurationMS, "line": setupResult.ErrorLine})
+			appendRunEvent(&run, "PRE_REQUEST_SCRIPT_FAILED", StatusFailed, "Monitor setup script failed.", setupResult.ErrorCategory, map[string]any{"scope": "monitor", "durationMs": setupResult.DurationMS, "line": setupResult.ErrorLine, "auxiliaryRequests": len(setupResult.AuxiliaryRequests)})
 		} else {
-			appendRunEvent(&run, "PRE_REQUEST_SCRIPT_COMPLETED", StatusSuccess, "Monitor setup script completed.", "", map[string]any{"scope": "monitor", "durationMs": setupResult.DurationMS, "tests": len(setupResult.Tests), "changes": len(setupResult.VariableChanges)})
+			appendRunEvent(&run, "PRE_REQUEST_SCRIPT_COMPLETED", StatusSuccess, "Monitor setup script completed.", "", map[string]any{"scope": "monitor", "durationMs": setupResult.DurationMS, "tests": len(setupResult.Tests), "changes": len(setupResult.VariableChanges), "auxiliaryRequests": len(setupResult.AuxiliaryRequests)})
 		}
+		appendAuxiliaryRequestEvents(&run, nil, "monitor", setupResult.AuxiliaryRequests)
 		_ = s.repository.Save(context.WithoutCancel(ctx), run)
 	}
 	for index, step := range definition.Steps {
@@ -276,7 +360,8 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			if stepResult.PreRequestScript.Status != "SUCCESS" {
 				eventType, message = "PRE_REQUEST_SCRIPT_FAILED", "Request pre-request script failed."
 			}
-			appendStepEvent(&run, stepResult, eventType, stepResult.Status, message, stepResult.PreRequestScript.ErrorCategory, map[string]any{"scope": "request", "durationMs": stepResult.PreRequestScript.DurationMS, "tests": len(stepResult.PreRequestScript.Tests), "changes": len(stepResult.PreRequestScript.RequestChanges) + len(stepResult.PreRequestScript.VariableChanges), "line": stepResult.PreRequestScript.ErrorLine})
+			appendStepEvent(&run, stepResult, eventType, stepResult.Status, message, stepResult.PreRequestScript.ErrorCategory, map[string]any{"scope": "request", "durationMs": stepResult.PreRequestScript.DurationMS, "tests": len(stepResult.PreRequestScript.Tests), "changes": len(stepResult.PreRequestScript.RequestChanges) + len(stepResult.PreRequestScript.VariableChanges), "line": stepResult.PreRequestScript.ErrorLine, "auxiliaryRequests": len(stepResult.PreRequestScript.AuxiliaryRequests)})
+			appendAuxiliaryRequestEvents(&run, &stepResult, "request", stepResult.PreRequestScript.AuxiliaryRequests)
 		}
 		if step.Type == "HTTP_REQUEST" {
 			appendStepEvent(&run, stepResult, "REQUEST_COMPLETED", stepResult.Status, "HTTP request completed.", stepResult.FailureCategory, map[string]any{"status": stepResult.ResponseSummary["status"], "attempts": stepResult.AttemptCount})
@@ -369,6 +454,39 @@ func appendStepEvent(run *Run, step StepRun, eventType string, status Status, me
 func appendAttemptEvent(run *Run, step StepRun, attempt AttemptRun, eventType, message string) {
 	appendStepEvent(run, step, eventType, attempt.Status, message, attempt.FailureCategory, map[string]any{"attemptNumber": attempt.AttemptNumber, "durationMs": attempt.DurationMS, "responseStatus": attempt.ResponseStatus, "retryBackoffMs": attempt.RetryBackoffMS})
 	run.Events[len(run.Events)-1].AttemptNumber = attempt.AttemptNumber
+}
+
+func appendAuxiliaryRequestEvents(run *Run, step *StepRun, scope string, requests []scripts.AuxiliaryRequest) {
+	for index, request := range requests {
+		status := StatusSuccess
+		category := ""
+		if !request.Success || request.Error != "" {
+			status = StatusFailed
+			category = "AUXILIARY_REQUEST_FAILURE"
+		}
+		details := map[string]any{
+			"scope":      scope,
+			"source":     request.Source,
+			"index":      index + 1,
+			"method":     request.Method,
+			"url":        request.URL,
+			"status":     request.Status,
+			"durationMs": request.DurationMS,
+			"success":    request.Success,
+		}
+		if request.Error != "" {
+			details["error"] = request.Error
+		}
+		message := fmt.Sprintf("Pre-request pm.sendRequest #%d completed.", index+1)
+		if status == StatusFailed {
+			message = fmt.Sprintf("Pre-request pm.sendRequest #%d failed.", index+1)
+		}
+		if step != nil {
+			appendStepEvent(run, *step, "AUXILIARY_REQUEST_COMPLETED", status, message, category, details)
+			continue
+		}
+		appendRunEvent(run, "AUXILIARY_REQUEST_COMPLETED", status, message, category, details)
+	}
 }
 
 var conditionPattern = regexp.MustCompile(`^([A-Za-z0-9_.-]+)\s*(==|!=|>=|<=|>|<)\s*(.+)$`)

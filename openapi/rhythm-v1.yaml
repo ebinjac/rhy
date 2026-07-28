@@ -1,0 +1,205 @@
+openapi: 3.1.0
+info:
+  title: Rhythm API
+  version: 0.0.1-current
+  description: Public control-plane contract for Rhythm synthetic monitoring and deployment validation.
+servers:
+  - url: http://localhost:18080
+    description: Local Docker
+security:
+  - bearerAuth: []
+tags:
+  - name: Health
+  - name: Monitors
+  - name: Runs
+  - name: Applications
+  - name: ELF
+  - name: Deployment validation
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      security: []
+      operationId: getHealth
+      summary: Inspect API and dependency health
+      responses:
+        "200":
+          description: Healthy or partially healthy service state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "503":
+          description: One or more required dependencies are unavailable
+  /api/v1/monitors:
+    get:
+      tags: [Monitors]
+      operationId: listMonitors
+      summary: List monitors
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "401":
+          $ref: "#/components/responses/Error"
+    post:
+      tags: [Monitors]
+      operationId: createMonitor
+      summary: Create a monitor draft
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "201":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/monitors/{monitorId}/runs:
+    post:
+      tags: [Runs]
+      operationId: runMonitor
+      summary: Queue a manual monitor run
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+      responses:
+        "202":
+          description: Run queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+  /api/v1/runs/{runId}/diagnostics:
+    get:
+      tags: [Runs]
+      operationId: getRunDiagnostics
+      summary: Get masked execution diagnostics
+      parameters:
+        - name: runId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "404":
+          $ref: "#/components/responses/Error"
+  /api/v1/applications:
+    get:
+      tags: [Applications]
+      operationId: listApplications
+      summary: List applications and ownership context
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/elf/queries:
+    get:
+      tags: [ELF]
+      operationId: listElfQueries
+      summary: List saved ELF queries
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/suites/{suiteId}/deployment-runs:
+    post:
+      tags: [Deployment validation]
+      operationId: createDeploymentRun
+      summary: Queue before/after deployment validation
+      parameters:
+        - name: suiteId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deploymentStart]
+              properties:
+                deploymentStart: { type: string, format: date-time }
+                baselineWindow: { type: string, enum: [24h, 7d, 30d] }
+                postSamples: { type: integer, minimum: 3, maximum: 50 }
+      responses:
+        "202":
+          description: Deployment validation queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: Opaque cursor returned by the previous page.
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    MonitorId:
+      name: monitorId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    Success:
+      description: Successful response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/SuccessEnvelope"
+    Error:
+      description: Safe error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [data, meta]
+      properties:
+        data: {}
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+    ErrorEnvelope:
+      type: object
+      required: [error, meta]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+        meta:
+          $ref: "#/components/schemas/ResponseMeta"
+    ResponseMeta:
+      type: object
+      required: [requestId]
+      properties:
+        requestId: { type: string }
+        page:
+          type: object
+          properties:
+            nextCursor: { type: [string, "null"] }
+            limit: { type: integer }

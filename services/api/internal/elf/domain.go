@@ -17,8 +17,14 @@ type Settings struct {
 	AuthMode             string    `json:"authMode"`
 	Username             string    `json:"username,omitempty"`
 	CredentialSecretRef  string    `json:"credentialSecretRef,omitempty"`
-	UpdatedBy            string    `json:"updatedBy,omitempty"`
-	UpdatedAt            time.Time `json:"updatedAt,omitempty"`
+	// Credential is write-only plaintext accepted on save/test; never returned by GetSettings.
+	Credential string `json:"credential,omitempty"`
+	// HasCredential is true when an encrypted value or secret ref is stored.
+	HasCredential bool `json:"hasCredential,omitempty"`
+	// EncryptedCredential is persisted ciphertext; omitted from API responses.
+	EncryptedCredential string    `json:"-"`
+	UpdatedBy           string    `json:"updatedBy,omitempty"`
+	UpdatedAt           time.Time `json:"updatedAt,omitempty"`
 }
 
 type Application struct {
@@ -31,6 +37,7 @@ type Application struct {
 	DefaultTimeField    string            `json:"defaultTimeField"`
 	MaskingRules        []string          `json:"maskingRules"`
 	SemanticMapping     map[string]string `json:"semanticMapping"`
+	AlertEmails         []string          `json:"alertEmails"`
 	Active              bool              `json:"active"`
 	Services            []AppService      `json:"services"`
 	MonitorIDs          []string          `json:"monitorIds"`
@@ -58,6 +65,7 @@ type ApplicationInput struct {
 	DefaultTimeField    string            `json:"defaultTimeField,omitempty"`
 	MaskingRules        []string          `json:"maskingRules,omitempty"`
 	SemanticMapping     map[string]string `json:"semanticMapping,omitempty"`
+	AlertEmails         []string          `json:"alertEmails,omitempty"`
 	Active              *bool             `json:"active,omitempty"`
 }
 
@@ -170,4 +178,10 @@ type RunSummary struct {
 
 type SecretResolver interface {
 	ResolveSecret(context.Context, string) (string, error)
+}
+
+// CredentialCrypto encrypts and decrypts inline ELF credentials at rest.
+type CredentialCrypto interface {
+	EncryptStored(plaintext string) (string, error)
+	DecryptStored(ciphertext string) (string, error)
 }

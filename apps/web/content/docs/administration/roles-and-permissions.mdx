@@ -1,0 +1,17 @@
+---
+title: Roles and permissions
+description: Understand administrator, editor, operator, and viewer access across definitions, execution, evidence, and credentials.
+audience: [platform-administrator, security-administrator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm Security]
+keywords: [RBAC, roles, permissions]
+---
+
+- **Administrator** manages settings, credentials, profiles, agents, and all resources.
+- **Editor** creates applications, monitors, ELF queries, and suites but cannot read credentials.
+- **Operator** runs, cancels, probes, tests, acknowledges, and inspects sanitized evidence.
+- **Viewer** reads definitions and sanitized results.
+
+Authorization is enforced by the API. Hiding an action in the interface is not a security boundary.

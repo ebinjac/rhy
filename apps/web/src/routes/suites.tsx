@@ -528,7 +528,7 @@ function SuitesPage() {
                         value={check.kind}
                         onValueChange={(value) => {
                           if (value == null) return
-                          const kind = value as DraftCheck["kind"]
+                          const kind = value
                           const firstAlert = alertOptions[0]
                           updateStage(stageIndex, (current) => ({
                             ...current,

@@ -1,0 +1,13 @@
+{
+  "title": "Deployment validation",
+  "pages": [
+    "suite-templates",
+    "before-after-workflow",
+    "baseline-selection",
+    "api-only-performance",
+    "regression-guardrails",
+    "elf-and-alert-checks",
+    "reports",
+    "ci-cd-usage"
+  ]
+}

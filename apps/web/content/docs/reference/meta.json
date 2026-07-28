@@ -1,0 +1,12 @@
+{
+  "title": "Reference",
+  "pages": [
+    "statuses-and-decisions",
+    "failure-categories",
+    "diagnostic-help-codes",
+    "capture-states",
+    "environment-variables",
+    "resource-limits",
+    "glossary"
+  ]
+}

@@ -1,0 +1,37 @@
+---
+title: Troubleshoot monitor execution
+description: Locate the failed step, attempt, phase, extractor, assertion, or policy decision in a run.
+audience:
+  - application-engineer
+  - sre-operator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Monitor Runtime
+keywords:
+  - failure
+  - run diagnostics
+---
+
+Start from the run's primary failure rather than the final status alone.
+
+<Procedure>
+1. Open the failed run and locate the highlighted step and attempt.
+2. Read **what failed, where, why, and what to check next**.
+3. Compare API response time with total execution time.
+4. Inspect Request, Response, Checks, Attempts, Network, and Events as needed.
+5. Follow the stable help code to the relevant configuration or target-system check.
+</Procedure>
+
+## Common failure areas
+
+- **DNS, TCP, TLS, or proxy**: verify route policy, trust, certificate validity, and agent network reachability.
+- **Timeout**: identify whether the server wait, download, script, or full step budget expired.
+- **Extraction**: verify the expression against the captured response content type.
+- **Assertion**: compare expected and observed values and check variable rendering.
+- **Secret**: confirm the reference, provider health, and role without exposing the resolved value.
+
+<FailureExample>
+If evidence says “Not recorded for this execution,” the run predates that diagnostic field or policy prevented capture. Do not interpret it as zero.
+</FailureExample>

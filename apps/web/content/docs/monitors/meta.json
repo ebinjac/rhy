@@ -1,0 +1,22 @@
+{
+  "title": "Monitors",
+  "pages": [
+    "request-builder",
+    "parameters-headers-and-cookies",
+    "authentication",
+    "request-bodies",
+    "pre-request-actions",
+    "javascript-sandbox",
+    "pm-api-reference",
+    "extractors",
+    "assertions",
+    "conditions-and-actions",
+    "retries-and-timeouts",
+    "tls-certificates",
+    "proxies",
+    "schedules",
+    "revisions-and-publishing",
+    "run-diagnostics",
+    "metrics-and-percentiles"
+  ]
+}

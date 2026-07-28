@@ -1,0 +1,22 @@
+---
+title: Create the first application
+description: Register an application and service, assign ownership, and prepare monitor and ELF links.
+audience: [application-engineer, platform-administrator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm Product]
+keywords: [application, service, CAR ID]
+---
+
+<Procedure>
+1. Open **Applications** and choose **New application**.
+2. Enter the application name, owner, environment, and internal CAR ID.
+3. Set the default ELF index pattern and time field when log search is required.
+4. Save the application.
+5. Add one service and any service-specific index or field overrides.
+</Procedure>
+
+<ExpectedResult>The application overview shows ownership, the CAR ID, its service, and zero linked monitors or ELF queries until you assign them.</ExpectedResult>
+
+<SecurityNote>CAR IDs are ownership metadata. Do not place access tokens or secret values in ownership fields.</SecurityNote>

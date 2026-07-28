@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rhythm-monitoring/rhythm/internal/id"
+	"github.com/rhythm-monitoring/rhythm/internal/notifications"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
 )
 
@@ -158,7 +159,7 @@ func evaluateAlertState(ctx context.Context, tx pgx.Tx, run runs.Run) error {
 		if err != nil {
 			return err
 		}
-		return enqueueNotifications(ctx, tx, persistedAlertID, "ALERT_OPENED", run.CreatedAt)
+		return notifications.Enqueue(ctx, tx, persistedAlertID, "ALERT_OPENED", run.CreatedAt)
 	}
 	if run.Status == runs.StatusSuccess && consecutiveSuccesses >= recoveryThreshold {
 		rows, err := tx.Query(ctx, `UPDATE alerts SET state='RESOLVED', resolved_at=$2, updated_at=$2 WHERE deduplication_key=$1 AND state IN ('OPEN','ACKNOWLEDGED') RETURNING id::text`, key, run.CreatedAt)
@@ -180,18 +181,13 @@ func evaluateAlertState(ctx context.Context, tx pgx.Tx, run runs.Run) error {
 		}
 		rows.Close()
 		for _, alertID := range alertIDs {
-			if err := enqueueNotifications(ctx, tx, alertID, "ALERT_RECOVERED", run.CreatedAt); err != nil {
+			if err := notifications.Enqueue(ctx, tx, alertID, "ALERT_RECOVERED", run.CreatedAt); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 	return nil
-}
-
-func enqueueNotifications(ctx context.Context, tx pgx.Tx, alertID, eventType string, now time.Time) error {
-	_, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,alert_id,channel_id,event_type,status,next_attempt_at,created_at,updated_at) SELECT md5($1::text||id::text||$2)::uuid,$1::uuid,id,$2,'PENDING',$3,$3,$3 FROM configuration_profiles WHERE kind='NOTIFICATION' AND active=TRUE ON CONFLICT(alert_id,channel_id,event_type) DO NOTHING`, alertID, eventType, now)
-	return err
 }
 
 func (r *RunRepository) List(ctx context.Context, monitorID string, limit int) ([]runs.Run, error) {

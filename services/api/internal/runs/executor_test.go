@@ -118,6 +118,55 @@ pm.test("path prepared", () => pm.expect(pm.variables.get("path")).to.equal("gen
 	}
 }
 
+func TestHTTPExecutorRecordsPreRequestSendRequestEvidence(t *testing.T) {
+	aux := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"issued"}`))
+	}))
+	defer aux.Close()
+	main := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Token") != "issued" {
+			t.Fatalf("main request missing token from sendRequest")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer main.Close()
+
+	executor := NewHTTPExecutor(true)
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "aux-script", Name: "Aux script", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{
+		Method: "GET", URL: main.URL,
+		PreRequestScript: scripts.Script{Enabled: true, Language: "javascript", RuntimeVersion: scripts.RuntimeVersion, Code: fmt.Sprintf(`
+const response = await pm.sendRequest(%q);
+pm.request.headers.upsert({key:"X-Token", value: response.json().token});
+await pm.sendRequest({method:"GET", url:%q});
+`, aux.URL, aux.URL+"/second")},
+		Settings: SettingsConfig{TimeoutMS: 2000},
+	}}
+	result := executor.Execute(context.Background(), step)
+	if result.Status != StatusSuccess || result.PreRequestScript == nil {
+		t.Fatalf("expected success with pre-request evidence, got %#v", result)
+	}
+	if len(result.PreRequestScript.AuxiliaryRequests) != 2 {
+		t.Fatalf("expected two auxiliary requests, got %#v", result.PreRequestScript.AuxiliaryRequests)
+	}
+	first, second := result.PreRequestScript.AuxiliaryRequests[0], result.PreRequestScript.AuxiliaryRequests[1]
+	if !first.Success || !second.Success || first.Status != http.StatusOK || first.DurationMS < 0 {
+		t.Fatalf("unexpected auxiliary evidence: %#v", result.PreRequestScript.AuxiliaryRequests)
+	}
+	if !strings.HasSuffix(second.URL, "/second") {
+		t.Fatalf("expected ordered URLs, got %#v", result.PreRequestScript.AuxiliaryRequests)
+	}
+	count, _ := result.Timing["auxiliaryRequestCount"].(int)
+	if count != 2 {
+		t.Fatalf("expected auxiliaryRequestCount=2 in timing, got %#v", result.Timing)
+	}
+	auxMS, _ := result.Timing["auxiliaryRequestMs"].(int64)
+	if auxMS != first.DurationMS+second.DurationMS {
+		t.Fatalf("expected auxiliaryRequestMs sum in timing, got %#v", result.Timing)
+	}
+}
+
 func TestHTTPExecutorUsesVaultSecretWithoutPersistingIt(t *testing.T) {
 	const secret = "vault-runtime-secret-92841"
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

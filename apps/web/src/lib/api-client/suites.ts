@@ -4,6 +4,7 @@ import { z } from "zod"
 import type {
   ApiErrorResponse,
   ApiSuccess,
+  DeploymentBaselinePreviewContract,
   ValidationSuiteContract,
   ValidationSuiteRunContract,
   DeploymentValidationRunContract,
@@ -56,6 +57,40 @@ export const suiteInputSchema = z.object({
 })
 
 const baseURL = () => process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+
+export const previewDeploymentBaseline = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      suiteId: z.string().min(1),
+      deploymentStart: z.string().datetime(),
+      baselineWindow: z.enum(["24h", "7d", "30d"]),
+      sampleCount: z.number().int().min(3).max(50),
+      sampleIntervalSeconds: z.number().int().min(1).max(300),
+    })
+  )
+  .handler(async ({ data }): Promise<DeploymentBaselinePreviewContract> => {
+    const response = await fetch(
+      `${baseURL()}/api/v1/suites/${encodeURIComponent(data.suiteId)}/deployment-baseline-preview`,
+      {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deploymentStart: data.deploymentStart,
+          baselineWindow: data.baselineWindow,
+          sampleCount: data.sampleCount,
+          sampleIntervalSeconds: data.sampleIntervalSeconds,
+        }),
+        signal: AbortSignal.timeout(10000),
+      }
+    )
+    if (!response.ok) {
+      const failure = (await response.json()) as ApiErrorResponse
+      throw new Error(failure.error.message || "Unable to preview the baseline.")
+    }
+    return (
+      (await response.json()) as ApiSuccess<DeploymentBaselinePreviewContract>
+    ).data
+  })
 
 export const listSuites = createServerFn({ method: "GET" }).handler(
   async (): Promise<ValidationSuiteContract[]> => {

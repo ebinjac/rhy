@@ -1,0 +1,17 @@
+---
+title: Regression guardrails
+description: Understand how required monitors, p95 latency changes, optional checks, and ELF evidence affect deployment decisions.
+audience: [release-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Release Validation]
+keywords: [regression, p95, gate]
+---
+
+A performance regression requires both:
+
+1. Post-deployment p95 is at least 25% slower than baseline p95.
+2. Post-deployment p95 is at least 100 ms slower.
+
+The comparison runs at aggregate-monitor and required HTTP-step level using API-only timing. Any failed active sample from a required monitor blocks. Optional failures and regressions warn. Blocking ELF failures block; advisory ELF failures warn.

@@ -1,0 +1,27 @@
+---
+title: API response time versus execution time
+description: Learn which phases measure the target API and which phases measure Rhythm orchestration.
+audience: [application-engineer, sre-operator, release-engineer]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [response time, duration, preparation]
+---
+
+**API response time** is the latency attributable to reaching and receiving data from the target API. It includes DNS, proxy connection, TCP, TLS, request write, server wait, and download.
+
+**Execution time** describes the complete workflow cost. It includes API response time plus preparation, secret resolution, scripts, extraction, assertions, retry backoff, and post-processing.
+
+Preparation is work performed by Rhythm before network I/O. It belongs in full execution duration because the user waits for it, but it must not influence API performance gates.
+
+<ApiTimingBreakdown>
+
+| Phase | API response | Full execution |
+| --- | --- | --- |
+| DNS through download | Yes | Yes |
+| Preparation and scripts | No | Yes |
+| Extraction and assertions | No | Yes |
+| Queue delay | Separate | Separate |
+
+</ApiTimingBreakdown>

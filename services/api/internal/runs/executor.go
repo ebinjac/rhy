@@ -137,6 +137,11 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		if scriptResult.Status != "SUCCESS" {
 			scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalCookies, scriptResult.InternalRequest = nil, nil, nil, nil, nil
 			result.PreRequestScript = &scriptResult
+			result.Timing = map[string]any{
+				"preparationMs":       time.Since(started).Milliseconds(),
+				"auxiliaryRequestMs":  scripts.AuxiliaryRequestDurationMS(scriptResult),
+				"auxiliaryRequestCount": len(scriptResult.AuxiliaryRequests),
+			}
 			return finishStep(result, StatusFailed, scriptResult.ErrorCategory, scriptResult.ErrorMessage, started)
 		}
 		for key, value := range firstScriptValues(scriptResult.InternalVariables, scriptResult.Variables) {
@@ -190,6 +195,10 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 	response, attempts, err := doWithRetries(requestContext, client, request, requestConfig.Settings, safeRequest, requestConfig.Proxy)
 	result.Attempts, result.AttemptCount = attempts, len(attempts)
 	result.Timing = map[string]any{"preparationMs": preparationMS}
+	if result.PreRequestScript != nil {
+		result.Timing["auxiliaryRequestMs"] = scripts.AuxiliaryRequestDurationMS(*result.PreRequestScript)
+		result.Timing["auxiliaryRequestCount"] = len(result.PreRequestScript.AuxiliaryRequests)
+	}
 	if len(attempts) > 0 {
 		for key, value := range attempts[len(attempts)-1].Timing {
 			result.Timing[key] = value

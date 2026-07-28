@@ -1,0 +1,12 @@
+{
+  "title": "Getting started",
+  "pages": [
+    "overview",
+    "architecture",
+    "docker-installation",
+    "first-application",
+    "first-monitor",
+    "schedule-and-enable",
+    "diagnose-first-run"
+  ]
+}

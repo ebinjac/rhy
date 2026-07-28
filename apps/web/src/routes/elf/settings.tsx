@@ -21,17 +21,33 @@ import {
 } from "lucide-react"
 
 import {
+  SecretCredentialField,
+  secretAliasFromRef,
+  toSecretRef
+
+} from "@/features/configuration/secret-credential-field"
+import type {SecretInputMode} from "@/features/configuration/secret-credential-field";
+import {
   getELFSettings,
   saveELFSettings,
   testELFSettings,
 } from "@/lib/api-client/elf"
+import { listConfigurationProfiles } from "@/lib/api-client/monitors"
+import { formatDateTime } from "@/lib/format-date"
 
 export const Route = createFileRoute("/elf/settings")({
-  loader: () => getELFSettings(),
+  loader: async () => {
+    const [settings, secrets] = await Promise.all([
+      getELFSettings(),
+      listConfigurationProfiles({ data: { kind: "secrets" } }),
+    ])
+    return { settings, secrets }
+  },
   component: SettingsPage,
 })
+
 function SettingsPage() {
-  const loaded = Route.useLoaderData()
+  const { settings: loaded, secrets } = Route.useLoaderData()
   const router = useRouter()
   const [baseUrl, setBaseUrl] = useState(loaded?.baseUrl ?? "")
   const [dashboardUrl, setDashboardUrl] = useState(loaded?.dashboardUrl ?? "")
@@ -44,40 +60,94 @@ function SettingsPage() {
     loaded?.authMode ?? "NONE"
   )
   const [username, setUsername] = useState(loaded?.username ?? "")
-  const [secretRef, setSecretRef] = useState(loaded?.credentialSecretRef ?? "")
+  const [tlsProfileId, setTLSProfileId] = useState(loaded?.tlsProfileId ?? "")
+  const [proxyProfileId, setProxyProfileId] = useState(
+    loaded?.proxyProfileId ?? ""
+  )
+  const initialSecretAlias = secretAliasFromRef(loaded?.credentialSecretRef)
+  const [credentialMode, setCredentialMode] = useState<SecretInputMode>(
+    initialSecretAlias ? "secret" : "value"
+  )
+  const [credential, setCredential] = useState("")
+  const [secretAlias, setSecretAlias] = useState(initialSecretAlias)
   const [pending, setPending] = useState<"save" | "test" | "">("")
   const [result, setResult] = useState<Record<string, unknown> | null>(null)
   const [message, setMessage] = useState("")
-  const data = () => ({
-    baseUrl,
-    dashboardUrl,
-    defaultIndexPattern: index,
-    timeoutSeconds: timeout,
-    allowedIndexPatterns: allowed
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
-    tlsProfileId: loaded?.tlsProfileId ?? "",
-    proxyProfileId: loaded?.proxyProfileId ?? "",
-    authMode,
-    username,
-    credentialSecretRef: secretRef,
-  })
+  const [saved, setSaved] = useState(Boolean(loaded))
+  const hasSavedCredential = loaded?.hasCredential === true
+
+  function payload() {
+    const body: {
+      baseUrl: string
+      dashboardUrl: string
+      defaultIndexPattern: string
+      timeoutSeconds: number
+      allowedIndexPatterns: string[]
+      tlsProfileId: string
+      proxyProfileId: string
+      authMode: "NONE" | "BASIC" | "BEARER"
+      username: string
+      credential?: string
+      credentialSecretRef?: string
+    } = {
+      baseUrl,
+      dashboardUrl,
+      defaultIndexPattern: index,
+      timeoutSeconds: timeout,
+      allowedIndexPatterns: allowed
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+      tlsProfileId,
+      proxyProfileId,
+      authMode,
+      username: authMode === "BASIC" ? username : "",
+    }
+    if (authMode !== "NONE") {
+      if (credentialMode === "secret") {
+        body.credentialSecretRef = toSecretRef(secretAlias)
+      } else if (credential.trim()) {
+        body.credential = credential.trim()
+      }
+    }
+    return body
+  }
+
   async function save() {
+    if (authMode !== "NONE") {
+      if (credentialMode === "secret" && !secretAlias.trim()) {
+        setMessage("Pick a secret alias, or enter a credential value.")
+        return
+      }
+      if (
+        credentialMode === "value" &&
+        !credential.trim() &&
+        !hasSavedCredential
+      ) {
+        setMessage("Enter a credential value, or switch to an existing secret.")
+        return
+      }
+      if (authMode === "BASIC" && !username.trim()) {
+        setMessage("BASIC authentication requires a username.")
+        return
+      }
+    }
     setPending("save")
-    const response = await saveELFSettings({ data: data() })
+    const response = await saveELFSettings({ data: payload() })
     setPending("")
     if (!response.ok) {
       setMessage(response.message)
       return
     }
+    setCredential("")
+    setSaved(true)
     setMessage("ELF settings saved.")
     await router.invalidate()
   }
   async function test() {
     setPending("test")
     setResult(null)
-    const response = await testELFSettings({ data: data() })
+    const response = await testELFSettings({ data: payload() })
     setPending("")
     if (!response.ok) {
       setMessage(response.message)
@@ -93,12 +163,19 @@ function SettingsPage() {
           <h1 className="font-heading text-2xl font-semibold">
             ELF connection
           </h1>
-          {loaded ? (
+          {result?.reachable ? (
             <Badge
               className="bg-success-soft text-success-foreground"
               variant="secondary"
             >
-              Configured
+              Verified
+            </Badge>
+          ) : saved ? (
+            <Badge
+              className="bg-warning-soft text-warning-foreground"
+              variant="secondary"
+            >
+              Saved · not verified
             </Badge>
           ) : (
             <Badge variant="secondary">Setup required</Badge>
@@ -108,6 +185,12 @@ function SettingsPage() {
           Connect Rhythm to the governed ELF Proxy. Local development may point
           directly at the bundled OpenSearch cluster.
         </p>
+        {loaded?.updatedAt ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Last saved {formatDateTime(loaded.updatedAt)}
+            {result?.reachable ? " · verified in this session" : ""}
+          </p>
+        ) : null}
       </header>
       <div className="mt-7 grid gap-5 md:grid-cols-2">
         <Field
@@ -165,13 +248,13 @@ function SettingsPage() {
         </Field>
         <Field
           label="Authentication"
-          help="Credential values are never accepted here."
+          help="Credentials are encrypted at rest or linked from Secrets."
         >
           <Select
             value={authMode}
             onValueChange={(value) => {
               if (value == null) return
-              setAuthMode(value as typeof authMode)
+              setAuthMode(value)
             }}
             items={{
               NONE: "None",
@@ -194,34 +277,84 @@ function SettingsPage() {
             <Input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              autoComplete="off"
             />
           </Field>
         ) : null}
         {authMode !== "NONE" ? (
-          <Field
-            label="Credential secret reference"
-            help="Use a secret:// alias from Configuration."
-          >
-            <Input
-              className="font-mono"
-              value={secretRef}
-              onChange={(e) => setSecretRef(e.target.value)}
-              placeholder="secret://elf-token"
-            />
-          </Field>
+          <SecretCredentialField
+            label={
+              authMode === "BEARER" ? "Bearer token" : "Password / API key"
+            }
+            help={
+              authMode === "BEARER"
+                ? "Enter the token (encrypted on save) or pick a Secrets alias."
+                : "Enter the password (encrypted on save) or pick a Secrets alias."
+            }
+            secrets={secrets}
+            mode={credentialMode}
+            onModeChange={setCredentialMode}
+            value={credential}
+            onValueChange={setCredential}
+            secretAlias={secretAlias}
+            onSecretAliasChange={setSecretAlias}
+            hasSaved={hasSavedCredential}
+            valuePlaceholder={
+              authMode === "BEARER" ? "Bearer token" : "Password"
+            }
+            wide
+          />
         ) : null}
       </div>
+      <details className="mt-5 rounded-lg border">
+        <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+          Advanced TLS and proxy routing
+        </summary>
+        <div className="grid gap-5 border-t p-4 md:grid-cols-2">
+          <Field
+            label="TLS / CA profile ID"
+            help="Optional governed certificate and trust configuration."
+          >
+            <Input
+              value={tlsProfileId}
+              onChange={(event) => setTLSProfileId(event.target.value)}
+              placeholder="elf-corporate-ca"
+            />
+          </Field>
+          <Field
+            label="Outbound proxy profile ID"
+            help="Optional governed route to the corporate ELF Proxy."
+          >
+            <Input
+              value={proxyProfileId}
+              onChange={(event) => setProxyProfileId(event.target.value)}
+              placeholder="corporate-egress"
+            />
+          </Field>
+        </div>
+      </details>
       <div className="mt-5 flex items-start gap-2 border-y bg-muted/20 px-3 py-3 text-xs text-muted-foreground">
         <ShieldCheck className="mt-0.5 size-4 shrink-0" />
         <p>
-          Connection tests issue a bounded <code>size: 0</code> search. Debug
-          output is masked, redirects are blocked, DNS is revalidated, and raw
-          upstream responses are not stored.
+          Connection tests issue a bounded <code>size: 0</code> search. Typed
+          credentials are encrypted with the same key as Secrets; aliases are
+          resolved at query time. Debug output is masked and redirects are
+          blocked.
         </p>
       </div>
       {message ? (
-        <p className="mt-4 flex items-center gap-2 text-sm text-destructive">
-          <CircleAlert className="size-4" />
+        <p
+          className={`mt-4 flex items-center gap-2 text-sm ${
+            message === "ELF settings saved."
+              ? "text-success-foreground"
+              : "text-destructive"
+          }`}
+        >
+          {message === "ELF settings saved." ? (
+            <CheckCircle2 className="size-4" />
+          ) : (
+            <CircleAlert className="size-4" />
+          )}
           {message}
         </p>
       ) : null}
@@ -260,7 +393,7 @@ function SettingsPage() {
         <Button
           variant="outline"
           disabled={!!pending || !baseUrl || !index}
-          onClick={test}
+          onClick={() => void test()}
         >
           {pending === "test" ? (
             <LoaderCircle className="animate-spin" />
@@ -269,7 +402,10 @@ function SettingsPage() {
           )}
           Test connection
         </Button>
-        <Button disabled={!!pending || !baseUrl || !index} onClick={save}>
+        <Button
+          disabled={!!pending || !baseUrl || !index}
+          onClick={() => void save()}
+        >
           {pending === "save" ? (
             <LoaderCircle className="animate-spin" />
           ) : (

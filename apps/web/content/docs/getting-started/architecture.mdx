@@ -1,0 +1,24 @@
+---
+title: Architecture
+description: Understand how Rhythm's control plane, workers, script runner, data stores, agents, and OpenSearch integration work together.
+audience: [platform-administrator, security-administrator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm Platform]
+keywords: [architecture, workers, agents]
+---
+
+Rhythm separates authoring and policy from execution. The API persists immutable revisions and queues work. Workers execute monitors, while isolated agents provide governed access to target networks. PostgreSQL stores durable state and Redis coordinates asynchronous work.
+
+The JavaScript runner receives bounded, masked input and creates a fresh VM for every script. ELF searches use the configured OpenSearch connection and store only sanitized, bounded evidence.
+
+## Request path
+
+`Web → API → queue → worker or agent → target API → masked diagnostics`
+
+## Log-validation path
+
+`Web → API → ELF proxy → OpenSearch → sanitized evidence → gate decision`
+
+<SecurityNote>Workers and agents enforce DNS re-resolution, SSRF, proxy, TLS, timeout, cancellation, and capture policy at execution time.</SecurityNote>

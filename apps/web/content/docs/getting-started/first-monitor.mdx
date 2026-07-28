@@ -1,0 +1,22 @@
+---
+title: Create the first monitor
+description: Build, preview, publish, and manually execute a basic HTTP monitor.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [monitor, HTTP, publish]
+---
+
+<Procedure>
+1. Open **Monitors → New monitor**.
+2. Name the monitor and link its application and service.
+3. Add an HTTP request with a method and allowed URL.
+4. Add an assertion for the expected status.
+5. Choose **Try request** to validate the unsaved definition.
+6. Create the monitor, open Builder, and publish the draft.
+7. Choose **Run now**.
+</Procedure>
+
+<ExpectedResult>The manual run moves from queued to a terminal state and exposes safe step, attempt, network, extraction, and assertion evidence.</ExpectedResult>

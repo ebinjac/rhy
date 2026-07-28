@@ -170,3 +170,9 @@ export const listAlertEvents = createServerFn({ method: "GET" })
   .handler(async ({ data }): Promise<AlertEventContract[]> =>
     json(`/api/v1/alerts/${encodeURIComponent(data.alertId)}/events`)
   )
+
+export const getUnifiedAlert = createServerFn({ method: "GET" })
+  .validator(z.object({ alertId: z.string().min(1) }))
+  .handler(async ({ data }): Promise<AlertContract> =>
+    json(`/api/v1/alerts/${encodeURIComponent(data.alertId)}`)
+  )

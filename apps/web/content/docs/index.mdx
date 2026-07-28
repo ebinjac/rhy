@@ -1,0 +1,62 @@
+---
+title: Rhythm documentation
+description: Learn how to build, operate, and diagnose complete synthetic API journeys with Rhythm.
+audience:
+  - application-engineer
+  - sre-operator
+  - release-engineer
+  - platform-administrator
+  - security-administrator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm Product
+keywords:
+  - synthetic monitoring
+  - API validation
+  - deployment gates
+---
+
+Rhythm helps engineering teams build, schedule, run, and diagnose production-grade API journeys without maintaining a separate script for every service.
+
+<Cards>
+  <Card title="Install Rhythm" href="/docs/getting-started/docker-installation">
+    Start the web application, API, workers, PostgreSQL, Redis, and local OpenSearch with Docker Compose.
+  </Card>
+  <Card title="Create your first monitor" href="/docs/getting-started/first-monitor">
+    Build a request, add checks, schedule it, and verify the first execution.
+  </Card>
+  <Card title="Diagnose a failed run" href="/docs/monitors/run-diagnostics">
+    Find the failed step, attempt, network phase, extractor, or assertion.
+  </Card>
+  <Card title="Search ELF logs" href="/docs/elf/probe-logs">
+    Probe OpenSearch safely and turn hit counts into deployment checks.
+  </Card>
+  <Card title="Validate a deployment" href="/docs/deployment-validation/before-after-workflow">
+    Compare pre-deployment history with active post-deployment samples.
+  </Card>
+  <Card title="Configure production safely" href="/docs/administration/production-architecture">
+    Govern certificates, proxies, authentication, secrets, agents, and retention.
+  </Card>
+</Cards>
+
+## Choose a path
+
+- **Application engineers**: begin with [your first application](/docs/getting-started/first-application), then create a monitor.
+- **SREs and operators**: review [run diagnostics](/docs/monitors/run-diagnostics) and [metrics and percentiles](/docs/monitors/metrics-and-percentiles).
+- **Release engineers**: build a [before/after validation workflow](/docs/deployment-validation/before-after-workflow).
+- **Platform administrators**: start with [production architecture](/docs/administration/production-architecture).
+- **Security administrators**: review [variables, secrets, and environments](/docs/concepts/variables-secrets-and-environments) and [roles and permissions](/docs/administration/roles-and-permissions).
+
+## How Rhythm fits together
+
+Applications provide ownership. Monitors exercise business API journeys. ELF queries inspect application logs in OpenSearch. Validation suites combine both kinds of evidence into deployment decisions. Every execution preserves a revision and safe, masked diagnostics so an outcome remains explainable.
+
+<SecurityNote>
+Rhythm never uses documentation examples to resolve secrets. Examples are synthetic, and copy actions exclude masked or policy-blocked values.
+</SecurityNote>
+
+## Documentation channels
+
+This site currently documents the **Current** development channel. The version selector will appear after the first tagged stable release.

@@ -7,6 +7,7 @@ export type MonitorSummary = {
   description: string
   status: MonitorStatus
   enabled: boolean
+  applicationId: string | null
   application: string
   cadence: string
   owner: string

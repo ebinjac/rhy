@@ -39,12 +39,13 @@ type NullableService = Omit<ELFServiceContract, "semanticMapping"> & {
 }
 type NullableApplication = Omit<
   ELFApplicationContract,
-  "services" | "monitorIds" | "maskingRules" | "semanticMapping"
+  "services" | "monitorIds" | "maskingRules" | "semanticMapping" | "alertEmails"
 > & {
   services?: NullableService[] | null
   monitorIds?: string[] | null
   maskingRules?: string[] | null
   semanticMapping?: Record<string, string> | null
+  alertEmails?: string[] | null
 }
 type NullableQuery = Omit<
   ELFQueryContract,
@@ -112,6 +113,9 @@ function normalizeApplication(
       ? application.maskingRules
       : [],
     semanticMapping: application.semanticMapping ?? {},
+    alertEmails: Array.isArray(application.alertEmails)
+      ? application.alertEmails
+      : [],
   }
 }
 
@@ -140,7 +144,8 @@ const settingsSchema = z.object({
   proxyProfileId: z.string(),
   authMode: z.enum(["NONE", "BASIC", "BEARER"]),
   username: z.string(),
-  credentialSecretRef: z.string(),
+  credential: z.string().optional(),
+  credentialSecretRef: z.string().optional(),
 })
 const applicationSchema = z.object({
   id: z.string().optional(),
@@ -152,9 +157,11 @@ const applicationSchema = z.object({
   defaultTimeField: z.string().min(1),
   maskingRules: z.array(z.string()),
   semanticMapping: z.record(z.string(), z.string()),
+  alertEmails: z.array(z.string()),
 })
 const serviceSchema = z.object({
   applicationId: z.string().min(1),
+  serviceId: z.string().optional(),
   name: z.string().min(1),
   indexPattern: z.string(),
   timeField: z.string(),
@@ -261,6 +268,64 @@ export const createELFService = createServerFn({ method: "POST" })
         ok: false as const,
         message:
           error instanceof Error ? error.message : "Unable to save service.",
+      }
+    }
+  })
+
+export const saveELFService = createServerFn({ method: "POST" })
+  .validator(serviceSchema)
+  .handler(async ({ data }) => {
+    try {
+      const path = data.serviceId
+        ? `/api/v1/applications/${encodeURIComponent(data.applicationId)}/services/${encodeURIComponent(data.serviceId)}`
+        : `/api/v1/applications/${encodeURIComponent(data.applicationId)}/services`
+      return {
+        ok: true as const,
+        service: await json<ELFServiceContract>(path, {
+          method: data.serviceId ? "PATCH" : "POST",
+          body: JSON.stringify({
+            name: data.name,
+            indexPattern: data.indexPattern,
+            timeField: data.timeField,
+            semanticMapping: {},
+          }),
+        }),
+      }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message:
+          error instanceof Error ? error.message : "Unable to save service.",
+      }
+    }
+  })
+
+export const deleteELFService = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      applicationId: z.string().min(1),
+      serviceId: z.string().min(1),
+    })
+  )
+  .handler(async ({ data }) => {
+    try {
+      const response = await fetch(
+        `${baseURL()}/api/v1/applications/${encodeURIComponent(data.applicationId)}/services/${encodeURIComponent(data.serviceId)}`,
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(8000),
+        }
+      )
+      if (!response.ok) {
+        const failure = (await response.json()) as ApiErrorResponse
+        return { ok: false as const, message: failure.error.message }
+      }
+      return { ok: true as const }
+    } catch {
+      return {
+        ok: false as const,
+        message: "Unable to delete the service.",
       }
     }
   })
@@ -492,3 +557,13 @@ export const listELFRuns = createServerFn({ method: "GET" }).handler(
     return Array.isArray(runs) ? runs.map(normalizeRun) : []
   }
 )
+
+export const getELFRun = createServerFn({ method: "GET" })
+  .validator(z.object({ runId: z.string().min(1) }))
+  .handler(async ({ data }) =>
+    normalizeRun(
+      await json<ELFRunContract>(
+        `/api/v1/elf/runs/${encodeURIComponent(data.runId)}`
+      )
+    )
+  )

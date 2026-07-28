@@ -1,0 +1,14 @@
+{
+  "title": "Troubleshooting",
+  "pages": [
+    "monitor-execution",
+    "javascript",
+    "tls-and-certificates",
+    "dns-and-networking",
+    "proxies",
+    "elf-and-opensearch",
+    "alert-webhooks",
+    "workers-and-agents",
+    "docker"
+  ]
+}

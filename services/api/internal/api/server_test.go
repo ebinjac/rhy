@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/rhythm-monitoring/rhythm/internal/agents"
+	"github.com/rhythm-monitoring/rhythm/internal/alerts"
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
 	"github.com/rhythm-monitoring/rhythm/internal/monitors"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
@@ -611,6 +612,69 @@ func TestExecutionAgentRegistrationHeartbeatAndDrainAPI(t *testing.T) {
 	drained := performRequest(handler, http.MethodPost, "/api/v1/agents/"+payload.Data.ID+"/drain", "")
 	if drained.Code != http.StatusOK || !bytes.Contains(drained.Body.Bytes(), []byte(`"status":"DRAINING"`)) {
 		t.Fatalf("drain: %d %s", drained.Code, drained.Body.String())
+	}
+}
+
+func TestSearchWorkspaceMatchesMonitorsAndRuns(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	}))
+	defer target.Close()
+	handler := testServer()
+
+	createBody := fmt.Sprintf(`{"name":"Searchable checkout","slug":"searchable-checkout","tags":["checkout","critical"],"definition":{"steps":[{"id":"step-1","name":"Health","type":"HTTP_REQUEST","enabled":true,"request":{"method":"GET","url":%q,"settings":{"timeoutMs":1000}}}]}}`, target.URL)
+	created := performRequest(handler, http.MethodPost, "/api/v1/monitors", createBody)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create monitor: %d %s", created.Code, created.Body.String())
+	}
+	var monitorEnvelope struct {
+		Data monitors.Monitor `json:"data"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&monitorEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	runResponse := performRequest(handler, http.MethodPost, "/api/v1/monitors/"+monitorEnvelope.Data.ID+"/runs?wait=true", "")
+	if runResponse.Code != http.StatusCreated {
+		t.Fatalf("run monitor: %d %s", runResponse.Code, runResponse.Body.String())
+	}
+
+	empty := performRequest(handler, http.MethodGet, "/api/v1/search?q=a", "")
+	if empty.Code != http.StatusOK || !bytes.Contains(empty.Body.Bytes(), []byte(`"monitors":[]`)) {
+		t.Fatalf("expected empty results for short query, got %d %s", empty.Code, empty.Body.String())
+	}
+
+	invalidLimit := performRequest(handler, http.MethodGet, "/api/v1/search?q=checkout&limit=99", "")
+	if invalidLimit.Code != http.StatusBadRequest || !bytes.Contains(invalidLimit.Body.Bytes(), []byte("INVALID_LIMIT")) {
+		t.Fatalf("expected invalid limit, got %d %s", invalidLimit.Code, invalidLimit.Body.String())
+	}
+
+	byTag := performRequest(handler, http.MethodGet, "/api/v1/search?q=checkout", "")
+	if byTag.Code != http.StatusOK {
+		t.Fatalf("search by tag: %d %s", byTag.Code, byTag.Body.String())
+	}
+	if !bytes.Contains(byTag.Body.Bytes(), []byte(`"name":"Searchable checkout"`)) {
+		t.Fatalf("expected monitor hit, got %s", byTag.Body.String())
+	}
+	if !bytes.Contains(byTag.Body.Bytes(), []byte(`"monitorName":"Searchable checkout"`)) {
+		t.Fatalf("expected run hit with monitor name, got %s", byTag.Body.String())
+	}
+
+	bySeed := performRequest(handler, http.MethodGet, "/api/v1/search?q=payments", "")
+	if bySeed.Code != http.StatusOK || !bytes.Contains(bySeed.Body.Bytes(), []byte(`"id":"payments-prod"`)) {
+		t.Fatalf("expected seeded monitor match, got %d %s", bySeed.Code, bySeed.Body.String())
+	}
+}
+
+func TestMatchHelpersFindNestedFields(t *testing.T) {
+	if !matchMonitor(monitors.Monitor{Name: "Payments", Tags: []string{"critical"}}, "crit") {
+		t.Fatal("expected tag match")
+	}
+	if matchRun(runs.Run{Status: runs.StatusSuccess}, "", "failed") {
+		t.Fatal("did not expect run match")
+	}
+	if !matchAlert(alerts.Alert{Title: "Latency spike", Severity: "HIGH"}, "latency") {
+		t.Fatal("expected alert title match")
 	}
 }
 

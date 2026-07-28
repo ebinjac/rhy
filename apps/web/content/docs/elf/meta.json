@@ -1,0 +1,14 @@
+{
+  "title": "ELF log search",
+  "pages": [
+    "configure-opensearch",
+    "applications-services-and-indices",
+    "build-a-query",
+    "query-dsl-policy",
+    "probe-logs",
+    "hits-total-value-checks",
+    "raw-response-and-masking",
+    "deployment-log-checks",
+    "opensearch-alert-webhooks"
+  ]
+}

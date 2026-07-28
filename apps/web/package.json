@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:a11y": "playwright test tests/accessibility.spec.ts",
+    "test:docs": "playwright test tests/docs.spec.ts"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
@@ -19,7 +21,12 @@
     "@tanstack/react-router-devtools": "latest",
     "@tanstack/react-start": "latest",
     "@tanstack/router-plugin": "latest",
+    "@types/mdx": "^2.0.14",
     "@workspace/ui": "*",
+    "fumadocs-core": "^16.13.0",
+    "fumadocs-mdx": "^15.2.0",
+    "fumadocs-openapi": "^11.2.2",
+    "fumadocs-ui": "^16.13.0",
     "lucide-react": "^1.24.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.2.6",
@@ -29,6 +36,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.62.0",
     "@tanstack/devtools-vite": "latest",
     "@tanstack/eslint-config": "latest",
     "@types/node": "^22",
@@ -36,6 +45,8 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6",
     "eslint": "^9",
+    "eslint-plugin-jsx-a11y": "^6.10.2",
+    "playwright": "^1.62.0",
     "typescript": "^6",
     "vite": "^8"
   }

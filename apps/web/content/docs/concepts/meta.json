@@ -1,0 +1,14 @@
+{
+  "title": "Concepts",
+  "pages": [
+    "applications-and-services",
+    "monitors-revisions-and-runs",
+    "api-response-vs-execution-time",
+    "variables-secrets-and-environments",
+    "alerts-and-incidents",
+    "elf-log-search",
+    "validation-suites",
+    "deployment-validation",
+    "execution-agents"
+  ]
+}

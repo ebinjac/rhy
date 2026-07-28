@@ -2,11 +2,15 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -68,7 +72,8 @@ type server struct {
 }
 
 type responseMeta struct {
-	RequestID string `json:"requestId"`
+	RequestID string        `json:"requestId"`
+	Page      *pageMetadata `json:"page,omitempty"`
 }
 
 type successResponse struct {
@@ -95,6 +100,7 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
 	mux.HandleFunc("POST /api/v1/monitors", s.createMonitor)
+	mux.HandleFunc("POST /api/v1/monitors/preview", s.previewMonitorDefinition)
 	mux.HandleFunc("POST /api/v1/monitors/bulk-delete", s.bulkDeleteMonitors)
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}", s.getMonitor)
 	mux.HandleFunc("PATCH /api/v1/monitors/{monitorId}", s.updateMonitor)
@@ -123,6 +129,7 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/runs/{runId}/diagnostics", s.getRunDiagnostics)
 	mux.HandleFunc("POST /api/v1/runs/{runId}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs", s.listRecentRuns)
+	mux.HandleFunc("GET /api/v1/search", s.searchWorkspace)
 	mux.HandleFunc("GET /api/v1/alerts", s.listAlerts)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}", s.getAlert)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}/events", s.listAlertEvents)
@@ -131,7 +138,11 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("PUT /api/v1/monitors/{monitorId}/alert-policy", s.saveAlertPolicy)
 	mux.HandleFunc("GET /api/v1/audit-events", s.listAuditEvents)
 	mux.HandleFunc("GET /api/v1/config/{kind}", s.listConfigurationProfiles)
+	mux.HandleFunc("POST /api/v1/config/certificates/upload", s.uploadCertificateProfile)
+	mux.HandleFunc("PUT /api/v1/config/certificates/{profileId}/upload", s.uploadCertificateProfile)
+	mux.HandleFunc("POST /api/v1/config/proxies/{profileId}/test", s.testProxyProfile)
 	mux.HandleFunc("POST /api/v1/config/{kind}", s.createConfigurationProfile)
+	mux.HandleFunc("PUT /api/v1/config/{kind}/{profileId}", s.updateConfigurationProfile)
 	mux.HandleFunc("DELETE /api/v1/config/{kind}/{profileId}", s.deleteConfigurationProfile)
 	mux.HandleFunc("GET /api/v1/suites", s.listSuites)
 	mux.HandleFunc("POST /api/v1/suites", s.createSuite)
@@ -142,6 +153,7 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/suite-runs/{suiteRunId}", s.getSuiteRun)
 	mux.HandleFunc("POST /api/v1/suite-runs/{suiteRunId}/cancel", s.cancelSuiteRun)
 	mux.HandleFunc("POST /api/v1/suites/{suiteId}/deployment-runs", s.createDeploymentRun)
+	mux.HandleFunc("POST /api/v1/suites/{suiteId}/deployment-baseline-preview", s.previewDeploymentBaseline)
 	mux.HandleFunc("GET /api/v1/deployment-runs", s.listDeploymentRuns)
 	mux.HandleFunc("GET /api/v1/deployment-runs/{deploymentRunId}", s.getDeploymentRun)
 	mux.HandleFunc("POST /api/v1/deployment-runs/{deploymentRunId}/cancel", s.cancelDeploymentRun)
@@ -154,6 +166,7 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/v1/agents/{agentId}/activate", s.activateAgent)
 	mux.HandleFunc("POST /api/v1/agents/{agentId}/revoke", s.revokeAgent)
 	mux.HandleFunc("GET /api/v1/notification-deliveries", s.listNotificationDeliveries)
+	mux.HandleFunc("POST /api/v1/config/notifications/{profileId}/test-email", s.testNotificationEmail)
 	mux.HandleFunc("GET /api/v1/applications", s.listApplications)
 	mux.HandleFunc("POST /api/v1/applications", s.createApplication)
 	mux.HandleFunc("GET /api/v1/applications/{applicationId}", s.getApplication)
@@ -225,7 +238,12 @@ func (s *server) listSuites(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list validation suites.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) listAgents(w http.ResponseWriter, r *http.Request) {
@@ -252,6 +270,29 @@ func (s *server) listNotificationDeliveries(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+}
+
+func (s *server) testNotificationEmail(w http.ResponseWriter, r *http.Request) {
+	if s.notifications == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "NOTIFICATIONS_UNAVAILABLE", "Notification delivery is unavailable.", nil)
+		return
+	}
+	var input notifications.TestEmailInput
+	if !s.decodeJSON(w, r, &input) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	err := s.notifications.SendTestEmail(ctx, r.PathValue("profileId"), input.To)
+	if errors.Is(err, notifications.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "NOTIFICATION_CHANNEL_NOT_FOUND", "EMAIL notification channel was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "SMTP_TEST_FAILED", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]any{"sent": true, "to": strings.TrimSpace(input.To)}, Meta: s.meta(r)})
 }
 
 func (s *server) registerAgent(w http.ResponseWriter, r *http.Request) {
@@ -470,7 +511,12 @@ func (s *server) listMonitors(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list monitors.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) getMonitor(w http.ResponseWriter, r *http.Request) {
@@ -847,6 +893,30 @@ func (s *server) runMonitor(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, status, successResponse{Data: map[string]any{"run": run, "runId": run.ID, "status": run.Status, "diagnosticsUrl": diagnosticsURL}, Meta: s.meta(r)})
 }
 
+func (s *server) previewMonitorDefinition(w http.ResponseWriter, r *http.Request) {
+	var definition runs.Definition
+	// Monitor definitions are versioned documents. The editor may send fields
+	// introduced by a newer schema that the current executor safely ignores,
+	// matching persisted-revision execution behavior.
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
+	if err := decoder.Decode(&definition); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Monitor definition is invalid.", nil)
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body must contain exactly one monitor definition.", nil)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	preview, err := s.runs.PreviewDefinition(ctx, definition)
+	if err != nil {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "DRAFT_PREVIEW_FAILED", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: preview, Meta: s.meta(r)})
+}
+
 func (s *server) listMonitorRuns(w http.ResponseWriter, r *http.Request) {
 	items, err := s.runs.List(r.Context(), r.PathValue("monitorId"))
 	if errors.Is(err, monitors.ErrNotFound) {
@@ -857,7 +927,12 @@ func (s *server) listMonitorRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list monitor runs.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) getMonitorMetrics(w http.ResponseWriter, r *http.Request) {
@@ -991,7 +1066,12 @@ func (s *server) listAlerts(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list alerts.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) getAlert(w http.ResponseWriter, r *http.Request) {
@@ -1076,12 +1156,21 @@ func (s *server) listAuditEvents(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "AUDIT_UNAVAILABLE", "Audit history requires PostgreSQL.", nil)
 		return
 	}
-	items, err := s.audit.List(r.Context(), 100)
+	limit := 200
+	if r.URL.Query().Get("limit") == "" && r.URL.Query().Get("cursor") == "" {
+		limit = 100
+	}
+	items, err := s.audit.List(r.Context(), limit)
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list audit events.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) listConfigurationProfiles(w http.ResponseWriter, r *http.Request) {
@@ -1094,7 +1183,175 @@ func (s *server) listConfigurationProfiles(w http.ResponseWriter, r *http.Reques
 		s.writeError(w, r, http.StatusBadRequest, "CONFIGURATION_KIND_INVALID", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, items, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
+}
+
+func (s *server) uploadCertificateProfile(w http.ResponseWriter, r *http.Request) {
+	if s.library == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "CONFIGURATION_UNAVAILABLE", "Configuration library requires PostgreSQL.", nil)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+	if err := r.ParseMultipartForm(12 << 20); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "CERTIFICATE_UPLOAD_INVALID", "Certificate upload is invalid or exceeds 32 MB.", nil)
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	config := map[string]any{
+		"purpose":     strings.TrimSpace(r.FormValue("purpose")),
+		"password":    r.FormValue("password"),
+		"keyPassword": r.FormValue("keyPassword"),
+		"alias":       strings.TrimSpace(r.FormValue("alias")),
+	}
+	for _, field := range []string{"source", "privateKey", "caBundle"} {
+		file, header, err := r.FormFile(field)
+		if errors.Is(err, http.ErrMissingFile) {
+			continue
+		}
+		if err != nil {
+			s.writeError(w, r, http.StatusBadRequest, "CERTIFICATE_UPLOAD_INVALID", "Unable to read the uploaded certificate files.", nil)
+			return
+		}
+		content, readErr := io.ReadAll(io.LimitReader(file, (10<<20)+1))
+		_ = file.Close()
+		if readErr != nil || len(content) == 0 || len(content) > 10<<20 {
+			s.writeError(w, r, http.StatusBadRequest, "CERTIFICATE_FILE_INVALID", "Each certificate file must be between 1 byte and 10 MB.", nil)
+			return
+		}
+		config[field] = map[string]any{
+			"name":          filepath.Base(header.Filename),
+			"contentBase64": base64.StdEncoding.EncodeToString(content),
+		}
+	}
+	input := library.Input{
+		Name:        strings.TrimSpace(r.FormValue("name")),
+		Description: strings.TrimSpace(r.FormValue("description")),
+		ProfileType: strings.TrimSpace(r.FormValue("purpose")),
+		Config:      config,
+	}
+	principal, _ := authz.PrincipalFromContext(r.Context())
+	var profile library.Profile
+	var err error
+	if profileID := strings.TrimSpace(r.PathValue("profileId")); profileID != "" {
+		profile, err = s.library.Update(r.Context(), profileID, input, principal.ID)
+	} else {
+		profile, err = s.library.Create(r.Context(), "certificates", input, principal.ID)
+	}
+	if errors.Is(err, library.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "CONFIGURATION_PROFILE_NOT_FOUND", "Certificate profile was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "CERTIFICATE_PROFILE_INVALID", err.Error(), nil)
+		return
+	}
+	status := http.StatusCreated
+	if r.Method == http.MethodPut {
+		status = http.StatusOK
+	}
+	s.writeJSON(w, r, status, successResponse{Data: profile, Meta: s.meta(r)})
+}
+
+func (s *server) testProxyProfile(w http.ResponseWriter, r *http.Request) {
+	if s.library == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "CONFIGURATION_UNAVAILABLE", "Configuration library requires PostgreSQL.", nil)
+		return
+	}
+	var input struct {
+		TargetURL string `json:"targetUrl"`
+	}
+	if !s.decodeJSON(w, r, &input) {
+		return
+	}
+	targetURL := strings.TrimSpace(input.TargetURL)
+	parsedTarget, err := url.Parse(targetURL)
+	if err != nil || parsedTarget.Host == "" || (parsedTarget.Scheme != "http" && parsedTarget.Scheme != "https") {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "PROXY_TEST_TARGET_INVALID", "Test target must be an HTTP or HTTPS URL.", nil)
+		return
+	}
+	profile, err := s.library.Get(r.Context(), r.PathValue("profileId"))
+	if errors.Is(err, library.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "CONFIGURATION_PROFILE_NOT_FOUND", "Proxy profile was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load proxy profile.", nil)
+		return
+	}
+	if profile.Kind != "PROXY" || !profile.Active {
+		s.writeError(w, r, http.StatusNotFound, "CONFIGURATION_PROFILE_NOT_FOUND", "Proxy profile was not found.", nil)
+		return
+	}
+	verifyHostname := true
+	executor := runs.NewHTTPExecutorWithResolver(s.allowPrivateTargets, s.library)
+	result := executor.Execute(r.Context(), runs.StepDefinition{
+		ID:        "proxy-connectivity-test",
+		Name:      "Proxy connectivity test",
+		Type:      "HTTP_REQUEST",
+		Enabled:   true,
+		TimeoutMS: 15000,
+		Request: runs.RequestConfig{
+			Method: "GET",
+			URL:    targetURL,
+			Settings: runs.SettingsConfig{
+				FollowRedirects: false,
+				Compression:     true,
+				TimeoutMS:       15000,
+				MaxBodyBytes:    1024,
+			},
+			TLS:   runs.TLSConfig{MinimumVersion: "TLS 1.2", VerifyHostname: &verifyHostname},
+			Proxy: runs.ProxyConfig{Mode: "profile", ProfileID: profile.ID},
+		},
+	})
+	statusCode := 0
+	if value, ok := result.ResponseSummary["status"].(int); ok {
+		statusCode = value
+	} else if value, ok := result.ResponseSummary["status"].(float64); ok {
+		statusCode = int(value)
+	}
+	success := result.Status == runs.StatusSuccess && statusCode != http.StatusProxyAuthRequired
+	message := "Proxy route reached the target."
+	if !success {
+		message = result.ErrorMessage
+		if statusCode == http.StatusProxyAuthRequired {
+			message = "The proxy requires authentication or rejected the configured credentials."
+		}
+		if strings.TrimSpace(message) == "" {
+			message = "The proxy route could not reach the target."
+		}
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]any{
+		"success":         success,
+		"message":         message,
+		"targetUrl":       targetURL,
+		"statusCode":      statusCode,
+		"durationMs":      result.DurationMS,
+		"failureCategory": result.FailureCategory,
+		"timing":          result.Timing,
+		"proxyScheme":     profile.Config["scheme"],
+		"proxyHost":       profile.Config["host"],
+		"proxyPort":       profile.Config["port"],
+		"bypassed":        proxyTargetBypassed(parsedTarget.Hostname(), fmt.Sprint(profile.Config["noProxy"])),
+		"checkedAt":       time.Now().UTC(),
+	}, Meta: s.meta(r)})
+}
+
+func proxyTargetBypassed(host, noProxy string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	for _, raw := range strings.Split(noProxy, ",") {
+		rule := strings.ToLower(strings.TrimSpace(raw))
+		if rule == "*" || host == rule || strings.HasPrefix(rule, "*.") && strings.HasSuffix(host, strings.TrimPrefix(rule, "*")) {
+			return true
+		}
+	}
+	return false
 }
 func (s *server) createConfigurationProfile(w http.ResponseWriter, r *http.Request) {
 	if s.library == nil {
@@ -1112,6 +1369,27 @@ func (s *server) createConfigurationProfile(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	s.writeJSON(w, r, http.StatusCreated, successResponse{Data: profile, Meta: s.meta(r)})
+}
+func (s *server) updateConfigurationProfile(w http.ResponseWriter, r *http.Request) {
+	if s.library == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "CONFIGURATION_UNAVAILABLE", "Configuration library requires PostgreSQL.", nil)
+		return
+	}
+	var input library.Input
+	if !s.decodeJSON(w, r, &input) {
+		return
+	}
+	principal, _ := authz.PrincipalFromContext(r.Context())
+	profile, err := s.library.Update(r.Context(), r.PathValue("profileId"), input, principal.ID)
+	if errors.Is(err, library.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "CONFIGURATION_PROFILE_NOT_FOUND", "Configuration profile was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "CONFIGURATION_PROFILE_INVALID", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: profile, Meta: s.meta(r)})
 }
 func (s *server) deleteConfigurationProfile(w http.ResponseWriter, r *http.Request) {
 	if s.library == nil {

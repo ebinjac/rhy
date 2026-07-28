@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRuntimeMutatesVariablesAndRequest(t *testing.T) {
@@ -83,6 +84,112 @@ pm.variables.set("token", response.json().token);
 	}
 	if result.Status != "SUCCESS" || result.InternalVariables["token"] != "preview-token" || len(result.AuxiliaryRequests) != 1 {
 		t.Fatalf("expected preview sendRequest to succeed, got %#v", result)
+	}
+	aux := result.AuxiliaryRequests[0]
+	if aux.Source != "pm.sendRequest" || aux.Method != http.MethodGet || !aux.Success || aux.Status != http.StatusOK || aux.DurationMS < 0 || aux.Error != "" {
+		t.Fatalf("expected timed successful auxiliary request evidence, got %#v", aux)
+	}
+	if !strings.Contains(aux.URL, target.URL) && aux.URL != target.URL {
+		// httptest URL may differ only by trailing slash / host form after safeURL
+		if !strings.HasPrefix(aux.URL, "http://127.0.0.1") && !strings.HasPrefix(aux.URL, "http://localhost") {
+			t.Fatalf("unexpected auxiliary request URL: %q", aux.URL)
+		}
+	}
+}
+
+func TestRuntimeRecordsMultipleAuxiliaryRequestsInOrder(t *testing.T) {
+	var hits []string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits = append(hits, r.URL.Path)
+		time.Sleep(5 * time.Millisecond)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+
+	code := fmt.Sprintf(`
+await pm.sendRequest({ method: "GET", url: %q });
+await pm.sendRequest({ method: "POST", url: %q });
+`, target.URL+"/one", target.URL+"/two")
+	result, err := NewRuntime().Execute(context.Background(), Input{Script: Script{Enabled: true, Code: code, RuntimeVersion: RuntimeVersion}, AllowPrivateTargets: true, Variables: map[string]string{}, Collection: map[string]string{}, Environment: map[string]string{}, Globals: map[string]string{}, TimeoutMS: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || len(result.AuxiliaryRequests) != 2 {
+		t.Fatalf("expected two auxiliary requests, got %#v", result)
+	}
+	if len(hits) != 2 || hits[0] != "/one" || hits[1] != "/two" {
+		t.Fatalf("unexpected hit order: %#v", hits)
+	}
+	first, second := result.AuxiliaryRequests[0], result.AuxiliaryRequests[1]
+	if first.Method != http.MethodGet || second.Method != http.MethodPost {
+		t.Fatalf("methods out of order: %#v", result.AuxiliaryRequests)
+	}
+	if !strings.HasSuffix(first.URL, "/one") || !strings.HasSuffix(second.URL, "/two") {
+		t.Fatalf("URLs out of order: %#v", result.AuxiliaryRequests)
+	}
+	if !first.Success || !second.Success || first.Status != http.StatusCreated || second.Status != http.StatusCreated {
+		t.Fatalf("expected successful evidence: %#v", result.AuxiliaryRequests)
+	}
+	if first.DurationMS < 1 || second.DurationMS < 1 {
+		t.Fatalf("expected positive durations, got %#v", result.AuxiliaryRequests)
+	}
+	if AuxiliaryRequestDurationMS(result) != first.DurationMS+second.DurationMS {
+		t.Fatalf("duration sum mismatch: %#v", result.AuxiliaryRequests)
+	}
+}
+
+func TestRuntimeRecordsFailedAuxiliaryRequestDuration(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Fatal("hijacking unsupported")
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.Close()
+	}))
+	defer target.Close()
+
+	code := fmt.Sprintf(`
+try {
+  await pm.sendRequest(%q);
+} catch (error) {
+  pm.variables.set("caught", "yes");
+}
+`, target.URL)
+	result, err := NewRuntime().Execute(context.Background(), Input{Script: Script{Enabled: true, Code: code, RuntimeVersion: RuntimeVersion}, AllowPrivateTargets: true, Variables: map[string]string{}, Collection: map[string]string{}, Environment: map[string]string{}, Globals: map[string]string{}, TimeoutMS: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["caught"] != "yes" || len(result.AuxiliaryRequests) != 1 {
+		t.Fatalf("expected caught sendRequest failure evidence, got %#v", result)
+	}
+	aux := result.AuxiliaryRequests[0]
+	if aux.Success || aux.Error == "" || aux.DurationMS < 0 || aux.Source != "pm.sendRequest" {
+		t.Fatalf("expected failed timed evidence, got %#v", aux)
+	}
+}
+
+func TestRuntimeRecordsInvalidAuxiliaryRequestEvidence(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{Script: Script{Enabled: true, Code: `
+try {
+  await pm.sendRequest({ method: "GET", url: "not-a-url" });
+} catch (error) {
+  pm.variables.set("caught", "yes");
+}
+`, RuntimeVersion: RuntimeVersion}, AllowPrivateTargets: true, Variables: map[string]string{}, Collection: map[string]string{}, Environment: map[string]string{}, Globals: map[string]string{}, TimeoutMS: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["caught"] != "yes" || len(result.AuxiliaryRequests) != 1 {
+		t.Fatalf("expected invalid URL evidence, got %#v", result)
+	}
+	aux := result.AuxiliaryRequests[0]
+	if aux.Success || aux.Error != "invalid URL" || aux.Method != http.MethodGet {
+		t.Fatalf("unexpected invalid URL evidence: %#v", aux)
 	}
 }
 

@@ -1,0 +1,20 @@
+---
+title: Metrics and percentiles
+description: Interpret run-history response time, p50, p95, p99, spikes, reliability, and sample sufficiency.
+audience: [application-engineer, sre-operator, release-engineer]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [p95, p99, metrics, spike]
+---
+
+- **p50** is the median experience.
+- **p95** is the value that 95% of measured runs are at or below.
+- **p99** surfaces rare tail latency.
+- **Success rate** is successful measured runs divided by all eligible runs.
+- **Standard deviation** indicates how widely durations vary around the average.
+
+Rhythm flags a meaningful regression only when duration exceeds historical p95 and is both at least 25% and 100 ms slower than p50. Fewer than five samples produce **Insufficient history**.
+
+Charts provide an equivalent data table and link spikes to exact executions. Missing or legacy API timings are excluded instead of being plotted as `0 ms`.

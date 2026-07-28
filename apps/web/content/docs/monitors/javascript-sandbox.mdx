@@ -1,0 +1,28 @@
+---
+title: JavaScript pre-request sandbox
+description: Run deterministic Postman-style pre-request JavaScript with variables, HMAC signing, cookies, tests, and governed requests.
+audience: [application-engineer]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Script Runtime]
+keywords: [JavaScript, pre-request, HMAC, pm.sendRequest]
+---
+
+The JavaScript editor lives in the request's **Pre-request → JavaScript** section. A script runs once before its HTTP step and can mutate the run-local request context.
+
+```javascript
+const requestId = crypto.randomUUID()
+pm.variables.set("requestId", requestId)
+pm.request.headers.upsert({ key: "X-Request-ID", value: requestId })
+
+pm.test("request ID exists", () => {
+  pm.expect(pm.variables.get("requestId")).to.be.ok
+})
+```
+
+Use Web Crypto SHA-256/384/512 digest and HMAC operations for signing. Use `pm.sendRequest` for a maximum of five governed auxiliary calls.
+
+<SecurityNote>The sandbox has no filesystem, process environment, Node globals, arbitrary `fetch`, `eval`, package imports, or writable vault access.</SecurityNote>
+
+<FailureExample>Preview blocks networking and substitutes masked secret placeholders. A preview success does not prove that a target host or runtime secret is available to the execution agent.</FailureExample>

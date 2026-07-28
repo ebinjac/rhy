@@ -14,6 +14,7 @@
     "types": ["vite/client"],
     "paths": {
       "@/*": ["./src/*"],
+      "collections/*": ["./.source/*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     },
 

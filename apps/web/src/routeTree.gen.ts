@@ -10,6 +10,10 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as SuitesRouteImport } from './routes/suites'
+import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
+import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
+import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
+import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ElfRouteImport } from './routes/elf'
 import { Route as ConfigurationRouteImport } from './routes/configuration'
 import { Route as AuditRouteImport } from './routes/audit'
@@ -19,21 +23,52 @@ import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as MonitorsIndexRouteImport } from './routes/monitors/index'
 import { Route as ElfIndexRouteImport } from './routes/elf/index'
+import { Route as ApplicationsIndexRouteImport } from './routes/applications/index'
+import { Route as AlertsIndexRouteImport } from './routes/alerts/index'
 import { Route as MonitorsNewRouteImport } from './routes/monitors/new'
+import { Route as MonitorsMonitorIdRouteImport } from './routes/monitors/$monitorId'
 import { Route as ElfSettingsRouteImport } from './routes/elf/settings'
 import { Route as ElfRunsRouteImport } from './routes/elf/runs'
 import { Route as ElfQueryIdRouteImport } from './routes/elf/$queryId'
+import { Route as DocsSplatRouteImport } from './routes/docs/$'
+import { Route as DocsMarkdownSplatRouteImport } from './routes/docs-markdown/$'
 import { Route as DeploymentRunsDeploymentRunIdRouteImport } from './routes/deployment-runs/$deploymentRunId'
+import { Route as ApplicationsApplicationIdRouteImport } from './routes/applications/$applicationId'
+import { Route as ApiDocsSearchRouteImport } from './routes/api/docs-search'
+import { Route as AlertsAlertIdRouteImport } from './routes/alerts/$alertId'
+import { Route as MonitorsMonitorIdIndexRouteImport } from './routes/monitors/$monitorId/index'
 import { Route as MonitorsMonitorIdRunsRouteImport } from './routes/monitors/$monitorId/runs'
 import { Route as MonitorsMonitorIdRevisionsRouteImport } from './routes/monitors/$monitorId/revisions'
 import { Route as MonitorsMonitorIdMetricsRouteImport } from './routes/monitors/$monitorId/metrics'
 import { Route as MonitorsMonitorIdEditRouteImport } from './routes/monitors/$monitorId/edit'
+import { Route as ElfRunRunIdRouteImport } from './routes/elf/run/$runId'
+import { Route as DocsCurrentSplatRouteImport } from './routes/docs/current/$'
 import { Route as MonitorsMonitorIdRunsIndexRouteImport } from './routes/monitors/$monitorId/runs/index'
 import { Route as MonitorsMonitorIdRunsRunIdRouteImport } from './routes/monitors/$monitorId/runs/$runId'
 
 const SuitesRoute = SuitesRouteImport.update({
   id: '/suites',
   path: '/suites',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
+  id: '/sitemap.xml',
+  path: '/sitemap.xml',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
+  id: '/robots.txt',
+  path: '/robots.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
+  id: '/llms.txt',
+  path: '/llms.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LlmsFullDottxtRoute = LlmsFullDottxtRouteImport.update({
+  id: '/llms-full.txt',
+  path: '/llms-full.txt',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ElfRoute = ElfRouteImport.update({
@@ -81,9 +116,24 @@ const ElfIndexRoute = ElfIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ElfRoute,
 } as any)
+const ApplicationsIndexRoute = ApplicationsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ApplicationsRoute,
+} as any)
+const AlertsIndexRoute = AlertsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AlertsRoute,
+} as any)
 const MonitorsNewRoute = MonitorsNewRouteImport.update({
   id: '/monitors/new',
   path: '/monitors/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MonitorsMonitorIdRoute = MonitorsMonitorIdRouteImport.update({
+  id: '/monitors/$monitorId',
+  path: '/monitors/$monitorId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ElfSettingsRoute = ElfSettingsRouteImport.update({
@@ -101,32 +151,73 @@ const ElfQueryIdRoute = ElfQueryIdRouteImport.update({
   path: '/$queryId',
   getParentRoute: () => ElfRoute,
 } as any)
+const DocsSplatRoute = DocsSplatRouteImport.update({
+  id: '/docs/$',
+  path: '/docs/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DocsMarkdownSplatRoute = DocsMarkdownSplatRouteImport.update({
+  id: '/docs-markdown/$',
+  path: '/docs-markdown/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const DeploymentRunsDeploymentRunIdRoute =
   DeploymentRunsDeploymentRunIdRouteImport.update({
     id: '/deployment-runs/$deploymentRunId',
     path: '/deployment-runs/$deploymentRunId',
     getParentRoute: () => rootRouteImport,
   } as any)
-const MonitorsMonitorIdRunsRoute = MonitorsMonitorIdRunsRouteImport.update({
-  id: '/monitors/$monitorId/runs',
-  path: '/monitors/$monitorId/runs',
+const ApplicationsApplicationIdRoute =
+  ApplicationsApplicationIdRouteImport.update({
+    id: '/$applicationId',
+    path: '/$applicationId',
+    getParentRoute: () => ApplicationsRoute,
+  } as any)
+const ApiDocsSearchRoute = ApiDocsSearchRouteImport.update({
+  id: '/api/docs-search',
+  path: '/api/docs-search',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AlertsAlertIdRoute = AlertsAlertIdRouteImport.update({
+  id: '/$alertId',
+  path: '/$alertId',
+  getParentRoute: () => AlertsRoute,
+} as any)
+const MonitorsMonitorIdIndexRoute = MonitorsMonitorIdIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => MonitorsMonitorIdRoute,
+} as any)
+const MonitorsMonitorIdRunsRoute = MonitorsMonitorIdRunsRouteImport.update({
+  id: '/runs',
+  path: '/runs',
+  getParentRoute: () => MonitorsMonitorIdRoute,
 } as any)
 const MonitorsMonitorIdRevisionsRoute =
   MonitorsMonitorIdRevisionsRouteImport.update({
-    id: '/monitors/$monitorId/revisions',
-    path: '/monitors/$monitorId/revisions',
-    getParentRoute: () => rootRouteImport,
+    id: '/revisions',
+    path: '/revisions',
+    getParentRoute: () => MonitorsMonitorIdRoute,
   } as any)
 const MonitorsMonitorIdMetricsRoute =
   MonitorsMonitorIdMetricsRouteImport.update({
-    id: '/monitors/$monitorId/metrics',
-    path: '/monitors/$monitorId/metrics',
-    getParentRoute: () => rootRouteImport,
+    id: '/metrics',
+    path: '/metrics',
+    getParentRoute: () => MonitorsMonitorIdRoute,
   } as any)
 const MonitorsMonitorIdEditRoute = MonitorsMonitorIdEditRouteImport.update({
-  id: '/monitors/$monitorId/edit',
-  path: '/monitors/$monitorId/edit',
+  id: '/edit',
+  path: '/edit',
+  getParentRoute: () => MonitorsMonitorIdRoute,
+} as any)
+const ElfRunRunIdRoute = ElfRunRunIdRouteImport.update({
+  id: '/run/$runId',
+  path: '/run/$runId',
+  getParentRoute: () => ElfRoute,
+} as any)
+const DocsCurrentSplatRoute = DocsCurrentSplatRouteImport.update({
+  id: '/docs/current/$',
+  path: '/docs/current/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 const MonitorsMonitorIdRunsIndexRoute =
@@ -145,44 +236,71 @@ const MonitorsMonitorIdRunsRunIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
-  '/alerts': typeof AlertsRoute
-  '/applications': typeof ApplicationsRoute
+  '/alerts': typeof AlertsRouteWithChildren
+  '/applications': typeof ApplicationsRouteWithChildren
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
   '/elf': typeof ElfRouteWithChildren
+  '/llms-full.txt': typeof LlmsFullDottxtRoute
+  '/llms.txt': typeof LlmsDottxtRoute
+  '/robots.txt': typeof RobotsDottxtRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/alerts/$alertId': typeof AlertsAlertIdRoute
+  '/api/docs-search': typeof ApiDocsSearchRoute
+  '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
   '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/docs-markdown/$': typeof DocsMarkdownSplatRoute
+  '/docs/$': typeof DocsSplatRoute
   '/elf/$queryId': typeof ElfQueryIdRoute
   '/elf/runs': typeof ElfRunsRoute
   '/elf/settings': typeof ElfSettingsRoute
+  '/monitors/$monitorId': typeof MonitorsMonitorIdRouteWithChildren
   '/monitors/new': typeof MonitorsNewRoute
+  '/alerts/': typeof AlertsIndexRoute
+  '/applications/': typeof ApplicationsIndexRoute
   '/elf/': typeof ElfIndexRoute
   '/monitors/': typeof MonitorsIndexRoute
+  '/docs/current/$': typeof DocsCurrentSplatRoute
+  '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/monitors/$monitorId/': typeof MonitorsMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
-  '/alerts': typeof AlertsRoute
-  '/applications': typeof ApplicationsRoute
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
+  '/llms-full.txt': typeof LlmsFullDottxtRoute
+  '/llms.txt': typeof LlmsDottxtRoute
+  '/robots.txt': typeof RobotsDottxtRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/alerts/$alertId': typeof AlertsAlertIdRoute
+  '/api/docs-search': typeof ApiDocsSearchRoute
+  '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
   '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/docs-markdown/$': typeof DocsMarkdownSplatRoute
+  '/docs/$': typeof DocsSplatRoute
   '/elf/$queryId': typeof ElfQueryIdRoute
   '/elf/runs': typeof ElfRunsRoute
   '/elf/settings': typeof ElfSettingsRoute
   '/monitors/new': typeof MonitorsNewRoute
+  '/alerts': typeof AlertsIndexRoute
+  '/applications': typeof ApplicationsIndexRoute
   '/elf': typeof ElfIndexRoute
   '/monitors': typeof MonitorsIndexRoute
+  '/docs/current/$': typeof DocsCurrentSplatRoute
+  '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
+  '/monitors/$monitorId': typeof MonitorsMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsIndexRoute
 }
@@ -190,23 +308,38 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
-  '/alerts': typeof AlertsRoute
-  '/applications': typeof ApplicationsRoute
+  '/alerts': typeof AlertsRouteWithChildren
+  '/applications': typeof ApplicationsRouteWithChildren
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
   '/elf': typeof ElfRouteWithChildren
+  '/llms-full.txt': typeof LlmsFullDottxtRoute
+  '/llms.txt': typeof LlmsDottxtRoute
+  '/robots.txt': typeof RobotsDottxtRoute
+  '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/alerts/$alertId': typeof AlertsAlertIdRoute
+  '/api/docs-search': typeof ApiDocsSearchRoute
+  '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
   '/deployment-runs/$deploymentRunId': typeof DeploymentRunsDeploymentRunIdRoute
+  '/docs-markdown/$': typeof DocsMarkdownSplatRoute
+  '/docs/$': typeof DocsSplatRoute
   '/elf/$queryId': typeof ElfQueryIdRoute
   '/elf/runs': typeof ElfRunsRoute
   '/elf/settings': typeof ElfSettingsRoute
+  '/monitors/$monitorId': typeof MonitorsMonitorIdRouteWithChildren
   '/monitors/new': typeof MonitorsNewRoute
+  '/alerts/': typeof AlertsIndexRoute
+  '/applications/': typeof ApplicationsIndexRoute
   '/elf/': typeof ElfIndexRoute
   '/monitors/': typeof MonitorsIndexRoute
+  '/docs/current/$': typeof DocsCurrentSplatRoute
+  '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/monitors/$monitorId/': typeof MonitorsMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
 }
@@ -220,39 +353,66 @@ export interface FileRouteTypes {
     | '/audit'
     | '/configuration'
     | '/elf'
+    | '/llms-full.txt'
+    | '/llms.txt'
+    | '/robots.txt'
+    | '/sitemap.xml'
     | '/suites'
+    | '/alerts/$alertId'
+    | '/api/docs-search'
+    | '/applications/$applicationId'
     | '/deployment-runs/$deploymentRunId'
+    | '/docs-markdown/$'
+    | '/docs/$'
     | '/elf/$queryId'
     | '/elf/runs'
     | '/elf/settings'
+    | '/monitors/$monitorId'
     | '/monitors/new'
+    | '/alerts/'
+    | '/applications/'
     | '/elf/'
     | '/monitors/'
+    | '/docs/current/$'
+    | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
     | '/monitors/$monitorId/runs'
+    | '/monitors/$monitorId/'
     | '/monitors/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/agents'
-    | '/alerts'
-    | '/applications'
     | '/audit'
     | '/configuration'
+    | '/llms-full.txt'
+    | '/llms.txt'
+    | '/robots.txt'
+    | '/sitemap.xml'
     | '/suites'
+    | '/alerts/$alertId'
+    | '/api/docs-search'
+    | '/applications/$applicationId'
     | '/deployment-runs/$deploymentRunId'
+    | '/docs-markdown/$'
+    | '/docs/$'
     | '/elf/$queryId'
     | '/elf/runs'
     | '/elf/settings'
     | '/monitors/new'
+    | '/alerts'
+    | '/applications'
     | '/elf'
     | '/monitors'
+    | '/docs/current/$'
+    | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
+    | '/monitors/$monitorId'
     | '/monitors/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs'
   id:
@@ -264,18 +424,33 @@ export interface FileRouteTypes {
     | '/audit'
     | '/configuration'
     | '/elf'
+    | '/llms-full.txt'
+    | '/llms.txt'
+    | '/robots.txt'
+    | '/sitemap.xml'
     | '/suites'
+    | '/alerts/$alertId'
+    | '/api/docs-search'
+    | '/applications/$applicationId'
     | '/deployment-runs/$deploymentRunId'
+    | '/docs-markdown/$'
+    | '/docs/$'
     | '/elf/$queryId'
     | '/elf/runs'
     | '/elf/settings'
+    | '/monitors/$monitorId'
     | '/monitors/new'
+    | '/alerts/'
+    | '/applications/'
     | '/elf/'
     | '/monitors/'
+    | '/docs/current/$'
+    | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
     | '/monitors/$monitorId/runs'
+    | '/monitors/$monitorId/'
     | '/monitors/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs/'
   fileRoutesById: FileRoutesById
@@ -283,19 +458,24 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentsRoute: typeof AgentsRoute
-  AlertsRoute: typeof AlertsRoute
-  ApplicationsRoute: typeof ApplicationsRoute
+  AlertsRoute: typeof AlertsRouteWithChildren
+  ApplicationsRoute: typeof ApplicationsRouteWithChildren
   AuditRoute: typeof AuditRoute
   ConfigurationRoute: typeof ConfigurationRoute
   ElfRoute: typeof ElfRouteWithChildren
+  LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
+  LlmsDottxtRoute: typeof LlmsDottxtRoute
+  RobotsDottxtRoute: typeof RobotsDottxtRoute
+  SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   SuitesRoute: typeof SuitesRoute
+  ApiDocsSearchRoute: typeof ApiDocsSearchRoute
   DeploymentRunsDeploymentRunIdRoute: typeof DeploymentRunsDeploymentRunIdRoute
+  DocsMarkdownSplatRoute: typeof DocsMarkdownSplatRoute
+  DocsSplatRoute: typeof DocsSplatRoute
+  MonitorsMonitorIdRoute: typeof MonitorsMonitorIdRouteWithChildren
   MonitorsNewRoute: typeof MonitorsNewRoute
   MonitorsIndexRoute: typeof MonitorsIndexRoute
-  MonitorsMonitorIdEditRoute: typeof MonitorsMonitorIdEditRoute
-  MonitorsMonitorIdMetricsRoute: typeof MonitorsMonitorIdMetricsRoute
-  MonitorsMonitorIdRevisionsRoute: typeof MonitorsMonitorIdRevisionsRoute
-  MonitorsMonitorIdRunsRoute: typeof MonitorsMonitorIdRunsRouteWithChildren
+  DocsCurrentSplatRoute: typeof DocsCurrentSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -305,6 +485,34 @@ declare module '@tanstack/react-router' {
       path: '/suites'
       fullPath: '/suites'
       preLoaderRoute: typeof SuitesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sitemap.xml': {
+      id: '/sitemap.xml'
+      path: '/sitemap.xml'
+      fullPath: '/sitemap.xml'
+      preLoaderRoute: typeof SitemapDotxmlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/robots.txt': {
+      id: '/robots.txt'
+      path: '/robots.txt'
+      fullPath: '/robots.txt'
+      preLoaderRoute: typeof RobotsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/llms.txt': {
+      id: '/llms.txt'
+      path: '/llms.txt'
+      fullPath: '/llms.txt'
+      preLoaderRoute: typeof LlmsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/llms-full.txt': {
+      id: '/llms-full.txt'
+      path: '/llms-full.txt'
+      fullPath: '/llms-full.txt'
+      preLoaderRoute: typeof LlmsFullDottxtRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/elf': {
@@ -370,11 +578,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ElfIndexRouteImport
       parentRoute: typeof ElfRoute
     }
+    '/applications/': {
+      id: '/applications/'
+      path: '/'
+      fullPath: '/applications/'
+      preLoaderRoute: typeof ApplicationsIndexRouteImport
+      parentRoute: typeof ApplicationsRoute
+    }
+    '/alerts/': {
+      id: '/alerts/'
+      path: '/'
+      fullPath: '/alerts/'
+      preLoaderRoute: typeof AlertsIndexRouteImport
+      parentRoute: typeof AlertsRoute
+    }
     '/monitors/new': {
       id: '/monitors/new'
       path: '/monitors/new'
       fullPath: '/monitors/new'
       preLoaderRoute: typeof MonitorsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/monitors/$monitorId': {
+      id: '/monitors/$monitorId'
+      path: '/monitors/$monitorId'
+      fullPath: '/monitors/$monitorId'
+      preLoaderRoute: typeof MonitorsMonitorIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/elf/settings': {
@@ -398,6 +627,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ElfQueryIdRouteImport
       parentRoute: typeof ElfRoute
     }
+    '/docs/$': {
+      id: '/docs/$'
+      path: '/docs/$'
+      fullPath: '/docs/$'
+      preLoaderRoute: typeof DocsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/docs-markdown/$': {
+      id: '/docs-markdown/$'
+      path: '/docs-markdown/$'
+      fullPath: '/docs-markdown/$'
+      preLoaderRoute: typeof DocsMarkdownSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/deployment-runs/$deploymentRunId': {
       id: '/deployment-runs/$deploymentRunId'
       path: '/deployment-runs/$deploymentRunId'
@@ -405,32 +648,74 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DeploymentRunsDeploymentRunIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/applications/$applicationId': {
+      id: '/applications/$applicationId'
+      path: '/$applicationId'
+      fullPath: '/applications/$applicationId'
+      preLoaderRoute: typeof ApplicationsApplicationIdRouteImport
+      parentRoute: typeof ApplicationsRoute
+    }
+    '/api/docs-search': {
+      id: '/api/docs-search'
+      path: '/api/docs-search'
+      fullPath: '/api/docs-search'
+      preLoaderRoute: typeof ApiDocsSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/alerts/$alertId': {
+      id: '/alerts/$alertId'
+      path: '/$alertId'
+      fullPath: '/alerts/$alertId'
+      preLoaderRoute: typeof AlertsAlertIdRouteImport
+      parentRoute: typeof AlertsRoute
+    }
+    '/monitors/$monitorId/': {
+      id: '/monitors/$monitorId/'
+      path: '/'
+      fullPath: '/monitors/$monitorId/'
+      preLoaderRoute: typeof MonitorsMonitorIdIndexRouteImport
+      parentRoute: typeof MonitorsMonitorIdRoute
+    }
     '/monitors/$monitorId/runs': {
       id: '/monitors/$monitorId/runs'
-      path: '/monitors/$monitorId/runs'
+      path: '/runs'
       fullPath: '/monitors/$monitorId/runs'
       preLoaderRoute: typeof MonitorsMonitorIdRunsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof MonitorsMonitorIdRoute
     }
     '/monitors/$monitorId/revisions': {
       id: '/monitors/$monitorId/revisions'
-      path: '/monitors/$monitorId/revisions'
+      path: '/revisions'
       fullPath: '/monitors/$monitorId/revisions'
       preLoaderRoute: typeof MonitorsMonitorIdRevisionsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof MonitorsMonitorIdRoute
     }
     '/monitors/$monitorId/metrics': {
       id: '/monitors/$monitorId/metrics'
-      path: '/monitors/$monitorId/metrics'
+      path: '/metrics'
       fullPath: '/monitors/$monitorId/metrics'
       preLoaderRoute: typeof MonitorsMonitorIdMetricsRouteImport
-      parentRoute: typeof rootRouteImport
+      parentRoute: typeof MonitorsMonitorIdRoute
     }
     '/monitors/$monitorId/edit': {
       id: '/monitors/$monitorId/edit'
-      path: '/monitors/$monitorId/edit'
+      path: '/edit'
       fullPath: '/monitors/$monitorId/edit'
       preLoaderRoute: typeof MonitorsMonitorIdEditRouteImport
+      parentRoute: typeof MonitorsMonitorIdRoute
+    }
+    '/elf/run/$runId': {
+      id: '/elf/run/$runId'
+      path: '/run/$runId'
+      fullPath: '/elf/run/$runId'
+      preLoaderRoute: typeof ElfRunRunIdRouteImport
+      parentRoute: typeof ElfRoute
+    }
+    '/docs/current/$': {
+      id: '/docs/current/$'
+      path: '/docs/current/$'
+      fullPath: '/docs/current/$'
+      preLoaderRoute: typeof DocsCurrentSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/monitors/$monitorId/runs/': {
@@ -450,11 +735,39 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AlertsRouteChildren {
+  AlertsAlertIdRoute: typeof AlertsAlertIdRoute
+  AlertsIndexRoute: typeof AlertsIndexRoute
+}
+
+const AlertsRouteChildren: AlertsRouteChildren = {
+  AlertsAlertIdRoute: AlertsAlertIdRoute,
+  AlertsIndexRoute: AlertsIndexRoute,
+}
+
+const AlertsRouteWithChildren =
+  AlertsRoute._addFileChildren(AlertsRouteChildren)
+
+interface ApplicationsRouteChildren {
+  ApplicationsApplicationIdRoute: typeof ApplicationsApplicationIdRoute
+  ApplicationsIndexRoute: typeof ApplicationsIndexRoute
+}
+
+const ApplicationsRouteChildren: ApplicationsRouteChildren = {
+  ApplicationsApplicationIdRoute: ApplicationsApplicationIdRoute,
+  ApplicationsIndexRoute: ApplicationsIndexRoute,
+}
+
+const ApplicationsRouteWithChildren = ApplicationsRoute._addFileChildren(
+  ApplicationsRouteChildren,
+)
+
 interface ElfRouteChildren {
   ElfQueryIdRoute: typeof ElfQueryIdRoute
   ElfRunsRoute: typeof ElfRunsRoute
   ElfSettingsRoute: typeof ElfSettingsRoute
   ElfIndexRoute: typeof ElfIndexRoute
+  ElfRunRunIdRoute: typeof ElfRunRunIdRoute
 }
 
 const ElfRouteChildren: ElfRouteChildren = {
@@ -462,6 +775,7 @@ const ElfRouteChildren: ElfRouteChildren = {
   ElfRunsRoute: ElfRunsRoute,
   ElfSettingsRoute: ElfSettingsRoute,
   ElfIndexRoute: ElfIndexRoute,
+  ElfRunRunIdRoute: ElfRunRunIdRoute,
 }
 
 const ElfRouteWithChildren = ElfRoute._addFileChildren(ElfRouteChildren)
@@ -481,22 +795,46 @@ const MonitorsMonitorIdRunsRouteWithChildren =
     MonitorsMonitorIdRunsRouteChildren,
   )
 
-const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  AgentsRoute: AgentsRoute,
-  AlertsRoute: AlertsRoute,
-  ApplicationsRoute: ApplicationsRoute,
-  AuditRoute: AuditRoute,
-  ConfigurationRoute: ConfigurationRoute,
-  ElfRoute: ElfRouteWithChildren,
-  SuitesRoute: SuitesRoute,
-  DeploymentRunsDeploymentRunIdRoute: DeploymentRunsDeploymentRunIdRoute,
-  MonitorsNewRoute: MonitorsNewRoute,
-  MonitorsIndexRoute: MonitorsIndexRoute,
+interface MonitorsMonitorIdRouteChildren {
+  MonitorsMonitorIdEditRoute: typeof MonitorsMonitorIdEditRoute
+  MonitorsMonitorIdMetricsRoute: typeof MonitorsMonitorIdMetricsRoute
+  MonitorsMonitorIdRevisionsRoute: typeof MonitorsMonitorIdRevisionsRoute
+  MonitorsMonitorIdRunsRoute: typeof MonitorsMonitorIdRunsRouteWithChildren
+  MonitorsMonitorIdIndexRoute: typeof MonitorsMonitorIdIndexRoute
+}
+
+const MonitorsMonitorIdRouteChildren: MonitorsMonitorIdRouteChildren = {
   MonitorsMonitorIdEditRoute: MonitorsMonitorIdEditRoute,
   MonitorsMonitorIdMetricsRoute: MonitorsMonitorIdMetricsRoute,
   MonitorsMonitorIdRevisionsRoute: MonitorsMonitorIdRevisionsRoute,
   MonitorsMonitorIdRunsRoute: MonitorsMonitorIdRunsRouteWithChildren,
+  MonitorsMonitorIdIndexRoute: MonitorsMonitorIdIndexRoute,
+}
+
+const MonitorsMonitorIdRouteWithChildren =
+  MonitorsMonitorIdRoute._addFileChildren(MonitorsMonitorIdRouteChildren)
+
+const rootRouteChildren: RootRouteChildren = {
+  IndexRoute: IndexRoute,
+  AgentsRoute: AgentsRoute,
+  AlertsRoute: AlertsRouteWithChildren,
+  ApplicationsRoute: ApplicationsRouteWithChildren,
+  AuditRoute: AuditRoute,
+  ConfigurationRoute: ConfigurationRoute,
+  ElfRoute: ElfRouteWithChildren,
+  LlmsFullDottxtRoute: LlmsFullDottxtRoute,
+  LlmsDottxtRoute: LlmsDottxtRoute,
+  RobotsDottxtRoute: RobotsDottxtRoute,
+  SitemapDotxmlRoute: SitemapDotxmlRoute,
+  SuitesRoute: SuitesRoute,
+  ApiDocsSearchRoute: ApiDocsSearchRoute,
+  DeploymentRunsDeploymentRunIdRoute: DeploymentRunsDeploymentRunIdRoute,
+  DocsMarkdownSplatRoute: DocsMarkdownSplatRoute,
+  DocsSplatRoute: DocsSplatRoute,
+  MonitorsMonitorIdRoute: MonitorsMonitorIdRouteWithChildren,
+  MonitorsNewRoute: MonitorsNewRoute,
+  MonitorsIndexRoute: MonitorsIndexRoute,
+  DocsCurrentSplatRoute: DocsCurrentSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

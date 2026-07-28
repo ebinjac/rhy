@@ -1,0 +1,16 @@
+---
+title: Proxy profiles
+description: Configure HTTP, HTTPS, and SOCKS proxy routes with authentication, no-proxy rules, TLS, and connection testing.
+audience: [platform-administrator, security-administrator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm Platform]
+keywords: [proxy, no-proxy, egress]
+---
+
+A proxy profile defines scheme, host, port, authentication reference, optional TLS profile, and ordered no-proxy rules.
+
+Use **Test connection** with an allowed destination before linking the profile to a monitor or ELF connection. The result explains DNS, proxy connection, TLS, and policy decisions without exposing credentials.
+
+No-proxy decisions are recorded in run diagnostics so operators can distinguish direct and proxied routes.

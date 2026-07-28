@@ -21,9 +21,14 @@ PostgreSQL: localhost:55432
 Redis:      localhost:56379
 OpenSearch: http://localhost:19200
 Dashboards: http://localhost:15601/app/discover
+Mailpit:    http://localhost:18025
 ```
 
-Ports can be overridden with `RHYTHM_WEB_PORT`, `RHYTHM_API_PORT`, `RHYTHM_POSTGRES_PORT`, `RHYTHM_REDIS_PORT`, `RHYTHM_OPENSEARCH_PORT`, and `RHYTHM_OPENSEARCH_DASHBOARDS_PORT`.
+Ports can be overridden with `RHYTHM_WEB_PORT`, `RHYTHM_API_PORT`, `RHYTHM_POSTGRES_PORT`, `RHYTHM_REDIS_PORT`, `RHYTHM_OPENSEARCH_PORT`, `RHYTHM_OPENSEARCH_DASHBOARDS_PORT`, and `RHYTHM_MAILPIT_PORT`.
+
+Local Compose sets `RHYTHM_SECRETS_ENCRYPTION_KEY` on the API so Configuration → Secrets can store AES-GCM–encrypted values. Override it for any shared environment; without a valid 32-byte key (base64 or hex), only ENV/Vault secret references work.
+
+Local Compose includes [Mailpit](https://mailpit.axllent.org/) and seeds SMTP alert email defaults (`SMTP_HOST=mailpit`, `SMTP_PORT=1025`, `SMTP_FROM=rhythm-alerts@localhost`, no auth). Captured messages are visible at [localhost:18025](http://localhost:18025). Override with `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and optional `SMTP_TO` fallback recipients (or the `RHYTHM_SMTP_*` aliases). Configure channels under **Configuration → Notifications**, and per-application destinations under **Applications**.
 
 Useful commands:
 
@@ -57,11 +62,11 @@ The frontend container runs the Vite development server for the current local-de
 - Draft editing, validation, immutable publishing, revision history/restore/diff/export, cloning, enable/disable/archive, and explicit draft or published manual runs.
 - PostgreSQL-backed run history with per-attempt diagnostics, DNS/TCP/TLS/TTFB timings, assertions, extractors, TLS/proxy evidence, exact-value redaction, and specific failure categories.
 - Interval and cron scheduling through PostgreSQL and Redis, with idempotent due-job claims and published-revision execution.
-- Threshold alerts with acknowledgement/recovery and transactional Slack, webhook, or email delivery through governed secret references.
+- Threshold alerts with acknowledgement/recovery and transactional Slack, webhook, or SMTP email delivery (global channel + per-application destination emails) through governed secret references.
 - Staged deployment-validation suites with parallelism, fail-fast/required checks, timeout/cancellation, persisted results, and machine-readable pipeline gate decisions.
 - Execution-agent registration, heartbeat health, groups/tags/capabilities, drain/activate/revoke lifecycle, capacity-aware routing, and run attribution.
 - Administrator, Editor, Operator, and Viewer authorization rules, mutation audit history, and governed environment/secret/certificate/proxy/auth/notification/telemetry profiles.
-- Runtime secret resolution from environment aliases or HashiCorp Vault KV v1/v2 paths. Vault deployments provide `RHYTHM_VAULT_ADDR` and `RHYTHM_VAULT_TOKEN`; secret profiles store only the path, optional field, and namespace.
+- Secrets as named aliases (`secret://alias`, `pm.vault.get`) with three providers: **LOCAL** (AES-GCM encrypted values in PostgreSQL), **ENV** (API process environment), and **VAULT** (HashiCorp KV v1/v2). List APIs never return decrypted values. Set `RHYTHM_SECRETS_ENCRYPTION_KEY` (32-byte key as base64 or hex; aliases `RHYTHM_SECRETS_KEY` / `SECRETS_ENCRYPTION_KEY`) for stored secrets. Vault deployments also provide `RHYTHM_VAULT_ADDR` and `RHYTHM_VAULT_TOKEN`.
 
 Primary UI routes:
 

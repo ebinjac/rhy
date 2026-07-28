@@ -1,0 +1,30 @@
+---
+title: API operations
+description: Browse Rhythm's public API groups and try allowlisted, read-only operations from the browser.
+audience: [application-engineer, platform-administrator]
+status: preview
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm API]
+keywords: [OpenAPI, API reference, playground]
+---
+
+Rhythm's public contract is versioned under `/api/v1`. Successful JSON responses use `data` and `meta`; failures use a stable `error.code`, safe `message`, optional `details`, and request metadata.
+
+## Resource groups
+
+| Group | Base path |
+| --- | --- |
+| Monitors and runs | `/api/v1/monitors`, `/api/v1/runs` |
+| Applications and services | `/api/v1/applications` |
+| Alerts and receivers | `/api/v1/alerts`, `/api/v1/opensearch-alert-receivers` |
+| ELF queries and evidence | `/api/v1/elf` |
+| Suites and deployment validation | `/api/v1/suites`, `/api/v1/deployment-runs` |
+| Configuration and agents | `/api/v1/config`, `/api/v1/agents` |
+| Audit and search | `/api/v1/audit-events`, `/api/v1/search` |
+
+List operations accept `cursor` and `limit` where supported. Mutations return a request ID that can be correlated with audit evidence.
+
+<SafeApiPlayground />
+
+<SecurityNote>The playground sends requests directly from the browser. It has no proxy, exposes only allowlisted GET operations, omits cookies, and never stores the token.</SecurityNote>

@@ -3,11 +3,14 @@ import { Button } from "@workspace/ui/components/button"
 import { Moon, Sun, SunMoon } from "lucide-react"
 
 type Theme = "light" | "dark"
+type ThemePreference = Theme | "system"
 
 const storageKey = "rhythm-theme"
 
 function systemTheme(): Theme {
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light"
 }
 
 function applyTheme(theme: Theme) {
@@ -16,14 +19,19 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeToggle() {
+  const [preference, setPreference] = useState<ThemePreference>("system")
   const [theme, setTheme] = useState<Theme>("light")
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
     const stored = window.localStorage.getItem(storageKey)
-    const initial = stored === "light" || stored === "dark" ? stored : systemTheme()
-    applyTheme(initial)
-    setTheme(initial)
+    const initialPreference: ThemePreference =
+      stored === "light" || stored === "dark" ? stored : "system"
+    const initialTheme =
+      initialPreference === "system" ? systemTheme() : initialPreference
+    applyTheme(initialTheme)
+    setPreference(initialPreference)
+    setTheme(initialTheme)
     setMounted(true)
 
     if (stored === "light" || stored === "dark") return
@@ -37,27 +45,43 @@ export function ThemeToggle() {
     return () => preference.removeEventListener("change", updateFromSystem)
   }, [])
 
-  const nextTheme: Theme = theme === "dark" ? "light" : "dark"
-  const label = mounted ? `Switch to ${nextTheme} mode` : "Toggle color mode"
+  const nextPreference: ThemePreference =
+    preference === "system"
+      ? "light"
+      : preference === "light"
+        ? "dark"
+        : "system"
+  const label = mounted
+    ? nextPreference === "system"
+      ? "Follow system color mode"
+      : `Use ${nextPreference} mode`
+    : "Change color mode"
 
   function toggleTheme() {
-    const next: Theme = theme === "dark" ? "light" : "dark"
-    window.localStorage.setItem(storageKey, next)
-    applyTheme(next)
-    setTheme(next)
+    const nextTheme =
+      nextPreference === "system" ? systemTheme() : nextPreference
+    window.localStorage.setItem(storageKey, nextPreference)
+    applyTheme(nextTheme)
+    setPreference(nextPreference)
+    setTheme(nextTheme)
   }
 
   return (
     <Button
       aria-label={label}
-      aria-pressed={mounted && theme === "dark"}
       onClick={toggleTheme}
       size="icon"
       title={label}
       type="button"
       variant="ghost"
     >
-      {!mounted ? <SunMoon aria-hidden="true" /> : theme === "dark" ? <Sun aria-hidden="true" /> : <Moon aria-hidden="true" />}
+      {!mounted || preference === "system" ? (
+        <SunMoon aria-hidden="true" />
+      ) : theme === "dark" ? (
+        <Sun aria-hidden="true" />
+      ) : (
+        <Moon aria-hidden="true" />
+      )}
     </Button>
   )
 }

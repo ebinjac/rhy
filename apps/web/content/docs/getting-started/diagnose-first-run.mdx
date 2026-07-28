@@ -1,0 +1,20 @@
+---
+title: Diagnose the first run
+description: Read outcome, API timing, full execution time, checks, retries, and safe evidence from a monitor run.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [diagnostics, timing, failure]
+---
+
+Open **Runs**, select the latest execution, and begin with the operational summary.
+
+- **API response time** measures DNS, proxy connection, TCP, TLS, request write, server wait, and download.
+- **Execution time** additionally includes preparation, scripts, extraction, assertions, retries, and post-processing.
+- **Queue delay** is shown separately.
+
+Select the waterfall's slowest or failed step, then use Request, Response, Checks, Attempts, Network, and Events to narrow the cause.
+
+<ExpectedResult>You can state what failed, where it failed, why it failed, and what to check next without reading raw service logs.</ExpectedResult>

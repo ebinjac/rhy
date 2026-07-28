@@ -1,0 +1,45 @@
+---
+title: Getting started
+description: Follow the shortest path from a new Rhythm installation to a scheduled, diagnosable API monitor.
+audience:
+  - application-engineer
+  - sre-operator
+  - platform-administrator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm Product
+keywords:
+  - onboarding
+  - first monitor
+---
+
+Rhythm validates complete business API journeys: authentication, request construction, extraction, assertions, retries, network policy, and evidence.
+
+## Before you begin
+
+You need Docker Desktop for the local installation and permission to create an application, environment, and monitor.
+
+<Procedure>
+1. [Install Rhythm with Docker](/docs/getting-started/docker-installation).
+2. [Register an application and service](/docs/getting-started/first-application).
+3. [Create and test a monitor](/docs/getting-started/first-monitor).
+4. [Set a schedule and enable it](/docs/getting-started/schedule-and-enable).
+5. [Inspect the first run](/docs/getting-started/diagnose-first-run).
+</Procedure>
+
+<ExpectedResult>
+The monitor overview shows an enabled schedule, a next-run time, and a latest execution whose request and checks can be inspected without exposing secrets.
+</ExpectedResult>
+
+## Core mental model
+
+- A **draft** is editable but never scheduled.
+- A **published revision** is immutable execution input.
+- An **enabled monitor** schedules its published revision.
+- A **run** records execution context and safe diagnostics.
+
+<FailureExample>
+If a monitor cannot be enabled, check that it has a published revision, a valid schedule, and all referenced configuration profiles.
+</FailureExample>

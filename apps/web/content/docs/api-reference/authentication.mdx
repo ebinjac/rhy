@@ -1,0 +1,33 @@
+---
+title: API authentication
+description: Authenticate safely to Rhythm's public API and understand role enforcement.
+audience:
+  - application-engineer
+  - platform-administrator
+  - security-administrator
+status: preview
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm API
+keywords:
+  - API
+  - bearer token
+  - authentication
+---
+
+Rhythm API clients authenticate with an installation-issued bearer token and receive only the actions allowed by their role.
+
+```bash
+curl --request GET \
+  --url 'http://localhost:18080/api/v1/monitors' \
+  --header 'Authorization: Bearer <runtime-token>'
+```
+
+<SecurityNote>
+Keep bearer tokens in runtime memory or your CI secret store. Never place them in URLs, source control, examples, browser storage, or diagnostic attachments.
+</SecurityNote>
+
+## Playground behavior
+
+The documentation playground accepts only allowlisted origins, holds its token in memory, blocks webhook receivers and destructive actions, and clears state when the page closes.

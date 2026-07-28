@@ -1,0 +1,16 @@
+---
+title: Baseline selection
+description: Choose a pre-deployment window and understand revision compatibility and minimum sample requirements.
+audience: [release-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Release Validation]
+keywords: [baseline, samples, revision]
+---
+
+The baseline window ends exactly at deployment start. Supported windows are 24 hours, 7 days, and 30 days.
+
+Only successful, measured runs from the same published revision enter latency distributions. At least five samples are required. Insufficient history warns but does not block.
+
+The baseline preview lists eligible samples per monitor, revision compatibility, exclusions, and estimated post-deployment load before execution starts.

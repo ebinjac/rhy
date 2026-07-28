@@ -1,0 +1,35 @@
+---
+title: Before and after deployment workflow
+description: Capture a historical baseline, sample monitors after deployment, run ELF checks, and produce a release decision.
+audience:
+  - release-engineer
+  - sre-operator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Release Validation
+keywords:
+  - deployment validation
+  - baseline
+  - performance regression
+---
+
+Deployment validation compares immutable pre-deployment history with active post-deployment samples, then runs ELF log checks across the deployment window.
+
+## Default workflow
+
+<Procedure>
+1. Select a suite, application, environment, and deployment time.
+2. Preview the previous 24 hours of same-revision baseline samples.
+3. Review the default 10 executions per monitor with a five-second interval.
+4. Start the asynchronous validation.
+5. Follow live progress through monitor sampling, ELF checks, and analysis.
+6. Review the final `ALLOW`, `ALLOW_WITH_WARNINGS`, or `BLOCK` report.
+</Procedure>
+
+Performance gates use API-only timing. Preparation, scripts, extraction, assertions, queue delay, post-processing, and retry backoff remain visible but do not affect the latency comparison.
+
+<ExpectedResult>
+The report explains every contributing decision and links to exact monitor runs and ELF evidence.
+</ExpectedResult>

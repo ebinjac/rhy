@@ -1,0 +1,39 @@
+---
+title: Configure OpenSearch for ELF
+description: Connect Rhythm to an allowed OpenSearch or ELF proxy endpoint and verify the connection safely.
+audience:
+  - platform-administrator
+  - security-administrator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - ELF Platform
+keywords:
+  - OpenSearch
+  - ELF
+  - connection
+---
+
+Production ELF traffic should use your corporate ELF proxy. Direct OpenSearch access is intended only for the pinned local Docker environment.
+
+## Configure the connection
+
+<Procedure>
+1. Open **Configuration → ELF settings**.
+2. Enter the base URL and optional OpenSearch Dashboards URL.
+3. Set the default index pattern and allowed index patterns.
+4. Select authentication, TLS/CA, and outbound proxy profiles.
+5. Set a timeout no greater than 30 seconds.
+6. Save, then choose **Test connection**.
+</Procedure>
+
+The test performs a bounded `size: 0` search and returns masked connection diagnostics.
+
+<ExpectedResult>
+Connection health shows the cluster identity, the last successful test time, and the verified endpoint.
+</ExpectedResult>
+
+<FailureExample>
+An authentication error indicates that the selected secret reference is invalid or lacks search permission. A policy error means the host or index falls outside an allowlist.
+</FailureExample>

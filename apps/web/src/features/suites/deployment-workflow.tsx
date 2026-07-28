@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Link, useNavigate } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -24,10 +24,14 @@ import {
 
 import type {
   DeploymentValidationRunContract,
+  DeploymentBaselinePreviewContract,
   ELFApplicationContract,
   ValidationSuiteContract,
 } from "@/lib/api-client/contracts"
-import { startDeploymentValidation } from "@/lib/api-client/suites"
+import {
+  previewDeploymentBaseline,
+  startDeploymentValidation,
+} from "@/lib/api-client/suites"
 
 export function DeploymentWorkflow({
   suites,
@@ -63,6 +67,10 @@ export function DeploymentWorkflow({
   const [sampleIntervalSeconds, setSampleIntervalSeconds] = useState(5)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [baselinePreview, setBaselinePreview] =
+    useState<DeploymentBaselinePreviewContract | null>(null)
+  const [baselineLoading, setBaselineLoading] = useState(false)
+  const [baselineError, setBaselineError] = useState("")
   const suite = suites.find((candidate) => candidate.id === suiteId)
   const monitorCount = useMemo(
     () =>
@@ -98,6 +106,54 @@ export function DeploymentWorkflow({
     [suite]
   )
   const estimatedSeconds = Math.max(0, sampleCount - 1) * sampleIntervalSeconds
+
+  useEffect(() => {
+    if (step !== 2 || !suiteId || !deploymentStart) return
+    let cancelled = false
+    setBaselineLoading(true)
+    setBaselineError("")
+    const start = new Date(deploymentStart)
+    if (Number.isNaN(start.getTime())) {
+      setBaselineLoading(false)
+      setBaselineError("Enter a valid deployment start time.")
+      return
+    }
+    void previewDeploymentBaseline({
+      data: {
+        suiteId,
+        deploymentStart: start.toISOString(),
+        baselineWindow,
+        sampleCount,
+        sampleIntervalSeconds,
+      },
+    })
+      .then((result) => {
+        if (!cancelled) setBaselinePreview(result)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setBaselinePreview(null)
+          setBaselineError(
+            error instanceof Error
+              ? error.message
+              : "Unable to preview the baseline."
+          )
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setBaselineLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [
+    step,
+    suiteId,
+    deploymentStart,
+    baselineWindow,
+    sampleCount,
+    sampleIntervalSeconds,
+  ])
 
   async function start() {
     setPending(true)
@@ -275,14 +331,14 @@ export function DeploymentWorkflow({
               </div>
             ) : null}
             {step === 2 ? (
-              <div className="grid gap-5 lg:grid-cols-[1fr_1fr]">
+              <div className="grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
                 <div>
                   <Field label="Historical baseline window">
                     <Select
                       value={baselineWindow}
                       onValueChange={(value) => {
                         if (value == null) return
-                        setBaselineWindow(value as "24h" | "7d" | "30d")
+                        setBaselineWindow(value)
                       }}
                       items={[
                         { value: "24h", label: "Previous 24 hours" },
@@ -305,13 +361,72 @@ export function DeploymentWorkflow({
                     and stops the window exactly at deployment start.
                   </p>
                 </div>
-                <div className="rounded-lg bg-muted p-4 text-sm">
-                  <p className="font-medium">Performance guardrail</p>
-                  <p className="mt-1 text-muted-foreground">
-                    Block when post-deployment p95 is both 25% and 100 ms slower
-                    than baseline p95. Fewer than five baseline samples produces
-                    a warning.
-                  </p>
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">Baseline readiness</p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Successful API-timing samples from the current published
+                        revision only.
+                      </p>
+                    </div>
+                    {baselineLoading ? (
+                      <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
+                    ) : null}
+                  </div>
+                  {baselineError ? (
+                    <p className="mt-3 text-sm text-destructive" role="alert">
+                      {baselineError}
+                    </p>
+                  ) : baselinePreview ? (
+                    <div className="mt-3 divide-y border-y">
+                      {baselinePreview.monitors.map((monitor) => (
+                        <div
+                          className="flex items-start justify-between gap-4 py-3 text-sm"
+                          key={monitor.monitorId}
+                        >
+                          <div>
+                            <p className="font-medium">{monitor.monitorName}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {monitor.reason ||
+                                "Same-revision baseline is ready."}
+                            </p>
+                          </div>
+                          <Badge
+                            className={
+                              monitor.compatible
+                                ? "bg-success-soft text-success-foreground"
+                                : "bg-warning-soft text-warning-foreground"
+                            }
+                            variant="secondary"
+                          >
+                            {monitor.sampleCount} sample
+                            {monitor.sampleCount === 1 ? "" : "s"}
+                          </Badge>
+                        </div>
+                      ))}
+                      {!baselinePreview.monitors.length ? (
+                        <p className="py-8 text-center text-sm text-muted-foreground">
+                          This suite has no monitor checks.
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="mt-4 border-y py-3 text-sm">
+                    <p className="font-medium">Performance guardrail</p>
+                    <p className="mt-1 text-muted-foreground">
+                      Block when post-deployment p95 is both 25% and 100 ms
+                      slower than baseline p95. Fewer than five baseline samples
+                      produces a warning.
+                    </p>
+                    {baselinePreview?.blockingDependencies.length ? (
+                      <ul className="mt-3 list-disc space-y-1 pl-5 text-destructive">
+                        {baselinePreview.blockingDependencies.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
                 </div>
               </div>
             ) : null}
@@ -353,8 +468,18 @@ export function DeploymentWorkflow({
                     <strong>{alertCount}</strong> OpenSearch alerts
                   </span>
                   <span>
-                    <strong>~{Math.ceil(estimatedSeconds / 60)} min</strong>{" "}
-                    sampling interval per monitor
+                    <strong>
+                      up to{" "}
+                      {Math.max(
+                        1,
+                        Math.ceil(
+                          (baselinePreview?.estimatedMaximumSeconds ??
+                            estimatedSeconds) / 60
+                        )
+                      )}{" "}
+                      min
+                    </strong>{" "}
+                    from monitor timeouts, intervals, and suite parallelism
                   </span>
                 </div>
               </div>

@@ -266,7 +266,7 @@ function ELFWorkbench() {
       </header>
       <section className="border-b bg-muted/15 px-4 py-3 md:px-6">
         <div className="mx-auto flex max-w-[1480px] flex-wrap items-end gap-x-6 gap-y-3">
-          <label className="text-xs font-medium">
+          <div className="text-xs font-medium">
             Application
             <Select
               value={applicationId}
@@ -280,7 +280,7 @@ function ELFWorkbench() {
                 label: `${application.name}${application.carId ? ` · ${application.carId}` : ""}`,
               }))}
             >
-              <SelectTrigger className="mt-1 min-w-48">
+              <SelectTrigger aria-label="Application" className="mt-1 min-w-48">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -292,8 +292,8 @@ function ELFWorkbench() {
                 ))}
               </SelectContent>
             </Select>
-          </label>
-          <label className="text-xs font-medium">
+          </div>
+          <div className="text-xs font-medium">
             Service
             <Select
               value={serviceId || null}
@@ -306,7 +306,7 @@ function ELFWorkbench() {
                 })),
               ]}
             >
-              <SelectTrigger className="mt-1 min-w-44">
+              <SelectTrigger aria-label="Service" className="mt-1 min-w-44">
                 <SelectValue placeholder="All services" />
               </SelectTrigger>
               <SelectContent>
@@ -318,10 +318,10 @@ function ELFWorkbench() {
                 ))}
               </SelectContent>
             </Select>
-          </label>
+          </div>
           <Context label="Resolved index" value={resolvedIndex} mono />
           <Context label="Time field" value={resolvedTimeField} mono />
-          <label className="ml-auto text-xs font-medium">
+          <div className="ml-auto text-xs font-medium">
             Range
             <Select
               value={String(windowSeconds)}
@@ -336,7 +336,7 @@ function ELFWorkbench() {
                 "86400": "Last 24 hours",
               }}
             >
-              <SelectTrigger className="mt-1">
+              <SelectTrigger aria-label="Time range" className="mt-1">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -346,7 +346,7 @@ function ELFWorkbench() {
                 <SelectItem value="86400">Last 24 hours</SelectItem>
               </SelectContent>
             </Select>
-          </label>
+          </div>
         </div>
       </section>
       <WorkbenchModeNavigator mode={mode} setMode={setMode} />
@@ -781,13 +781,13 @@ function RuleBuilder({
         Compare the exact total returned by OpenSearch with a numeric threshold.
       </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(180px,1fr)_170px_120px]">
-        <label className="text-xs font-medium">
+        <div className="text-xs font-medium">
           OpenSearch measure
           <span className="mt-1 block h-9 rounded-md border bg-muted/40 px-3 py-2 font-mono text-sm">
             hits.total.value
           </span>
-        </label>
-        <label className="text-xs font-medium">
+        </div>
+        <div className="text-xs font-medium">
           Comparison
           <Select
             value={operator}
@@ -802,7 +802,10 @@ function RuleBuilder({
               ])
             )}
           >
-            <SelectTrigger className="mt-1 w-full">
+            <SelectTrigger
+              aria-label="Pass-condition comparison"
+              className="mt-1 w-full"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -813,10 +816,11 @@ function RuleBuilder({
               ))}
             </SelectContent>
           </Select>
-        </label>
-        <label className="text-xs font-medium">
+        </div>
+        <label className="text-xs font-medium" htmlFor="elf-hit-threshold">
           Threshold
           <Input
+            id="elf-hit-threshold"
             className="mt-1"
             type="number"
             min={0}

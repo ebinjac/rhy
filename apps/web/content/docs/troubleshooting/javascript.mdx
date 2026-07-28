@@ -1,0 +1,16 @@
+---
+title: Troubleshoot JavaScript
+description: Resolve syntax, runtime, timeout, policy, network, output-limit, and sandbox-loss failures.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Script Runtime]
+keywords: [JavaScript, sandbox, error]
+---
+
+Server validation reports exact line and column markers. Runtime diagnostics preserve a safe stack, masked logs, tests, request changes, variable changes, and auxiliary call summaries.
+
+Common categories include `SCRIPT_SYNTAX_ERROR`, `SCRIPT_RUNTIME_ERROR`, `SCRIPT_TIMEOUT`, `SCRIPT_POLICY_VIOLATION`, `SCRIPT_NETWORK_ERROR`, `SCRIPT_OUTPUT_LIMIT`, and `SCRIPT_RUNTIME_LOST`.
+
+<FailureExample>An undefined `fetch` or `require` is expected: unrestricted networking and package loading are not exposed. Use `pm.sendRequest` and the supported `pm` API.</FailureExample>

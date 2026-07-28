@@ -1,0 +1,25 @@
+---
+title: Run diagnostics
+description: Investigate execution timing, attempts, requests, responses, checks, network phases, scripts, and structured failures.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [run, diagnostics, waterfall]
+---
+
+The run detail is an incident-grade execution report. Its summary identifies the primary failure, slowest API phase, retries, warnings, agent, trigger, revision, and alert impact.
+
+## Investigation order
+
+1. Select the highlighted failed or slowest step in the waterfall.
+2. Use **Overview** for duration contribution and baseline.
+3. Use **Attempts** to separate retry evidence.
+4. Use **Network** for DNS, proxy, TCP, TLS, TTFB, and download.
+5. Use **Checks** for extractor and assertion expected/observed values.
+6. Use **Events** for the masked execution chronology.
+
+<DiagnosticPhase name="Preparation">Rhythm loads execution context, resolves governed configuration, prepares the cookie jar, and constructs the step. This is not target API latency.</DiagnosticPhase>
+
+Legacy evidence displays **Not recorded for this execution**, never a misleading zero.

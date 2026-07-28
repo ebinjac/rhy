@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import type { FormEvent } from "react"
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router"
 import {
@@ -8,11 +8,7 @@ import {
 } from "@workspace/ui/components/alert"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import {
-  Field,
-  FieldError,
-  FieldLabel,
-} from "@workspace/ui/components/field"
+import { Field, FieldError, FieldLabel } from "@workspace/ui/components/field"
 import { Input } from "@workspace/ui/components/input"
 import {
   Select,
@@ -30,6 +26,7 @@ import {
   CircleAlert,
   FileClock,
   LoaderCircle,
+  Play,
   Power,
   RefreshCw,
   Save,
@@ -43,8 +40,15 @@ import {
   RequestWorkbench,
 } from "@/features/monitors/request-workbench"
 import type { RequestDefinition } from "@/features/monitors/request-workbench"
-import { createMonitor } from "@/lib/api-client/monitors"
-import type { ScheduleContract } from "@/lib/api-client/contracts"
+import {
+  createMonitor,
+  listConfigurationProfiles,
+  previewMonitorDraft,
+} from "@/lib/api-client/monitors"
+import type {
+  DraftMonitorPreviewContract,
+  ScheduleContract,
+} from "@/lib/api-client/contracts"
 import {
   listELFApplications,
   setApplicationMonitorLink,
@@ -52,7 +56,10 @@ import {
 import { formatDateTime } from "@/lib/format-date"
 
 export const Route = createFileRoute("/monitors/new")({
-  loader: () => listELFApplications(),
+  loader: async () => ({
+    applications: await listELFApplications(),
+    secrets: await listConfigurationProfiles({ data: { kind: "secrets" } }),
+  }),
   component: NewMonitorPage,
 })
 
@@ -95,7 +102,7 @@ const frequencyOptions = [
 ] as const
 
 function NewMonitorPage() {
-  const applications = Route.useLoaderData()
+  const { applications, secrets } = Route.useLoaderData()
   const navigate = useNavigate()
   const [values, setValues] = useState(initialValues)
   const [definition, setDefinition] = useState<RequestDefinition>(
@@ -112,6 +119,23 @@ function NewMonitorPage() {
   const [submitting, setSubmitting] = useState(false)
   const [createdMonitorId, setCreatedMonitorId] = useState("")
   const [applicationId, setApplicationId] = useState("")
+  const [previewing, setPreviewing] = useState(false)
+  const [preview, setPreview] = useState<DraftMonitorPreviewContract | null>(
+    null
+  )
+  const [previewError, setPreviewError] = useState("")
+
+  const hasUnsavedInput =
+    Boolean(values.name.trim()) ||
+    definition.steps.some(
+      (step) => step.type === "HTTP_REQUEST" && step.request.url.trim()
+    )
+  useEffect(() => {
+    if (!hasUnsavedInput || submitting) return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [hasUnsavedInput, submitting])
 
   function updateValue(field: keyof FormValues, value: string) {
     setValues((current) => {
@@ -130,6 +154,23 @@ function NewMonitorPage() {
 
   function resolvedSlug(name: string, slug: string) {
     return slug.trim() || slugify(name)
+  }
+
+  async function tryRequest() {
+    setPreviewing(true)
+    setPreview(null)
+    setPreviewError("")
+    const result = await previewMonitorDraft({
+      data: {
+        definition: normalizeDefinitionScripts(definition),
+      },
+    })
+    setPreviewing(false)
+    if (!result.ok) {
+      setPreviewError(result.message)
+      return
+    }
+    setPreview(result.preview)
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -284,6 +325,15 @@ function NewMonitorPage() {
           >
             Cancel
           </Button>
+          <Button
+            disabled={previewing || submitting}
+            onClick={() => void tryRequest()}
+            type="button"
+            variant="outline"
+          >
+            {previewing ? <LoaderCircle className="animate-spin" /> : <Play />}
+            {previewing ? "Trying…" : "Try request"}
+          </Button>
           <Button type="submit" disabled={submitting}>
             {submitting ? (
               <LoaderCircle className="animate-spin" data-icon="inline-start" />
@@ -298,6 +348,38 @@ function NewMonitorPage() {
       </header>
 
       <main className="mx-auto max-w-[1600px] px-4 py-5 md:px-6 md:py-6">
+        {preview || previewError ? (
+          <Alert
+            className="mb-5"
+            variant={
+              previewError || preview?.status === "FAILED"
+                ? "destructive"
+                : "default"
+            }
+          >
+            {previewError || preview?.status === "FAILED" ? (
+              <CircleAlert />
+            ) : (
+              <ShieldCheck />
+            )}
+            <AlertTitle>
+              {previewError
+                ? "Draft preview failed"
+                : preview?.status === "SUCCESS"
+                  ? "Draft request succeeded"
+                  : `Draft preview ${preview?.status.toLowerCase().replaceAll("_", " ")}`}
+            </AlertTitle>
+            <AlertDescription>
+              {previewError ||
+                (preview
+                  ? `${preview.steps.length} step${preview.steps.length === 1 ? "" : "s"} executed in ${preview.durationMs.toLocaleString()} ms. ${
+                      preview.failureReason ||
+                      "This execution was not persisted and did not change the monitor."
+                    }`
+                  : "")}
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {formError ? (
           <Alert className="mb-5" variant="destructive">
             <CircleAlert />
@@ -360,7 +442,6 @@ function NewMonitorPage() {
                   <FieldLabel htmlFor="monitor-name">Name</FieldLabel>
                   <Input
                     id="monitor-name"
-                    autoFocus
                     value={values.name}
                     onChange={(event) =>
                       updateValue("name", event.target.value)
@@ -418,14 +499,9 @@ function NewMonitorPage() {
                     <SelectContent>
                       <SelectItem value={null}>Not assigned</SelectItem>
                       {applications.map((application) => (
-                        <SelectItem
-                          key={application.id}
-                          value={application.id}
-                        >
+                        <SelectItem key={application.id} value={application.id}>
                           {application.name}
-                          {application.carId
-                            ? ` · ${application.carId}`
-                            : ""}
+                          {application.carId ? ` · ${application.carId}` : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -611,7 +687,7 @@ function NewMonitorPage() {
                   if (value == null) return
                   setSchedule((current) => ({
                     ...current,
-                    type: value as ScheduleContract["type"],
+                    type: value,
                   }))
                 }}
                 items={{
@@ -713,7 +789,11 @@ function NewMonitorPage() {
           </div>
         </div>
 
-        <RequestWorkbench value={definition} onChange={setDefinition} />
+        <RequestWorkbench
+          value={definition}
+          onChange={setDefinition}
+          secrets={secrets}
+        />
 
         <div className="mt-5 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
@@ -750,7 +830,9 @@ function NewMonitorPage() {
 }
 
 function countConfigured(definition: RequestDefinition) {
-  const monitorScriptConfigured = Boolean(definition.scripts.preRequest.code.trim())
+  const monitorScriptConfigured = Boolean(
+    definition.scripts.preRequest.code.trim()
+  )
   return definition.steps.reduce((total, step) => {
     if (step.type === "ACTION")
       return total + step.actions.filter((item) => item.enabled).length

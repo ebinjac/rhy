@@ -34,6 +34,28 @@ func (s *server) createDeploymentRun(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusAccepted, successResponse{Data: run, Meta: s.meta(r)})
 }
 
+func (s *server) previewDeploymentBaseline(w http.ResponseWriter, r *http.Request) {
+	if s.suites == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "SUITES_UNAVAILABLE", "Deployment validation is unavailable.", nil)
+		return
+	}
+	var input suites.BaselinePreviewInput
+	if err := decodeStrictJSON(w, r, &input); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.", nil)
+		return
+	}
+	preview, err := s.suites.PreviewDeploymentBaseline(r.Context(), r.PathValue("suiteId"), input)
+	if errors.Is(err, suites.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "SUITE_NOT_FOUND", "Validation suite was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "BASELINE_PREVIEW_INVALID", err.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: preview, Meta: s.meta(r)})
+}
+
 func (s *server) listDeploymentRuns(w http.ResponseWriter, r *http.Request) {
 	if s.suites == nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "SUITES_UNAVAILABLE", "Deployment validation is unavailable.", nil)
@@ -45,7 +67,12 @@ func (s *server) listDeploymentRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list deployment validations.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: runs, Meta: s.meta(r)})
+	pageItems, page, pageErr := paginate(r, runs, 50, 200)
+	if pageErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 func (s *server) getDeploymentRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.suites.GetDeploymentRun(r.Context(), r.PathValue("deploymentRunId"))

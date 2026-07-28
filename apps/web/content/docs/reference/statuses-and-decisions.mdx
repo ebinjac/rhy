@@ -1,0 +1,39 @@
+---
+title: Statuses and decisions
+description: Interpret operational statuses, execution states, gate decisions, and neutral evidence states consistently.
+audience:
+  - application-engineer
+  - sre-operator
+  - release-engineer
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm Product
+keywords:
+  - status
+  - decision
+  - lifecycle
+---
+
+Statuses describe lifecycle or health. Decisions describe whether validation permits a release.
+
+## Monitor status
+
+| Status | Meaning |
+| --- | --- |
+| `HEALTHY` | Recent signal is successful and no active failure alert contradicts it. |
+| `DEGRADED` | The monitor has warnings or a meaningful performance regression. |
+| `FAILING` | A recent required execution or active alert indicates failure. |
+| `PAUSED` | Scheduling is disabled. |
+| `NO_SIGNAL` | There is not enough recent evidence to determine health. |
+
+## Deployment decisions
+
+| Decision | Meaning |
+| --- | --- |
+| `ALLOW` | All blocking checks passed. |
+| `ALLOW_WITH_WARNINGS` | Blocking checks passed, but optional or advisory evidence needs attention. |
+| `BLOCK` | At least one required monitor or blocking ELF check failed. |
+
+`PENDING`, `INSUFFICIENT_HISTORY`, `SKIPPED`, and missing evidence are neutral or warning states. They are not failures and must not be shown as successful zero values.

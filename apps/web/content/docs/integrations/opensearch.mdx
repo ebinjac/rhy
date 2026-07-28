@@ -1,0 +1,27 @@
+---
+title: OpenSearch integration
+description: Use OpenSearch as Rhythm's ELF log search and deployment-check evidence source.
+audience:
+  - platform-administrator
+  - sre-operator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - ELF Platform
+keywords:
+  - OpenSearch
+  - logs
+---
+
+Rhythm queries OpenSearch for investigation and governed validation. It does not ingest logs, manage indices, replace OpenSearch Dashboards, or provide continuous log alerting.
+
+## Supported uses
+
+- Discover application log fields and semantic roles.
+- Probe bounded, time-filtered Query DSL.
+- Evaluate `hits.total.value` conditions.
+- Persist masked evidence and the sanitized upstream response.
+- Include blocking or advisory ELF checks in deployment validation.
+
+For connection setup, see [Configure OpenSearch for ELF](/docs/elf/configure-opensearch).

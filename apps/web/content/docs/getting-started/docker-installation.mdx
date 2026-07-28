@@ -1,0 +1,31 @@
+---
+title: Docker installation
+description: Start a local Rhythm environment with its API, web app, workers, data stores, script runner, and OpenSearch services.
+audience: [platform-administrator, application-engineer]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm Platform]
+keywords: [Docker, installation, local]
+---
+
+## Prerequisites
+
+Install Docker Desktop with enough memory for PostgreSQL, Redis, and the pinned local OpenSearch cluster.
+
+<Procedure>
+1. Clone the Rhythm repository.
+2. From the repository root, run `docker compose up --build`.
+3. Wait for the health checks to become healthy.
+4. Open Rhythm at `http://localhost:3100`.
+5. Open OpenSearch Dashboards at `http://localhost:15601`.
+</Procedure>
+
+```bash
+docker compose ps
+curl --fail http://localhost:18080/healthz
+```
+
+<ExpectedResult>The API reports `ok`, the web interface loads, and OpenSearch Dashboards can inspect the seeded local logs.</ExpectedResult>
+
+<FailureExample>On macOS, an OpenSearch startup failure commonly means Docker Desktop needs more memory or the persistent volume contains data from an incompatible version.</FailureExample>

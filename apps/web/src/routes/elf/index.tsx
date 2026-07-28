@@ -26,8 +26,6 @@ import {
 import {
   ArrowRight,
   Braces,
-  CheckCircle2,
-  CircleAlert,
   Clock3,
   LoaderCircle,
   Plus,
@@ -38,30 +36,43 @@ import {
 } from "lucide-react"
 
 import {
+  deriveELFOperationalStatus,
+  OperationalStatusBadge,
+} from "@/components/operational-status"
+import {
   listELFApplications,
+  getELFSettings,
   listELFQueries,
   permanentlyDeleteELFQueries,
   saveELFQuery,
 } from "@/lib/api-client/elf"
 
 export const Route = createFileRoute("/elf/")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    ...(typeof search.q === "string" && search.q ? { q: search.q } : {}),
+    ...(positivePage(search.page) > 1
+      ? { page: positivePage(search.page) }
+      : {}),
+  }),
   loader: async () => {
-    const [queries, applications] = await Promise.all([
+    const [queries, applications, settings] = await Promise.all([
       listELFQueries(),
       listELFApplications(),
+      getELFSettings(),
     ])
-    return { queries, applications }
+    return { queries, applications, settings }
   },
   component: ELFQueriesPage,
 })
 
 function ELFQueriesPage() {
-  const { queries, applications } = Route.useLoaderData()
+  const { queries, applications, settings } = Route.useLoaderData()
+  const routeSearch = Route.useSearch()
+  const navigate = Route.useNavigate()
   const router = useRouter()
   const [creating, setCreating] = useState(false)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
-  const [search, setSearch] = useState("")
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [selectedQueries, setSelectedQueries] = useState<Set<string>>(new Set())
@@ -77,9 +88,13 @@ function ELFQueriesPage() {
   const filtered = queries.filter((item) =>
     `${item.name} ${item.applicationName} ${item.serviceName}`
       .toLowerCase()
-      .includes(search.toLowerCase())
+      .includes((routeSearch.q ?? "").toLowerCase())
   )
-  const visibleIds = filtered.map((query) => query.id)
+  const pageSize = 25
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const page = Math.min(routeSearch.page ?? 1, pageCount)
+  const visible = filtered.slice((page - 1) * pageSize, page * pageSize)
+  const visibleIds = visible.map((query) => query.id)
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selectedQueries.has(id))
   const someVisibleSelected = visibleIds.some((id) => selectedQueries.has(id))
@@ -166,9 +181,14 @@ function ELFQueriesPage() {
     <main className="mx-auto max-w-[1380px] px-4 py-6 md:px-6 md:py-8">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-primary">
-            <span className="size-2 rounded-full bg-primary" />
-            ELF connected
+          <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+            <span
+              className={`size-2 rounded-full ${settings ? "bg-success" : "bg-warning"}`}
+            />
+            {settings ? "ELF configured" : "ELF setup required"}
+            <Link className="text-primary hover:underline" to="/elf/settings">
+              {settings ? "Verify connection" : "Configure"}
+            </Link>
           </div>
           <h1 className="mt-2 font-heading text-2xl font-semibold">
             Log queries
@@ -200,8 +220,8 @@ function ELFQueriesPage() {
                   if (value == null) return
                   setApplicationId(value)
                   setServiceId(
-                    applications.find((item) => item.id === value)
-                      ?.services[0]?.id ?? ""
+                    applications.find((item) => item.id === value)?.services[0]
+                      ?.id ?? ""
                   )
                 }}
                 items={applications.map((app) => ({
@@ -279,9 +299,15 @@ function ELFQueriesPage() {
         <div className="relative max-w-md flex-1">
           <Search className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
+            aria-label="Search ELF queries"
             className="pl-9"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={routeSearch.q ?? ""}
+            onChange={(event) =>
+              void navigate({
+                search: { q: event.target.value, page: 1 },
+                replace: true,
+              })
+            }
             placeholder="Search queries, applications, or services"
           />
         </div>
@@ -338,7 +364,7 @@ function ELFQueriesPage() {
             <span>Latest result</span>
             <span className="text-right">Actions</span>
           </div>
-          {filtered.map((query) => (
+          {visible.map((query) => (
             <article
               key={query.id}
               className={`group grid grid-cols-[24px_minmax(0,1fr)] gap-3 border-b px-4 py-4 last:border-b-0 hover:bg-muted/25 md:grid-cols-[24px_minmax(0,1.5fr)_minmax(180px,.7fr)_minmax(210px,.8fr)_120px] md:items-center md:gap-4 ${selectedQueries.has(query.id) ? "bg-primary/5" : ""}`}
@@ -372,16 +398,15 @@ function ELFQueriesPage() {
               <div className="col-start-2 md:col-auto">
                 {query.lastRun ? (
                   <div className="flex items-center gap-2">
-                    {query.lastRun.decision === "PASS" ? (
-                      <CheckCircle2 className="size-4 text-success" />
-                    ) : (
-                      <CircleAlert className="size-4 text-destructive" />
-                    )}
                     <div>
-                      <p className="text-sm font-medium">
-                        {query.lastRun.decision} ·{" "}
-                        {query.lastRun.hitCount.toLocaleString()} hits
-                      </p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <OperationalStatusBadge
+                          status={deriveELFOperationalStatus(query.lastRun)}
+                        />
+                        <span className="text-sm font-medium">
+                          {query.lastRun.hitCount.toLocaleString()} hits
+                        </span>
+                      </div>
                       <p className="text-xs text-muted-foreground">
                         {query.lastRun.roundTripMs} ms round trip
                       </p>
@@ -445,6 +470,47 @@ function ELFQueriesPage() {
           </Button>
         </div>
       )}
+      {filtered.length > pageSize ? (
+        <div className="mt-4 flex items-center justify-between gap-3 text-sm">
+          <Button
+            aria-label="Previous ELF query page"
+            disabled={page === 1}
+            onClick={() =>
+              void navigate({
+                search: {
+                  q: routeSearch.q ?? "",
+                  page: Math.max(1, page - 1),
+                },
+                replace: true,
+              })
+            }
+            size="sm"
+            variant="outline"
+          >
+            Previous
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Page {page} of {pageCount} · {filtered.length} queries
+          </span>
+          <Button
+            aria-label="Next ELF query page"
+            disabled={page === pageCount}
+            onClick={() =>
+              void navigate({
+                search: {
+                  q: routeSearch.q ?? "",
+                  page: Math.min(pageCount, page + 1),
+                },
+                replace: true,
+              })
+            }
+            size="sm"
+            variant="outline"
+          >
+            Next
+          </Button>
+        </div>
+      ) : null}
       <AlertDialog
         open={deleteOpen}
         onOpenChange={(open) => {
@@ -507,6 +573,11 @@ function ELFQueriesPage() {
       </AlertDialog>
     </main>
   )
+}
+
+function positivePage(value: unknown) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
 }
 function Field({
   label,

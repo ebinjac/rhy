@@ -1,0 +1,22 @@
+---
+title: Probe logs
+description: Execute a bounded OpenSearch query, inspect exact hits and sanitized evidence, and discover fields safely.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [ELF Platform]
+keywords: [probe, OpenSearch, logs]
+---
+
+A **Probe** explores logs. It does not produce a pass/fail deployment decision until a check condition is configured.
+
+<Procedure>
+1. Select an application, service, index, and time window.
+2. Author an allowed Query DSL body.
+3. Choose **Run probe**.
+4. Review `hits.total.value`, duration, shard state, samples, fields, aggregations, Raw, and Debug.
+5. Create a deployment condition from the exact hit count.
+</Procedure>
+
+Raw shows the actual upstream OpenSearch response after mandatory masking and response-size limits. Debug shows the compiled time filter and a redacted reproducible request.

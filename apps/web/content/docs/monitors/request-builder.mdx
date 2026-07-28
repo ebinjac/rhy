@@ -1,0 +1,39 @@
+---
+title: Request builder
+description: Build an HTTP step with Postman-style parameters, headers, authentication, cookies, scripts, checks, TLS, and proxy policy.
+audience:
+  - application-engineer
+  - sre-operator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Monitor Runtime
+keywords:
+  - HTTP request
+  - monitor builder
+---
+
+Each HTTP step contains a request plus its automation, checks, and network policy. Rhythm renders the final request only after controlled pre-request actions and JavaScript complete.
+
+## Execution order
+
+<Procedure>
+1. Load run-local variables and the cookie jar.
+2. Apply controlled pre-request actions.
+3. Run the request-level JavaScript.
+4. Render templates and apply request mutations.
+5. Apply authentication, proxy, and TLS policy.
+6. Send the request.
+7. Run extractors and assertions.
+</Procedure>
+
+Retries reuse the rendered request produced by the step's script. Scripts do not run again for each retry.
+
+<SecurityNote>
+Secret values may influence requests but are never returned as raw diagnostics. A masked value is not available through copy actions, DOM metadata, or accessible labels.
+</SecurityNote>
+
+## Verify before publishing
+
+Use **Try request** for a safe unsaved preview. Confirm the resolved host, auth mode, content type, expected status, and configuration readiness before publishing.

@@ -77,7 +77,12 @@ func main() {
 	monitorService := monitors.NewService(repository)
 	var libraryService *library.Service
 	if postgresPool != nil {
-		libraryService = library.New(postgresPool)
+		openedLibrary, libraryErr := library.New(postgresPool, cfg.SecretsEncryptionKey)
+		if libraryErr != nil {
+			logger.Error("configure configuration library", "error", libraryErr)
+			os.Exit(1)
+		}
+		libraryService = openedLibrary
 	}
 	executor := runs.NewHTTPExecutor(cfg.AllowPrivateTargets)
 	if libraryService != nil {
@@ -106,6 +111,20 @@ func main() {
 		if cfg.ELFBootstrapURL != "" {
 			if err := elfService.EnsureDevelopmentSeed(context.Background(), cfg.ELFBootstrapURL, cfg.DevelopmentActorID); err != nil {
 				logger.Warn("bootstrap local ELF resources", "error", err)
+			}
+		}
+		if libraryService != nil && cfg.SMTPHost != "" {
+			if _, created, err := libraryService.EnsureDefaultEmailChannel(context.Background(), library.SMTPDefaults{
+				Host:     cfg.SMTPHost,
+				Port:     cfg.SMTPPort,
+				From:     cfg.SMTPFrom,
+				Username: cfg.SMTPUsername,
+				Password: cfg.SMTPPassword,
+				To:       cfg.SMTPTo,
+			}, cfg.DevelopmentActorID); err != nil {
+				logger.Warn("bootstrap SMTP notification channel", "error", err)
+			} else if created {
+				logger.Info("seeded local SMTP notification channel", "host", cfg.SMTPHost, "port", cfg.SMTPPort, "from", cfg.SMTPFrom)
 			}
 		}
 	}

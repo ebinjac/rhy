@@ -164,10 +164,18 @@ func (s *Service) EnsureDevelopmentSeed(ctx context.Context, baseURL, actor stri
 }
 
 func (s *Service) GetSettings(ctx context.Context) (Settings, error) {
+	item, err := s.loadSettings(ctx)
+	if err != nil {
+		return Settings{}, err
+	}
+	return redactSettings(item), nil
+}
+
+func (s *Service) loadSettings(ctx context.Context) (Settings, error) {
 	var item Settings
 	var allowed []byte
 	var tlsID, proxyID *string
-	err := s.pool.QueryRow(ctx, `SELECT base_url,dashboard_url,default_index_pattern,timeout_seconds,allowed_index_patterns,tls_profile_id::text,proxy_profile_id::text,auth_mode,username,credential_secret_ref,updated_by,updated_at FROM elf_settings WHERE singleton=TRUE`).Scan(&item.BaseURL, &item.DashboardURL, &item.DefaultIndexPattern, &item.TimeoutSeconds, &allowed, &tlsID, &proxyID, &item.AuthMode, &item.Username, &item.CredentialSecretRef, &item.UpdatedBy, &item.UpdatedAt)
+	err := s.pool.QueryRow(ctx, `SELECT base_url,dashboard_url,default_index_pattern,timeout_seconds,allowed_index_patterns,tls_profile_id::text,proxy_profile_id::text,auth_mode,username,credential_secret_ref,COALESCE(encrypted_credential,''),updated_by,updated_at FROM elf_settings WHERE singleton=TRUE`).Scan(&item.BaseURL, &item.DashboardURL, &item.DefaultIndexPattern, &item.TimeoutSeconds, &allowed, &tlsID, &proxyID, &item.AuthMode, &item.Username, &item.CredentialSecretRef, &item.EncryptedCredential, &item.UpdatedBy, &item.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Settings{}, ErrNotConfigured
 	}
@@ -181,7 +189,17 @@ func (s *Service) GetSettings(ctx context.Context) (Settings, error) {
 	if proxyID != nil {
 		item.ProxyProfileID = *proxyID
 	}
+	item.HasCredential = strings.TrimSpace(item.EncryptedCredential) != "" || strings.HasPrefix(strings.TrimSpace(item.CredentialSecretRef), "secret://")
 	return item, nil
+}
+
+func redactSettings(item Settings) Settings {
+	item.Credential = ""
+	item.EncryptedCredential = ""
+	if item.HasCredential || strings.HasPrefix(strings.TrimSpace(item.CredentialSecretRef), "secret://") {
+		item.HasCredential = true
+	}
+	return item
 }
 
 func (s *Service) SaveSettings(ctx context.Context, input Settings, actor string) (Settings, error) {
@@ -189,6 +207,9 @@ func (s *Service) SaveSettings(ctx context.Context, input Settings, actor string
 	input.DashboardURL = strings.TrimRight(strings.TrimSpace(input.DashboardURL), "/")
 	input.DefaultIndexPattern = strings.TrimSpace(input.DefaultIndexPattern)
 	input.AuthMode = strings.ToUpper(strings.TrimSpace(input.AuthMode))
+	input.Username = strings.TrimSpace(input.Username)
+	input.Credential = strings.TrimSpace(input.Credential)
+	input.CredentialSecretRef = strings.TrimSpace(input.CredentialSecretRef)
 	if input.AuthMode == "" {
 		input.AuthMode = "NONE"
 	}
@@ -217,11 +238,50 @@ func (s *Service) SaveSettings(ctx context.Context, input Settings, actor string
 	if input.AuthMode != "NONE" && input.AuthMode != "BASIC" && input.AuthMode != "BEARER" {
 		return Settings{}, errors.New("authMode must be NONE, BASIC, or BEARER")
 	}
-	if input.AuthMode != "NONE" && !strings.HasPrefix(input.CredentialSecretRef, "secret://") {
-		return Settings{}, errors.New("authenticated ELF settings require a credentialSecretRef")
+
+	existing, existingErr := s.loadSettings(ctx)
+	if existingErr != nil && !errors.Is(existingErr, ErrNotConfigured) {
+		return Settings{}, existingErr
 	}
+
+	secretRef := ""
+	encrypted := ""
+	if input.AuthMode == "NONE" {
+		input.Username = ""
+	} else {
+		if input.Credential != "" && input.CredentialSecretRef != "" {
+			return Settings{}, errors.New("provide either credential or credentialSecretRef, not both")
+		}
+		switch {
+		case input.Credential != "":
+			crypto, ok := s.secrets.(CredentialCrypto)
+			if !ok || crypto == nil {
+				return Settings{}, errors.New("inline ELF credentials require secrets encryption support")
+			}
+			ciphertext, encryptErr := crypto.EncryptStored(input.Credential)
+			if encryptErr != nil {
+				return Settings{}, encryptErr
+			}
+			encrypted = ciphertext
+		case input.CredentialSecretRef != "":
+			secretRef = input.CredentialSecretRef
+			if !strings.HasPrefix(secretRef, "secret://") {
+				secretRef = "secret://" + secretRef
+			}
+		case existingErr == nil:
+			encrypted = existing.EncryptedCredential
+			secretRef = existing.CredentialSecretRef
+		}
+		if encrypted == "" && !strings.HasPrefix(secretRef, "secret://") {
+			return Settings{}, errors.New("authenticated ELF settings require a credential or secret alias")
+		}
+		if input.AuthMode == "BASIC" && input.Username == "" {
+			return Settings{}, errors.New("BASIC authentication requires a username")
+		}
+	}
+
 	allowed, _ := json.Marshal(input.AllowedIndexPatterns)
-	_, err = s.pool.Exec(ctx, `INSERT INTO elf_settings(singleton,base_url,dashboard_url,default_index_pattern,timeout_seconds,allowed_index_patterns,tls_profile_id,proxy_profile_id,auth_mode,username,credential_secret_ref,updated_by,updated_at) VALUES(TRUE,$1,$2,$3,$4,$5,NULLIF($6,'')::uuid,NULLIF($7,'')::uuid,$8,$9,$10,$11,NOW()) ON CONFLICT(singleton) DO UPDATE SET base_url=EXCLUDED.base_url,dashboard_url=EXCLUDED.dashboard_url,default_index_pattern=EXCLUDED.default_index_pattern,timeout_seconds=EXCLUDED.timeout_seconds,allowed_index_patterns=EXCLUDED.allowed_index_patterns,tls_profile_id=EXCLUDED.tls_profile_id,proxy_profile_id=EXCLUDED.proxy_profile_id,auth_mode=EXCLUDED.auth_mode,username=EXCLUDED.username,credential_secret_ref=EXCLUDED.credential_secret_ref,updated_by=EXCLUDED.updated_by,updated_at=NOW()`, input.BaseURL, input.DashboardURL, input.DefaultIndexPattern, input.TimeoutSeconds, allowed, input.TLSProfileID, input.ProxyProfileID, input.AuthMode, strings.TrimSpace(input.Username), input.CredentialSecretRef, actor)
+	_, err = s.pool.Exec(ctx, `INSERT INTO elf_settings(singleton,base_url,dashboard_url,default_index_pattern,timeout_seconds,allowed_index_patterns,tls_profile_id,proxy_profile_id,auth_mode,username,credential_secret_ref,encrypted_credential,updated_by,updated_at) VALUES(TRUE,$1,$2,$3,$4,$5,NULLIF($6,'')::uuid,NULLIF($7,'')::uuid,$8,$9,$10,$11,$12,NOW()) ON CONFLICT(singleton) DO UPDATE SET base_url=EXCLUDED.base_url,dashboard_url=EXCLUDED.dashboard_url,default_index_pattern=EXCLUDED.default_index_pattern,timeout_seconds=EXCLUDED.timeout_seconds,allowed_index_patterns=EXCLUDED.allowed_index_patterns,tls_profile_id=EXCLUDED.tls_profile_id,proxy_profile_id=EXCLUDED.proxy_profile_id,auth_mode=EXCLUDED.auth_mode,username=EXCLUDED.username,credential_secret_ref=EXCLUDED.credential_secret_ref,encrypted_credential=EXCLUDED.encrypted_credential,updated_by=EXCLUDED.updated_by,updated_at=NOW()`, input.BaseURL, input.DashboardURL, input.DefaultIndexPattern, input.TimeoutSeconds, allowed, input.TLSProfileID, input.ProxyProfileID, input.AuthMode, input.Username, secretRef, encrypted, actor)
 	if err != nil {
 		return Settings{}, err
 	}
@@ -233,8 +293,29 @@ func (s *Service) TestSettings(ctx context.Context, input *Settings) (map[string
 	var err error
 	if input != nil {
 		settings = *input
+		settings.BaseURL = strings.TrimRight(strings.TrimSpace(settings.BaseURL), "/")
+		settings.DefaultIndexPattern = strings.TrimSpace(settings.DefaultIndexPattern)
+		settings.AuthMode = strings.ToUpper(strings.TrimSpace(settings.AuthMode))
+		settings.Username = strings.TrimSpace(settings.Username)
+		settings.Credential = strings.TrimSpace(settings.Credential)
+		settings.CredentialSecretRef = strings.TrimSpace(settings.CredentialSecretRef)
+		if settings.AuthMode == "" {
+			settings.AuthMode = "NONE"
+		}
+		// Merge stored credential material when the client leaves replacement fields empty.
+		if settings.AuthMode != "NONE" && settings.Credential == "" {
+			if existing, loadErr := s.loadSettings(ctx); loadErr == nil {
+				if settings.CredentialSecretRef == "" {
+					settings.EncryptedCredential = existing.EncryptedCredential
+					settings.CredentialSecretRef = existing.CredentialSecretRef
+				}
+			}
+		}
+		if settings.CredentialSecretRef != "" && !strings.HasPrefix(settings.CredentialSecretRef, "secret://") {
+			settings.CredentialSecretRef = "secret://" + settings.CredentialSecretRef
+		}
 	} else {
-		settings, err = s.GetSettings(ctx)
+		settings, err = s.loadSettings(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +344,7 @@ func (s *Service) TestSettings(ctx context.Context, input *Settings) (map[string
 }
 
 func (s *Service) ListApplications(ctx context.Context) ([]Application, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,active,created_at,updated_at FROM applications ORDER BY name`)
+	rows, err := s.pool.Query(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_at,updated_at FROM applications ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -282,7 +363,7 @@ func (s *Service) ListApplications(ctx context.Context) ([]Application, error) {
 	return items, rows.Err()
 }
 func (s *Service) GetApplication(ctx context.Context, applicationID string) (Application, error) {
-	item, err := scanApplication(s.pool.QueryRow(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,active,created_at,updated_at FROM applications WHERE id=$1`, applicationID))
+	item, err := scanApplication(s.pool.QueryRow(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_at,updated_at FROM applications WHERE id=$1`, applicationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Application{}, ErrNotFound
 	}
@@ -294,17 +375,21 @@ func (s *Service) GetApplication(ctx context.Context, applicationID string) (App
 }
 func scanApplication(row interface{ Scan(...any) error }) (Application, error) {
 	var item Application
-	var masks, mapping []byte
-	if err := row.Scan(&item.ID, &item.CARID, &item.Name, &item.Owner, &item.Environment, &item.DefaultIndexPattern, &item.DefaultTimeField, &masks, &mapping, &item.Active, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	var masks, mapping, emails []byte
+	if err := row.Scan(&item.ID, &item.CARID, &item.Name, &item.Owner, &item.Environment, &item.DefaultIndexPattern, &item.DefaultTimeField, &masks, &mapping, &emails, &item.Active, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return item, err
 	}
 	_ = json.Unmarshal(masks, &item.MaskingRules)
 	_ = json.Unmarshal(mapping, &item.SemanticMapping)
+	_ = json.Unmarshal(emails, &item.AlertEmails)
 	if item.MaskingRules == nil {
 		item.MaskingRules = []string{}
 	}
 	if item.SemanticMapping == nil {
 		item.SemanticMapping = map[string]string{}
+	}
+	if item.AlertEmails == nil {
+		item.AlertEmails = []string{}
 	}
 	return item, nil
 }
@@ -361,7 +446,11 @@ func (s *Service) CreateApplication(ctx context.Context, input ApplicationInput,
 	identifier, _ := id.NewUUID()
 	masks, _ := json.Marshal(input.MaskingRules)
 	mapping, _ := json.Marshal(input.SemanticMapping)
-	_, err := s.pool.Exec(ctx, `INSERT INTO applications(id,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,active,created_by,updated_by)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)`, identifier, input.CARID, input.Name, strings.TrimSpace(input.Owner), strings.TrimSpace(input.Environment), strings.TrimSpace(input.DefaultIndexPattern), strings.TrimSpace(input.DefaultTimeField), masks, mapping, active, actor)
+	emails, err := marshalAlertEmails(input.AlertEmails)
+	if err != nil {
+		return Application{}, err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO applications(id,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_by,updated_by)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`, identifier, input.CARID, input.Name, strings.TrimSpace(input.Owner), strings.TrimSpace(input.Environment), strings.TrimSpace(input.DefaultIndexPattern), strings.TrimSpace(input.DefaultTimeField), masks, mapping, emails, active, actor)
 	if err != nil {
 		return Application{}, err
 	}
@@ -397,12 +486,23 @@ func (s *Service) UpdateApplication(ctx context.Context, applicationID string, i
 	if input.SemanticMapping != nil {
 		current.SemanticMapping = input.SemanticMapping
 	}
+	if input.AlertEmails != nil {
+		normalized, emailErr := normalizeAlertEmails(input.AlertEmails)
+		if emailErr != nil {
+			return Application{}, emailErr
+		}
+		current.AlertEmails = normalized
+	}
 	if input.Active != nil {
 		current.Active = *input.Active
 	}
 	masks, _ := json.Marshal(current.MaskingRules)
 	mapping, _ := json.Marshal(current.SemanticMapping)
-	_, err = s.pool.Exec(ctx, `UPDATE applications SET car_id=$2,name=$3,owner=$4,environment=$5,default_index_pattern=$6,default_time_field=$7,masking_rules=$8,semantic_mapping=$9,active=$10,updated_by=$11,updated_at=NOW() WHERE id=$1`, applicationID, current.CARID, current.Name, current.Owner, current.Environment, current.DefaultIndexPattern, current.DefaultTimeField, masks, mapping, current.Active, actor)
+	emails, err := marshalAlertEmails(current.AlertEmails)
+	if err != nil {
+		return Application{}, err
+	}
+	_, err = s.pool.Exec(ctx, `UPDATE applications SET car_id=$2,name=$3,owner=$4,environment=$5,default_index_pattern=$6,default_time_field=$7,masking_rules=$8,semantic_mapping=$9,alert_emails=$10,active=$11,updated_by=$12,updated_at=NOW() WHERE id=$1`, applicationID, current.CARID, current.Name, current.Owner, current.Environment, current.DefaultIndexPattern, current.DefaultTimeField, masks, mapping, emails, current.Active, actor)
 	if err != nil {
 		return Application{}, err
 	}
@@ -442,6 +542,37 @@ func errDeleteApplicationBlockedByQueries(queryCount int) error {
 		noun = "queries"
 	}
 	return fmt.Errorf("%w: delete or reassign %d ELF %s first", ErrConflict, queryCount, noun)
+}
+
+func normalizeAlertEmails(values []string) ([]string, error) {
+	if values == nil {
+		return []string{}, nil
+	}
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		email := strings.TrimSpace(strings.ToLower(value))
+		if email == "" {
+			continue
+		}
+		if !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n,;") {
+			return nil, errors.New("alertEmails must contain valid email addresses")
+		}
+		if _, exists := seen[email]; exists {
+			continue
+		}
+		seen[email] = struct{}{}
+		out = append(out, email)
+	}
+	return out, nil
+}
+
+func marshalAlertEmails(values []string) ([]byte, error) {
+	normalized, err := normalizeAlertEmails(values)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(normalized)
 }
 func (s *Service) SaveService(ctx context.Context, applicationID, serviceID string, input ServiceInput) (AppService, error) {
 	if strings.TrimSpace(input.Name) == "" {
@@ -789,7 +920,7 @@ func (s *Service) Run(ctx context.Context, queryID, actor string, input ProbeInp
 }
 
 func (s *Service) resolveContext(ctx context.Context, q Query) (Settings, string, string, []string, error) {
-	settings, err := s.GetSettings(ctx)
+	settings, err := s.loadSettings(ctx)
 	if err != nil {
 		return settings, "", "", nil, err
 	}
@@ -823,6 +954,29 @@ func (s *Service) resolveContext(ctx context.Context, q Query) (Settings, string
 	}
 	return settings, index, timeField, app.MaskingRules, nil
 }
+func (s *Service) resolveCredential(ctx context.Context, settings Settings) (string, error) {
+	if plaintext := strings.TrimSpace(settings.Credential); plaintext != "" {
+		return plaintext, nil
+	}
+	if ref := strings.TrimSpace(settings.CredentialSecretRef); ref != "" {
+		if s.secrets == nil {
+			return "", errors.New("secret resolver is unavailable")
+		}
+		if !strings.HasPrefix(ref, "secret://") {
+			ref = "secret://" + ref
+		}
+		return s.secrets.ResolveSecret(ctx, ref)
+	}
+	if ciphertext := strings.TrimSpace(settings.EncryptedCredential); ciphertext != "" {
+		crypto, ok := s.secrets.(CredentialCrypto)
+		if !ok || crypto == nil {
+			return "", errors.New("inline ELF credentials require secrets encryption support")
+		}
+		return crypto.DecryptStored(ciphertext)
+	}
+	return "", errors.New("ELF credential is not configured")
+}
+
 func (s *Service) search(ctx context.Context, settings Settings, index string, body []byte) ([]byte, int, error) {
 	if err := s.validateTarget(ctx, settings.BaseURL); err != nil {
 		return nil, 0, err
@@ -839,8 +993,8 @@ func (s *Service) search(ctx context.Context, settings Settings, index string, b
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if settings.AuthMode != "NONE" && s.secrets != nil {
-		credential, err := s.secrets.ResolveSecret(requestCtx, settings.CredentialSecretRef)
+	if settings.AuthMode != "NONE" {
+		credential, err := s.resolveCredential(requestCtx, settings)
 		if err != nil {
 			return nil, 0, fmt.Errorf("ELF credential resolution failed")
 		}
@@ -873,7 +1027,7 @@ func (s *Service) search(ctx context.Context, settings Settings, index string, b
 // with ELF searches so alert reconciliation cannot bypass the configured
 // network and secret policies.
 func (s *Service) FetchAlertingAlerts(ctx context.Context) (json.RawMessage, error) {
-	settings, err := s.GetSettings(ctx)
+	settings, err := s.loadSettings(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -892,8 +1046,8 @@ func (s *Service) FetchAlertingAlerts(ctx context.Context) (json.RawMessage, err
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	if settings.AuthMode != "NONE" && s.secrets != nil {
-		credential, resolveErr := s.secrets.ResolveSecret(requestCtx, settings.CredentialSecretRef)
+	if settings.AuthMode != "NONE" {
+		credential, resolveErr := s.resolveCredential(requestCtx, settings)
 		if resolveErr != nil {
 			return nil, errors.New("ELF credential resolution failed")
 		}

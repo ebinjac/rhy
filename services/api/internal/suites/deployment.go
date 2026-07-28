@@ -166,6 +166,99 @@ type DeploymentFilter struct {
 	SuiteID, ApplicationID, Environment, Status, Decision string
 }
 
+type BaselinePreviewInput struct {
+	DeploymentStart       time.Time `json:"deploymentStart"`
+	BaselineWindow        string    `json:"baselineWindow"`
+	SampleCount           int       `json:"sampleCount"`
+	SampleIntervalSeconds int       `json:"sampleIntervalSeconds"`
+}
+
+type BaselineMonitorPreview struct {
+	MonitorID      string    `json:"monitorId"`
+	MonitorName    string    `json:"monitorName"`
+	RevisionID     string    `json:"revisionId,omitempty"`
+	BaselineFrom   time.Time `json:"baselineFrom"`
+	BaselineTo     time.Time `json:"baselineTo"`
+	SampleCount    int       `json:"sampleCount"`
+	MinimumSamples int       `json:"minimumSamples"`
+	Compatible     bool      `json:"compatible"`
+	Reason         string    `json:"reason,omitempty"`
+}
+
+type BaselinePreview struct {
+	Monitors                []BaselineMonitorPreview `json:"monitors"`
+	TotalAvailableSamples   int                      `json:"totalAvailableSamples"`
+	EstimatedExecutions     int                      `json:"estimatedExecutions"`
+	EstimatedMaximumSeconds int                      `json:"estimatedMaximumSeconds"`
+	BlockingDependencies    []string                 `json:"blockingDependencies"`
+}
+
+func (s *Service) PreviewDeploymentBaseline(ctx context.Context, suiteID string, input BaselinePreviewInput) (BaselinePreview, error) {
+	suite, err := s.repository.Get(ctx, suiteID)
+	if err != nil {
+		return BaselinePreview{}, err
+	}
+	if input.DeploymentStart.IsZero() {
+		return BaselinePreview{}, errors.New("deploymentStart is required")
+	}
+	window := strings.ToLower(strings.TrimSpace(input.BaselineWindow))
+	duration, ok := map[string]time.Duration{"24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour}[window]
+	if !ok {
+		return BaselinePreview{}, errors.New("baselineWindow must be 24h, 7d, or 30d")
+	}
+	if input.SampleCount < 3 || input.SampleCount > 50 {
+		return BaselinePreview{}, errors.New("sampleCount must be between 3 and 50")
+	}
+	if input.SampleIntervalSeconds < 1 || input.SampleIntervalSeconds > 300 {
+		return BaselinePreview{}, errors.New("sampleIntervalSeconds must be between 1 and 300")
+	}
+	from, to := input.DeploymentStart.Add(-duration), input.DeploymentStart
+	seen := map[string]bool{}
+	preview := BaselinePreview{Monitors: []BaselineMonitorPreview{}, BlockingDependencies: []string{}}
+	for _, stage := range suite.Stages {
+		for _, check := range stage.Checks {
+			if check.Kind != "MONITOR" || seen[check.MonitorID] {
+				continue
+			}
+			seen[check.MonitorID] = true
+			monitor, monitorErr := s.runs.Monitor(ctx, check.MonitorID)
+			if monitorErr != nil {
+				preview.BlockingDependencies = append(preview.BlockingDependencies, "A selected monitor could not be loaded.")
+				continue
+			}
+			item := BaselineMonitorPreview{MonitorID: monitor.ID, MonitorName: monitor.Name, RevisionID: monitor.LatestPublishedRevisionID, BaselineFrom: from, BaselineTo: to, MinimumSamples: 5}
+			if item.RevisionID == "" {
+				item.Reason = "No published revision is available."
+				preview.BlockingDependencies = append(preview.BlockingDependencies, monitor.Name+" must be published.")
+				preview.Monitors = append(preview.Monitors, item)
+				continue
+			}
+			points, pointErr := s.runs.DeploymentMetricPoints(ctx, monitor.ID, item.RevisionID, from, to, 5000)
+			if pointErr != nil {
+				item.Reason = "Baseline history could not be loaded."
+			} else {
+				item.SampleCount = summarize(points).SampleCount
+				item.Compatible = item.SampleCount >= item.MinimumSamples
+				if !item.Compatible {
+					item.Reason = "Fewer than five successful same-revision API timing samples are available."
+				}
+				preview.TotalAvailableSamples += item.SampleCount
+			}
+			preview.Monitors = append(preview.Monitors, item)
+		}
+	}
+	monitorCount := len(preview.Monitors)
+	preview.EstimatedExecutions = monitorCount * input.SampleCount
+	parallelism := max(1, min(suite.Parallelism, monitorCount))
+	waves := 0
+	if monitorCount > 0 {
+		waves = (monitorCount + parallelism - 1) / parallelism
+	}
+	perMonitor := input.SampleCount*suite.TimeoutSeconds + max(0, input.SampleCount-1)*input.SampleIntervalSeconds
+	preview.EstimatedMaximumSeconds = waves * perMonitor
+	return preview, nil
+}
+
 type DeploymentRepository interface {
 	CreateDeploymentRun(context.Context, DeploymentRun) error
 	UpdateDeploymentRun(context.Context, DeploymentRun) error
@@ -281,14 +374,26 @@ func (s *Service) GetDeploymentRun(ctx context.Context, id string) (DeploymentRu
 	if !ok {
 		return DeploymentRun{}, ErrNotFound
 	}
-	return repo.GetDeploymentRun(ctx, id)
+	run, err := repo.GetDeploymentRun(ctx, id)
+	if err != nil {
+		return run, err
+	}
+	normalizeDeploymentReport(&run.Report)
+	return run, nil
 }
 func (s *Service) ListDeploymentRuns(ctx context.Context, filter DeploymentFilter) ([]DeploymentRun, error) {
 	repo, ok := s.repository.(DeploymentRepository)
 	if !ok {
 		return []DeploymentRun{}, nil
 	}
-	return repo.ListDeploymentRuns(ctx, filter)
+	runs, err := repo.ListDeploymentRuns(ctx, filter)
+	if err != nil {
+		return runs, err
+	}
+	for index := range runs {
+		normalizeDeploymentReport(&runs[index].Report)
+	}
+	return runs, nil
 }
 func (s *Service) CancelDeploymentRun(ctx context.Context, id string) (DeploymentRun, error) {
 	run, err := s.GetDeploymentRun(ctx, id)
@@ -310,6 +415,7 @@ func (s *Service) CancelDeploymentRun(ctx context.Context, id string) (Deploymen
 }
 func (s *Service) saveDeployment(ctx context.Context, run DeploymentRun) error {
 	run.UpdatedAt = s.now()
+	normalizeDeploymentReport(&run.Report)
 	repo := s.repository.(DeploymentRepository)
 	return repo.UpdateDeploymentRun(context.WithoutCancel(ctx), run)
 }
@@ -543,7 +649,7 @@ func deploymentMonitorComparisons(suite Suite) []MonitorComparison {
 				continue
 			}
 			byID[check.MonitorID] = len(out)
-			out = append(out, MonitorComparison{CheckID: check.ID, MonitorID: check.MonitorID, MonitorName: check.Name, Required: check.Required, Steps: []StepComparison{}, Samples: []DeploymentSample{}, Reasons: []string{}})
+			out = append(out, MonitorComparison{CheckID: check.ID, MonitorID: check.MonitorID, MonitorName: check.Name, Required: check.Required, Baseline: emptyDistribution(), Post: emptyDistribution(), Steps: []StepComparison{}, Samples: []DeploymentSample{}, Reasons: []string{}})
 		}
 	}
 	return out
@@ -581,8 +687,56 @@ func numericTiming(value any) (int64, bool) {
 		return 0, false
 	}
 }
+func emptyDistribution() Distribution {
+	return Distribution{FailureCategories: map[string]int{}, Series: []MetricSeriesPoint{}}
+}
+
+func normalizeDistribution(distribution *Distribution) {
+	if distribution.FailureCategories == nil {
+		distribution.FailureCategories = map[string]int{}
+	}
+	if distribution.Series == nil {
+		distribution.Series = []MetricSeriesPoint{}
+	}
+}
+
+func normalizeDeploymentReport(report *DeploymentReport) {
+	if report.Monitors == nil {
+		report.Monitors = []MonitorComparison{}
+	}
+	if report.ELFResults == nil {
+		report.ELFResults = []CheckResult{}
+	}
+	if report.AlertResults == nil {
+		report.AlertResults = []CheckResult{}
+	}
+	if report.Warnings == nil {
+		report.Warnings = []string{}
+	}
+	if report.Reasons == nil {
+		report.Reasons = []string{}
+	}
+	for index := range report.Monitors {
+		normalizeDistribution(&report.Monitors[index].Baseline)
+		normalizeDistribution(&report.Monitors[index].Post)
+		if report.Monitors[index].Steps == nil {
+			report.Monitors[index].Steps = []StepComparison{}
+		}
+		if report.Monitors[index].Samples == nil {
+			report.Monitors[index].Samples = []DeploymentSample{}
+		}
+		if report.Monitors[index].Reasons == nil {
+			report.Monitors[index].Reasons = []string{}
+		}
+		for stepIndex := range report.Monitors[index].Steps {
+			normalizeDistribution(&report.Monitors[index].Steps[stepIndex].Baseline)
+			normalizeDistribution(&report.Monitors[index].Steps[stepIndex].Post)
+		}
+	}
+}
+
 func summarize(points []runs.HistoryMetricPoint) Distribution {
-	result := Distribution{FailureCategories: map[string]int{}, Series: []MetricSeriesPoint{}}
+	result := emptyDistribution()
 	values := []int64{}
 	for _, point := range points {
 		if point.Status == runs.StatusQueued || point.Status == runs.StatusStarting || point.Status == runs.StatusRunning || point.Status == runs.StatusCancelled || point.Status == runs.StatusSkipped {
@@ -667,7 +821,7 @@ func baselineSteps(points []runs.HistoryMetricPoint) []StepComparison {
 	}
 	out := []StepComparison{}
 	for stepID, values := range grouped {
-		out = append(out, StepComparison{StepDefinitionID: stepID, StepName: names[stepID], Baseline: summarize(values), Classification: "PENDING"})
+		out = append(out, StepComparison{StepDefinitionID: stepID, StepName: names[stepID], Baseline: summarize(values), Post: emptyDistribution(), Classification: "PENDING"})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].StepName < out[j].StepName })
 	return out

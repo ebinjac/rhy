@@ -32,6 +32,17 @@ services:
       retries: 12
     restart: unless-stopped
 
+  mailpit:
+    image: axllent/mailpit:v1.30.0
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: "500"
+    ports:
+      - "${RHYTHM_MAILPIT_PORT:-18025}:8025"
+    volumes:
+      - rhythm_mailpit_data:/data
+    restart: unless-stopped
+
   opensearch:
     image: opensearchproject/opensearch:3.7.0
     environment:
@@ -113,6 +124,15 @@ services:
 
       RHYTHM_ALLOW_PRIVATE_TARGETS: "true"
       RHYTHM_ELF_BOOTSTRAP_URL: http://opensearch:9200
+      # 32-byte AES key (base64). Local-only default — replace in any shared environment.
+      RHYTHM_SECRETS_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+      # In-stack SMTP catcher for deterministic local alert email tests (no auth).
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_FROM: ${SMTP_FROM:-rhythm-alerts@localhost}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_TO: ${SMTP_TO:-}
     ports:
       - "${RHYTHM_API_PORT:-18080}:8080"
     depends_on:
@@ -120,6 +140,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      mailpit:
+        condition: service_started
       script-runner:
         condition: service_healthy
       elf-seed:
@@ -183,3 +205,4 @@ volumes:
   rhythm_postgres_data:
   rhythm_redis_data:
   rhythm_opensearch_data:
+  rhythm_mailpit_data:

@@ -1,0 +1,16 @@
+---
+title: Deployment reports
+description: Read the final gate decision, before/after metrics, sample evidence, step regressions, and ELF results.
+audience: [release-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Release Validation]
+keywords: [report, PDF, JSON]
+---
+
+The persisted report uses the same immutable DTO for the UI, PDF, and JSON export.
+
+It includes deployment metadata, baseline and post configuration, p50/p95/p99, average, success/error/timeout rates, step regressions, sample-run links, ELF conditions, and every contributing gate reason.
+
+Unavailable measurements display **Not recorded**. Partial or cancelled workflows preserve completed evidence and explain what did not run.

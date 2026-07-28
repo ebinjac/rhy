@@ -1,0 +1,35 @@
+---
+title: Production architecture
+description: Plan a governed Rhythm deployment with isolated services, durable storage, safe egress, secrets, and execution agents.
+audience:
+  - platform-administrator
+  - security-administrator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm Platform
+keywords:
+  - production
+  - architecture
+  - security
+---
+
+Rhythm separates the web application, API, workers, script runner, PostgreSQL, Redis, and optional local OpenSearch services.
+
+## Production boundaries
+
+- The API owns authenticated definitions, revisions, evidence, and policy.
+- Workers execute scheduled and manual runs with cancellation propagation.
+- The script runner uses a fresh sandbox for every JavaScript execution.
+- PostgreSQL stores durable state; Redis coordinates asynchronous work.
+- Execution agents reach private targets without exposing them to the control plane.
+- Production ELF traffic passes through an approved proxy.
+
+<SecurityNote>
+Keep credentials in secret providers and reference them from profiles. Do not place raw passwords, bearer tokens, or private keys in monitor definitions, environment values, or documentation.
+</SecurityNote>
+
+## Minimum readiness
+
+Before enabling production schedules, verify database backups, secret encryption, outbound host policy, TLS trust profiles, agent health, telemetry, retention, and role assignments.

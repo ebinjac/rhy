@@ -1,0 +1,23 @@
+---
+title: Schedule and enable a monitor
+description: Choose how frequently a published monitor runs and verify its next execution time.
+audience: [application-engineer, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Monitor Runtime]
+keywords: [schedule, frequency, enabled]
+---
+
+A schedule always executes the published revision, never an unpublished draft.
+
+<Procedure>
+1. Open the monitor's schedule controls.
+2. Choose a supported frequency and timezone.
+3. Review the calculated next-run time.
+4. Enable the monitor.
+</Procedure>
+
+<ExpectedResult>The monitor overview shows **Enabled**, the schedule, and an exact next-run time.</ExpectedResult>
+
+<FailureExample>If no next run appears, publish a valid revision and confirm that the scheduler and worker health checks are available.</FailureExample>

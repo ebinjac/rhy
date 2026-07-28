@@ -114,6 +114,7 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			return nil, errors.New("pm.sendRequest exceeded the five-call limit")
 		}
 		response, evidence, err := r.sendRequest(wallContext, raw, input.AllowPrivateTargets)
+		evidence.URL = mask(evidence.URL, secretValues)
 		mu.Lock()
 		result.AuxiliaryRequests = append(result.AuxiliaryRequests, evidence)
 		mu.Unlock()
@@ -264,13 +265,26 @@ func failed(result Result, started time.Time, category, message string) Result {
 	return result
 }
 
-func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (map[string]any, AuxiliaryRequest, error) {
+func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (response map[string]any, evidence AuxiliaryRequest, err error) {
+	started := time.Now()
+	evidence = AuxiliaryRequest{Source: "pm.sendRequest", Method: http.MethodGet}
+	defer func() {
+		if evidence.DurationMS == 0 {
+			evidence.DurationMS = time.Since(started).Milliseconds()
+		}
+		evidence.Success = evidence.Error == "" && err == nil
+		if evidence.Source == "" {
+			evidence.Source = "pm.sendRequest"
+		}
+	}()
+
 	config, ok := raw.(map[string]any)
 	if !ok {
 		if text, textOK := raw.(string); textOK {
 			config = map[string]any{"url": text, "method": "GET"}
 		} else {
-			return nil, AuxiliaryRequest{}, errors.New("pm.sendRequest requires a URL or request object")
+			evidence.Error = "invalid request"
+			return nil, evidence, errors.New("pm.sendRequest requires a URL or request object")
 		}
 	}
 	target := strings.TrimSpace(fmt.Sprint(config["url"]))
@@ -278,9 +292,9 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 	if method == "" {
 		method = http.MethodGet
 	}
-	evidence := AuxiliaryRequest{Method: method, URL: safeURL(target)}
-	parsed, err := url.Parse(target)
-	if err != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
+	evidence.Method, evidence.URL = method, safeURL(target)
+	parsed, parseErr := url.Parse(target)
+	if parseErr != nil || parsed.Scheme == "" || parsed.Hostname() == "" {
 		evidence.Error = "invalid URL"
 		return nil, evidence, errors.New("pm.sendRequest URL is invalid")
 	}
@@ -305,24 +319,25 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 	if bodyConfig, exists := config["body"].(map[string]any); exists {
 		body = strings.NewReader(fmt.Sprint(first(bodyConfig["raw"], bodyConfig["content"])))
 	}
-	request, err := http.NewRequestWithContext(ctx, method, target, body)
-	if err != nil {
+	request, requestErr := http.NewRequestWithContext(ctx, method, target, body)
+	if requestErr != nil {
 		evidence.Error = "request construction failed"
 		return nil, evidence, errors.New("pm.sendRequest request is invalid")
 	}
 	applySendRequestHeaders(request, config["header"])
 	applySendRequestHeaders(request, config["headers"])
-	started := time.Now()
-	response, err := r.client.Do(request)
-	evidence.DurationMS = time.Since(started).Milliseconds()
-	if err != nil {
+	httpStarted := time.Now()
+	httpResponse, doErr := r.client.Do(request)
+	if doErr != nil {
+		evidence.DurationMS = time.Since(httpStarted).Milliseconds()
 		evidence.Error = "request failed"
 		return nil, evidence, errors.New("pm.sendRequest failed")
 	}
-	defer response.Body.Close()
-	limited := io.LimitReader(response.Body, maxAuxBody+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
+	defer httpResponse.Body.Close()
+	limited := io.LimitReader(httpResponse.Body, maxAuxBody+1)
+	data, readErr := io.ReadAll(limited)
+	evidence.DurationMS = time.Since(httpStarted).Milliseconds()
+	if readErr != nil {
 		evidence.Error = "response read failed"
 		return nil, evidence, errors.New("pm.sendRequest response could not be read")
 	}
@@ -330,12 +345,12 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 		evidence.Error = "response body limit exceeded"
 		return nil, evidence, errors.New("pm.sendRequest response exceeds 2 MB")
 	}
-	evidence.Status = response.StatusCode
+	evidence.Status = httpResponse.StatusCode
 	headers := map[string]string{}
-	for key, values := range response.Header {
+	for key, values := range httpResponse.Header {
 		headers[key] = strings.Join(values, ", ")
 	}
-	return map[string]any{"code": response.StatusCode, "status": response.Status, "body": string(data), "headers": headers}, evidence, nil
+	return map[string]any{"code": httpResponse.StatusCode, "status": httpResponse.Status, "body": string(data), "headers": headers}, evidence, nil
 }
 
 func digest(algorithm, value string) ([]int, error) {

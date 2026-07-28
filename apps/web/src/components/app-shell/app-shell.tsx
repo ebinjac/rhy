@@ -1,8 +1,6 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useState } from "react"
+import type { ReactNode } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
-import { Badge } from "@workspace/ui/components/badge"
-import { Button } from "@workspace/ui/components/button"
-import { Input } from "@workspace/ui/components/input"
 import {
   Sidebar,
   SidebarContent,
@@ -22,21 +20,30 @@ import {
 } from "@workspace/ui/components/sidebar"
 import { TooltipProvider } from "@workspace/ui/components/tooltip"
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@workspace/ui/components/dropdown-menu"
+import {
   Activity,
   AppWindow,
-  Bell,
   Boxes,
-  Cable,
-  ChevronDown,
   CircleAlert,
   Gauge,
   FileSearch,
-  Search,
   Settings2,
-  ShieldCheck,
   ScrollText,
+  Check,
+  SlidersHorizontal,
 } from "lucide-react"
 
+import { AlertsInbox } from "@/components/app-shell/alerts-inbox"
+import { GlobalSearch } from "@/components/app-shell/global-search"
+import { HelpDrawer } from "@/components/app-shell/help-drawer"
 import { ThemeToggle } from "@/components/app-shell/theme-toggle"
 import { RhythmLogo } from "@/components/brand/rhythm-logo"
 
@@ -47,7 +54,6 @@ const navigation = [
   { label: "ELF log search", to: "/elf", icon: FileSearch },
   { label: "Alerts", to: "/alerts", icon: CircleAlert },
   { label: "Validation suites", to: "/suites", icon: Boxes },
-  { label: "Execution agents", to: "/agents", icon: Cable },
   { label: "Audit log", to: "/audit", icon: ScrollText },
   { label: "Configuration", to: "/configuration", icon: Settings2 },
 ] as const
@@ -76,7 +82,7 @@ function AppSidebar() {
         <Link
           to="/"
           aria-label="Rhythm home"
-          className="flex h-12 items-center rounded-lg px-2 outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
+          className="flex h-12 items-center rounded-lg px-2 transition-colors outline-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
           onClick={() => setOpenMobile(false)}
         >
           <RhythmLogo
@@ -112,24 +118,72 @@ function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
-        <div className="flex items-center gap-3 rounded-lg px-2 py-2 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
-          <div className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-semibold">
-            EJ
-          </div>
-          <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-            <p className="truncate text-sm font-medium">Ebin Jacob</p>
-            <p className="truncate text-xs text-muted-foreground">
-              Administrator
-            </p>
-          </div>
-          <ChevronDown
-            aria-hidden="true"
-            className="size-4 text-muted-foreground group-data-[collapsible=icon]:hidden"
-          />
-        </div>
+        <WorkspacePreferences />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  )
+}
+
+type Density = "comfortable" | "compact"
+const densityStorageKey = "rhythm-table-density"
+
+function WorkspacePreferences() {
+  const [density, setDensity] = useState<Density>("comfortable")
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(densityStorageKey)
+    const initial: Density = stored === "compact" ? "compact" : "comfortable"
+    document.documentElement.dataset.density = initial
+    setDensity(initial)
+  }, [])
+
+  function updateDensity(next: Density) {
+    window.localStorage.setItem(densityStorageKey, next)
+    document.documentElement.dataset.density = next
+    setDensity(next)
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            aria-label="Open user preferences"
+            className="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors outline-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+            type="button"
+          />
+        }
+      >
+        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-semibold">
+          EJ
+        </div>
+        <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
+          <p className="truncate text-sm font-medium">Ebin Jacob</p>
+          <p className="truncate text-xs text-muted-foreground">
+            Administrator
+          </p>
+        </div>
+        <SlidersHorizontal className="size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Display preferences</DropdownMenuLabel>
+          <DropdownMenuItem onClick={() => updateDensity("comfortable")}>
+            {density === "comfortable" ? <Check /> : <span className="size-4" />}
+            Comfortable tables
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => updateDensity("compact")}>
+            {density === "compact" ? <Check /> : <span className="size-4" />}
+            Compact tables
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <p className="px-2 py-1.5 text-xs text-muted-foreground">
+          Preferences are stored for this browser profile.
+        </p>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -153,40 +207,14 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SidebarInset>
           <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur md:px-6">
             <SidebarTrigger />
-            <div className="relative hidden w-full max-w-sm sm:block">
-              <Search
-                aria-hidden="true"
-                className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-              />
-              <Input
-                aria-label="Search Rhythm"
-                className="h-9 bg-muted/55 pl-9"
-                placeholder="Search monitors, runs, and alerts"
-              />
-            </div>
+            <GlobalSearch />
             <div className="ml-auto flex items-center gap-2">
-              <Badge
-                className="hidden bg-success-soft text-success-foreground lg:inline-flex"
-                variant="secondary"
-              >
-                <ShieldCheck /> Agent fleet
-              </Badge>
+              <HelpDrawer />
               <ThemeToggle />
-              <Button
-                aria-label="One active alert"
-                className="relative"
-                size="icon"
-                variant="ghost"
-              >
-                <Bell />
-                <span
-                  className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-destructive"
-                  aria-hidden="true"
-                />
-              </Button>
+              <AlertsInbox />
             </div>
           </header>
-          <div id="main-content" className="min-w-0">
+          <div id="main-content" className="min-w-0 outline-none" tabIndex={-1}>
             {children}
           </div>
         </SidebarInset>
@@ -197,7 +225,9 @@ export function AppShell({ children }: { children: ReactNode }) {
 
 export function SystemNotice({
   alert,
+  alertCount = alert ? 1 : 0,
 }: {
+  alertCount?: number
   alert?: {
     sourceType?: "RHYTHM_MONITOR" | "OPENSEARCH_ALERTING"
     monitorName?: string
@@ -210,7 +240,9 @@ export function SystemNotice({
     <div className="flex items-start gap-3 border-b bg-warning-soft px-4 py-2.5 text-sm text-warning-foreground md:px-6">
       <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
       <p>
-        One alert needs attention.{" "}
+        {alertCount === 1
+          ? "One alert needs attention."
+          : `${alertCount} alerts need attention.`}{" "}
         <span className="font-medium">
           {alert.sourceType === "OPENSEARCH_ALERTING"
             ? alert.title

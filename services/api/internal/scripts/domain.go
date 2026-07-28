@@ -77,11 +77,16 @@ type Change struct {
 	State     string `json:"state"`
 }
 
+// AuxiliaryRequest is evidence for one pm.sendRequest call made from a script.
+// It is recorded in call order and nested under Result.AuxiliaryRequests
+// (preview and persisted pre-request / setup script evidence share this shape).
 type AuxiliaryRequest struct {
+	Source     string `json:"source"` // always "pm.sendRequest"
 	Method     string `json:"method"`
 	URL        string `json:"url"`
 	Status     int    `json:"status,omitempty"`
 	DurationMS int64  `json:"durationMs"`
+	Success    bool   `json:"success"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -123,6 +128,16 @@ type Result struct {
 type Validation struct {
 	Valid    bool      `json:"valid"`
 	Problems []Problem `json:"problems"`
+}
+
+// AuxiliaryRequestDurationMS sums wall-clock durations of every pm.sendRequest
+// recorded on a script result (call order preserved in AuxiliaryRequests).
+func AuxiliaryRequestDurationMS(result Result) int64 {
+	var total int64
+	for _, request := range result.AuxiliaryRequests {
+		total += request.DurationMS
+	}
+	return total
 }
 
 type Executor interface {

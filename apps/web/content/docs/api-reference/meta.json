@@ -1,0 +1,8 @@
+{
+  "title": "API reference",
+  "pages": [
+    "authentication",
+    "errors-pagination-and-idempotency",
+    "generated-openapi-reference"
+  ]
+}

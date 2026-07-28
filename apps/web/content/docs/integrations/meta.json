@@ -1,0 +1,12 @@
+{
+  "title": "Integrations",
+  "pages": [
+    "opensearch",
+    "opensearch-alerting",
+    "dynatrace",
+    "smtp",
+    "slack",
+    "generic-webhooks",
+    "pipelines"
+  ]
+}

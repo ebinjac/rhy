@@ -1,0 +1,21 @@
+---
+title: Troubleshoot ELF and OpenSearch
+description: Resolve connection, authentication, index, query policy, timeout, shard, and response-limit failures.
+audience: [sre-operator, platform-administrator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [ELF Platform]
+keywords: [ELF, OpenSearch, troubleshooting]
+---
+
+Check connection health and the resolved application/service index before editing the query.
+
+- **Authentication or authorization**: verify the referenced credential and search permission.
+- **Index**: confirm resolution precedence and the allowed-index policy.
+- **Syntax or policy**: use Validate to locate unsupported Query DSL.
+- **Timeout**: narrow the time range or reduce query complexity.
+- **Partial shards**: Rhythm rejects partial search results for gates.
+- **Response limit**: reduce displayed fields, hits, or aggregation buckets.
+
+Debug evidence contains the compiled body and a redacted cURL command, not unrestricted credentials or raw sensitive documents.

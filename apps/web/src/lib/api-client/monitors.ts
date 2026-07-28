@@ -12,6 +12,7 @@ import type {
   ApiSuccess,
   AuditEventContract,
   ConfigurationProfileContract,
+  DraftMonitorPreviewContract,
   ELFApplicationContract,
   MonitorContract,
   RevisionContract,
@@ -24,8 +25,14 @@ import type {
 } from "@/lib/api-client/contracts"
 import { z } from "zod"
 
+type MonitorListApplication = {
+  id: string
+  name: string
+}
+
 type MonitorListResult = {
   monitors: MonitorSummary[]
+  applications: MonitorListApplication[]
   source: "api"
 }
 
@@ -52,18 +59,26 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
       throw new Error("Rhythm API returned an invalid monitor list")
     }
 
-    const applicationByMonitorId = new Map<string, string>()
+    const applicationByMonitorId = new Map<
+      string,
+      { id: string; name: string }
+    >()
+    const applications: MonitorListApplication[] = []
     if (applicationsResponse.ok) {
       const applicationsEnvelope = (await applicationsResponse.json()) as ApiSuccess<
         ELFApplicationContract[]
       >
       if (Array.isArray(applicationsEnvelope.data)) {
         for (const application of applicationsEnvelope.data) {
+          applications.push({ id: application.id, name: application.name })
           const monitorIds = Array.isArray(application.monitorIds)
             ? application.monitorIds
             : []
           for (const monitorId of monitorIds) {
-            applicationByMonitorId.set(monitorId, application.name)
+            applicationByMonitorId.set(monitorId, {
+              id: application.id,
+              name: application.name,
+            })
           }
         }
       }
@@ -73,10 +88,55 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
       monitors: envelope.data.map((monitor) =>
         toMonitorSummary(monitor, applicationByMonitorId.get(monitor.id))
       ),
+      applications: applications.sort((left, right) =>
+        left.name.localeCompare(right.name)
+      ),
       source: "api",
     }
   }
 )
+
+export const previewMonitorDraft = createServerFn({ method: "POST" })
+  .validator(z.object({ definition: z.record(z.string(), z.unknown()) }))
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      | { ok: true; preview: DraftMonitorPreviewContract }
+      | { ok: false; message: string }
+    > => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      try {
+        const response = await fetch(`${baseURL}/api/v1/monitors/preview`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data.definition),
+          signal: AbortSignal.timeout(65000),
+        })
+        if (!response.ok) {
+          const failure = (await response.json()) as ApiErrorResponse
+          return {
+            ok: false,
+            message: failure.error.message || "Draft preview failed.",
+          }
+        }
+        return {
+          ok: true,
+          preview: (
+            (await response.json()) as ApiSuccess<DraftMonitorPreviewContract>
+          ).data,
+        }
+      } catch {
+        return {
+          ok: false,
+          message: "Draft preview could not reach the Rhythm API.",
+        }
+      }
+    }
+  )
 
 type CreateMonitorResult =
   | { ok: true; monitor: MonitorContract; schedule: ScheduleContract }
@@ -669,7 +729,7 @@ export const createConfigurationProfile = createServerFn({ method: "POST" })
       kind: profileKind,
       name: z.string().min(1),
       description: z.string(),
-      profileType: z.string().min(1),
+      profileType: z.string().optional(),
       config: z.record(z.string(), z.unknown()),
     })
   )
@@ -682,13 +742,21 @@ export const createConfigurationProfile = createServerFn({ method: "POST" })
     > => {
       const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
       try {
+        const payload = {
+          name: data.name,
+          description: data.description,
+          config: data.config,
+          ...(data.kind === "secrets"
+            ? {}
+            : { profileType: data.profileType ?? "" }),
+        }
         const response = await fetch(`${baseURL}/api/v1/config/${data.kind}`, {
           method: "POST",
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(data),
+          body: JSON.stringify(payload),
           signal: AbortSignal.timeout(5000),
         })
         if (!response.ok) {
@@ -710,9 +778,127 @@ export const createConfigurationProfile = createServerFn({ method: "POST" })
     }
   )
 
+export const saveConfigurationProfile = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      kind: profileKind,
+      profileId: z.string().min(1),
+      name: z.string().min(1),
+      description: z.string(),
+      profileType: z.string(),
+      config: z.record(z.string(), z.unknown()),
+      active: z.boolean().default(true),
+    })
+  )
+  .handler(async ({ data }) => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    try {
+      const response = await fetch(
+        `${baseURL}/api/v1/config/${data.kind}/${encodeURIComponent(data.profileId)}`,
+        {
+          method: "PUT",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            name: data.name,
+            description: data.description,
+            profileType: data.profileType,
+            config: data.config,
+            active: data.active,
+          }),
+          signal: AbortSignal.timeout(8000),
+        }
+      )
+      if (!response.ok) {
+        const failure = (await response.json()) as ApiErrorResponse
+        return { ok: false as const, message: failure.error.message }
+      }
+      return {
+        ok: true as const,
+        profile: (
+          (await response.json()) as ApiSuccess<ConfigurationProfileContract>
+        ).data,
+      }
+    } catch {
+      return {
+        ok: false as const,
+        message: "The configuration profile could not be saved.",
+      }
+    }
+  })
+
+export const deleteConfigurationProfile = createServerFn({ method: "POST" })
+  .validator(
+    z.object({ kind: profileKind, profileId: z.string().min(1) })
+  )
+  .handler(async ({ data }) => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    try {
+      const response = await fetch(
+        `${baseURL}/api/v1/config/${data.kind}/${encodeURIComponent(data.profileId)}`,
+        {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(8000),
+        }
+      )
+      if (!response.ok && response.status !== 204) {
+        const failure = (await response.json()) as ApiErrorResponse
+        return { ok: false as const, message: failure.error.message }
+      }
+      return { ok: true as const }
+    } catch {
+      return {
+        ok: false as const,
+        message: "The configuration profile could not be deleted.",
+      }
+    }
+  })
+
+export const sendNotificationTestEmail = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      profileId: z.string().min(1),
+      to: z.string().email(),
+    })
+  )
+  .handler(
+    async ({
+      data,
+    }): Promise<{ ok: true } | { ok: false; message: string }> => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      try {
+        const response = await fetch(
+          `${baseURL}/api/v1/config/notifications/${encodeURIComponent(data.profileId)}/test-email`,
+          {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ to: data.to }),
+            signal: AbortSignal.timeout(15000),
+          }
+        )
+        if (!response.ok) {
+          const failure = (await response.json()) as ApiErrorResponse
+          return { ok: false, message: failure.error.message }
+        }
+        return { ok: true }
+      } catch {
+        return {
+          ok: false,
+          message: "Unable to reach the Rhythm API for the SMTP test.",
+        }
+      }
+    }
+  )
+
 function toMonitorSummary(
   monitor: MonitorContract,
-  applicationName?: string
+  application?: { id: string; name: string }
 ): MonitorSummary {
   return {
     id: monitor.id,
@@ -721,7 +907,8 @@ function toMonitorSummary(
     description: monitor.description ?? "No description provided",
     status: healthToStatus(monitor.health),
     enabled: monitor.enabled,
-    application: applicationName || "Not assigned",
+    applicationId: application?.id ?? null,
+    application: application?.name || "Not assigned",
     cadence: monitor.scheduleSummary ?? "Manual only",
     owner: monitor.ownerId ?? "Unassigned",
     successRate: monitor.successRate24h ?? null,

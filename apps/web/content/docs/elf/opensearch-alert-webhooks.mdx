@@ -1,0 +1,18 @@
+---
+title: OpenSearch alert webhooks
+description: Receive OpenSearch Alerting notifications in Rhythm and reconcile missed lifecycle changes.
+audience: [platform-administrator, sre-operator]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [ELF Platform]
+keywords: [OpenSearch Alerting, webhook, receiver]
+---
+
+Create an application-bound receiver, copy its one-time token, and use the generated Mustache template for your OpenSearch monitor type.
+
+The custom webhook path is `/hooks/v1/opensearch-alerting/{receiverId}`. It requires `Content-Type: application/json` and `Authorization: Bearer <receiver-token>`.
+
+Rhythm returns `202 Accepted` after persisting a delivery receipt. Reconciliation checks the Alerting API every minute by default to repair missed active, acknowledged, completed, deleted, or error transitions.
+
+<SecurityNote>The receiver's application and service are trusted context. Payload fields cannot redirect ownership. Store only the generated envelope; arbitrary webhook bodies are rejected.</SecurityNote>

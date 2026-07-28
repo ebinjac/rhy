@@ -1,5 +1,10 @@
 export type ApiMeta = {
   requestId: string
+  page?: {
+    limit: number
+    total: number
+    nextCursor?: string
+  }
 }
 
 export type JsonValue =
@@ -173,6 +178,65 @@ export type AuditEventContract = {
   correlationId?: string
   createdAt: string
 }
+
+export type SearchMonitorHit = {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  state: MonitorContract["state"]
+  health: MonitorContract["health"]
+  tags: string[]
+}
+
+export type SearchRunHit = {
+  id: string
+  monitorId: string
+  monitorName?: string
+  status: RunContract["status"]
+  triggerType?: string
+  failureCategory?: string
+  createdAt: string
+}
+
+export type SearchAlertHit = {
+  id: string
+  title: string
+  state: AlertContract["state"]
+  severity: AlertContract["severity"]
+  sourceType: AlertContract["sourceType"]
+  monitorId?: string
+  monitorName?: string
+  applicationName?: string
+  serviceName?: string
+  description?: string
+}
+
+export type SearchResourceHit = {
+  kind:
+    | "APPLICATION"
+    | "SERVICE"
+    | "ELF_QUERY"
+    | "ELF_RUN"
+    | "SUITE"
+    | "DEPLOYMENT_RUN"
+    | "CONFIGURATION"
+  id: string
+  name: string
+  description?: string
+  context?: string
+  applicationId?: string
+  queryId?: string
+  status?: string
+}
+
+export type SearchResultsContract = {
+  query: string
+  monitors: SearchMonitorHit[]
+  runs: SearchRunHit[]
+  alerts: SearchAlertHit[]
+  resources: SearchResourceHit[]
+}
 export type ConfigurationProfileContract = {
   id: string
   kind:
@@ -287,8 +351,8 @@ export type DeploymentDistributionContract = {
   p99Ms?: number
   maxMs?: number
   standardDeviationMs?: number
-  failureCategories: Record<string, number>
-  series: Array<{ runId?: string; valueMs: number; createdAt: string }>
+  failureCategories?: Record<string, number> | null
+  series?: Array<{ runId?: string; valueMs: number; createdAt: string }> | null
 }
 
 export type DeploymentValidationRunContract = {
@@ -373,6 +437,24 @@ export type DeploymentValidationRunContract = {
   endedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export type DeploymentBaselinePreviewContract = {
+  monitors: Array<{
+    monitorId: string
+    monitorName: string
+    revisionId?: string
+    baselineFrom: string
+    baselineTo: string
+    sampleCount: number
+    minimumSamples: number
+    compatible: boolean
+    reason?: string
+  }>
+  totalAvailableSamples: number
+  estimatedExecutions: number
+  estimatedMaximumSeconds: number
+  blockingDependencies: string[]
 }
 
 export type AgentContract = {
@@ -513,10 +595,12 @@ export type ScriptResultContract = {
   variableChanges: ScriptChangeContract[]
   requestChanges: ScriptChangeContract[]
   auxiliaryRequests: Array<{
+    source?: string
     method: string
     url: string
     status?: number
     durationMs: number
+    success?: boolean
     error?: string
   }>
   variables: Record<string, string>
@@ -569,6 +653,15 @@ export type StepRunContract = {
   startedAt?: string
   endedAt?: string
   preRequestScript?: ScriptResultContract
+}
+
+export type DraftMonitorPreviewContract = {
+  status: RunContract["status"]
+  durationMs: number
+  failureCategory?: string
+  failureReason?: string
+  steps: StepRunContract[]
+  setupScript?: ScriptResultContract
 }
 
 export type AttemptRunContract = {
@@ -675,6 +768,9 @@ export type ELFSettingsContract = {
   authMode: "NONE" | "BASIC" | "BEARER"
   username?: string
   credentialSecretRef?: string
+  /** Write-only plaintext accepted on save/test; never returned by GET. */
+  credential?: string
+  hasCredential?: boolean
   updatedBy?: string
   updatedAt?: string
 }
@@ -698,6 +794,7 @@ export type ELFApplicationContract = {
   defaultTimeField: string
   maskingRules: string[]
   semanticMapping: Record<string, string>
+  alertEmails: string[]
   active: boolean
   services: ELFServiceContract[]
   monitorIds: string[]

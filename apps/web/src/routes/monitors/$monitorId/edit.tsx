@@ -1,5 +1,5 @@
-import { useState } from "react"
-import { createFileRoute, Link } from "@tanstack/react-router"
+import { useEffect, useState } from "react"
+import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Alert, AlertDescription } from "@workspace/ui/components/alert"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -14,6 +14,7 @@ import {
   Check,
   CircleAlert,
   LoaderCircle,
+  Rocket,
   Save,
 } from "lucide-react"
 
@@ -30,6 +31,8 @@ import {
 import {
   getMonitorDraft,
   getMonitorSchedule,
+  listConfigurationProfiles,
+  mutateMonitor,
   saveMonitorDraft,
   saveMonitorSchedule,
 } from "@/lib/api-client/monitors"
@@ -39,6 +42,7 @@ export const Route = createFileRoute("/monitors/$monitorId/edit")({
   loader: async ({ params }) => ({
     ...(await getMonitorDraft({ data: { monitorId: params.monitorId } })),
     applications: await listELFApplications(),
+    secrets: await listConfigurationProfiles({ data: { kind: "secrets" } }),
     schedule: await getMonitorSchedule({
       data: { monitorId: params.monitorId },
     }),
@@ -57,14 +61,16 @@ const defaultSchedule: ScheduleContract = {
 
 function EditMonitorPage() {
   const loaded = Route.useLoaderData()
+  const router = useRouter()
   const [definition, setDefinition] = useState(
     normalizeDefinition(
       loaded.revision.definition as unknown as RequestDefinition
     )
   )
   const [state, setState] = useState<"idle" | "saving" | "saved" | "error">(
-    "idle"
+    "saved"
   )
+  const [publishing, setPublishing] = useState(false)
   const [message, setMessage] = useState("")
   const initialApplicationId =
     loaded.applications.find((application) =>
@@ -80,6 +86,13 @@ function EditMonitorPage() {
     "idle" | "saving" | "saved" | "error"
   >("idle")
   const [scheduleMessage, setScheduleMessage] = useState("")
+
+  useEffect(() => {
+    if (state !== "idle" && state !== "saving") return
+    const warn = (event: BeforeUnloadEvent) => event.preventDefault()
+    window.addEventListener("beforeunload", warn)
+    return () => window.removeEventListener("beforeunload", warn)
+  }, [state])
 
   function change(next: RequestDefinition) {
     setDefinition(next)
@@ -97,7 +110,7 @@ function EditMonitorPage() {
     if (!result.ok) {
       setState("error")
       setMessage(result.message)
-      return
+      return false
     }
     if (linkedApplicationId !== applicationId) {
       if (applicationId) {
@@ -111,7 +124,7 @@ function EditMonitorPage() {
         if (!link.ok) {
           setState("error")
           setMessage(link.message)
-          return
+          return false
         }
       } else if (linkedApplicationId) {
         const unlink = await setApplicationMonitorLink({
@@ -124,13 +137,35 @@ function EditMonitorPage() {
         if (!unlink.ok) {
           setState("error")
           setMessage(unlink.message)
-          return
+          return false
         }
       }
       setLinkedApplicationId(applicationId)
     }
     setState("saved")
     setMessage(`Draft revision ${result.revision.revisionNumber} saved`)
+    return true
+  }
+
+  async function publish() {
+    setPublishing(true)
+    const saved = await save()
+    if (!saved) {
+      setPublishing(false)
+      return
+    }
+    const result = await mutateMonitor({
+      data: { monitorId: loaded.monitor.id, action: "publish" },
+    })
+    setPublishing(false)
+    if (!result.ok) {
+      setState("error")
+      setMessage(result.message)
+      return
+    }
+    setState("saved")
+    setMessage("Draft saved and published")
+    await router.invalidate()
   }
 
   async function saveSchedule() {
@@ -199,6 +234,19 @@ function EditMonitorPage() {
             )}
             {state === "saving" ? "Saving…" : "Save draft"}
           </Button>
+          <Button
+            type="button"
+            onClick={() => void publish()}
+            disabled={state === "saving" || publishing}
+            variant="outline"
+          >
+            {publishing ? (
+              <LoaderCircle className="animate-spin" />
+            ) : (
+              <Rocket />
+            )}
+            {publishing ? "Publishing…" : "Publish"}
+          </Button>
         </div>
       </header>
       <main className="mx-auto max-w-[1600px] px-4 py-6 md:px-6">
@@ -262,6 +310,7 @@ function EditMonitorPage() {
           onChange={change}
           monitorId={loaded.monitor.id}
           revisionId={loaded.revision.id}
+          secrets={loaded.secrets}
         />
         <section className="mt-6 rounded-xl border p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">

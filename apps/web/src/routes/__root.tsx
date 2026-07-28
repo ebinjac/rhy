@@ -1,7 +1,20 @@
-import { HeadContent, ScriptOnce, Scripts, createRootRoute } from "@tanstack/react-router"
+import {
+  HeadContent,
+  ScriptOnce,
+  Scripts,
+  createRootRoute,
+  useRouterState,
+} from "@tanstack/react-router"
+import { RootProvider } from "fumadocs-ui/provider/tanstack"
 
 import appCss from "@workspace/ui/globals.css?url"
+import { Toaster } from "@workspace/ui/components/sonner"
 import { AppShell } from "@/components/app-shell/app-shell"
+import {
+  NotFoundState,
+  RouteErrorState,
+  RoutePendingState,
+} from "@/components/page-state"
 
 export const Route = createRootRoute({
   head: () => ({
@@ -24,16 +37,18 @@ export const Route = createRootRoute({
       },
     ],
   }),
-  notFoundComponent: () => (
-    <main className="container mx-auto p-4 pt-16">
-      <h1>404</h1>
-      <p>The requested page could not be found.</p>
-    </main>
-  ),
+  pendingComponent: RoutePendingState,
+  errorComponent: RouteErrorState,
+  notFoundComponent: NotFoundState,
   shellComponent: RootDocument,
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+  const pathname = useRouterState({
+    select: (state) => state.location.pathname,
+  })
+  const isDocumentation = pathname === "/docs" || pathname.startsWith("/docs/")
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -41,11 +56,21 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         <ScriptOnce children={themeScript} />
-        <AppShell>{children}</AppShell>
+        <RootProvider
+          search={{
+            options: {
+              api: "/api/docs-search",
+            },
+          }}
+          theme={{ enabled: false }}
+        >
+          {isDocumentation ? children : <AppShell>{children}</AppShell>}
+        </RootProvider>
+        <Toaster richColors closeButton />
         <Scripts />
       </body>
     </html>
   )
 }
 
-const themeScript = `(function(){try{var stored=localStorage.getItem("rhythm-theme");var theme=stored==="dark"||stored==="light"?stored:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.classList.toggle("dark",theme==="dark");document.documentElement.style.colorScheme=theme;}catch(_){}})();`
+const themeScript = `(function(){try{var stored=localStorage.getItem("rhythm-theme");var theme=stored==="dark"||stored==="light"?stored:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.classList.toggle("dark",theme==="dark");document.documentElement.style.colorScheme=theme;var density=localStorage.getItem("rhythm-table-density");document.documentElement.dataset.density=density==="compact"?"compact":"comfortable";}catch(_){}})();`

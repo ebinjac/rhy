@@ -1,0 +1,18 @@
+{
+  "title": "Administration",
+  "pages": [
+    "production-architecture",
+    "configuration-library",
+    "secret-providers",
+    "certificates-and-keystores",
+    "proxy-profiles",
+    "auth-profiles",
+    "notification-channels",
+    "telemetry-profiles",
+    "execution-agent-fleet",
+    "roles-and-permissions",
+    "audit-events",
+    "backup-and-retention",
+    "upgrades"
+  ]
+}

@@ -1,0 +1,25 @@
+---
+title: hits.total.value checks
+description: Pass or fail an ELF query by comparing OpenSearch's exact hit count with a threshold.
+audience: [application-engineer, release-engineer]
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [ELF Platform]
+keywords: [hit count, condition, deployment check]
+---
+
+Rhythm evaluates the exact OpenSearch `hits.total.value`. Server-controlled execution sets `track_total_hits: true`.
+
+Supported operators are:
+
+| Operator | Example |
+| --- | --- |
+| Equal | `hits.total.value = 0` |
+| Not equal | `hits.total.value != 0` |
+| Greater than | `hits.total.value > 5` |
+| Greater than or equal | `hits.total.value >= 1` |
+| Less than | `hits.total.value < 10` |
+| Less than or equal | `hits.total.value <= 2` |
+
+For an error query, a common passing condition is `hits.total.value = 0`. Gate mode determines whether a failed condition blocks or warns.

@@ -1,0 +1,18 @@
+{
+  "title": "Rhythm documentation",
+  "root": true,
+  "pages": [
+    "index",
+    "getting-started",
+    "concepts",
+    "monitors",
+    "elf",
+    "deployment-validation",
+    "administration",
+    "integrations",
+    "api-reference",
+    "reference",
+    "troubleshooting",
+    "release-notes"
+  ]
+}

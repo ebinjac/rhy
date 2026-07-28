@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rhythm-monitoring/rhythm/internal/id"
+	"github.com/rhythm-monitoring/rhythm/internal/notifications"
 )
 
 var ErrNotFound = errors.New("alert not found")
@@ -743,8 +744,10 @@ func (s *Service) applyEvent(ctx context.Context, receiver Receiver, event Exter
 		encoded, _ = json.Marshal(evidence)
 	}
 	var existingID, existingState string
+	isNew := false
 	err := s.pool.QueryRow(ctx, `SELECT id::text,state FROM alerts WHERE deduplication_key=$1 ORDER BY created_at DESC LIMIT 1`, dedup).Scan(&existingID, &existingState)
 	if errors.Is(err, pgx.ErrNoRows) {
+		isNew = true
 		existingID, _ = id.NewUUID()
 		title := event.TriggerName
 		if title == "" {
@@ -772,7 +775,23 @@ func (s *Service) applyEvent(ctx context.Context, receiver Receiver, event Exter
 			return err
 		}
 	}
-	return s.recordEvent(ctx, existingID, "OPENSEARCH_"+event.State, event.State, "OpenSearch alert state received", evidence)
+	if err := s.recordEvent(ctx, existingID, "OPENSEARCH_"+event.State, event.State, "OpenSearch alert state received", evidence); err != nil {
+		return err
+	}
+	return s.enqueueOpenSearchNotifications(ctx, existingID, existingState, state, isNew, occurred)
+}
+
+func (s *Service) enqueueOpenSearchNotifications(ctx context.Context, alertID, previousState, state string, isNew bool, now time.Time) error {
+	switch {
+	case isNew && (state == "OPEN" || state == "ERROR"):
+		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now)
+	case !isNew && previousState != state && (state == "OPEN" || state == "ERROR") && previousState != "ACKNOWLEDGED":
+		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now)
+	case !isNew && previousState != state && state == "RESOLVED" && (previousState == "OPEN" || previousState == "ACKNOWLEDGED" || previousState == "ERROR"):
+		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_RECOVERED", now)
+	default:
+		return nil
+	}
 }
 
 func mapState(value string) string {

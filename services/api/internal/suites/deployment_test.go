@@ -2,6 +2,8 @@ package suites
 
 import (
 	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,5 +51,35 @@ func TestDeploymentPDFIsValidAndContainsReportText(t *testing.T) {
 	pdf := renderDeploymentPDF(report)
 	if !bytes.HasPrefix(pdf, []byte("%PDF-1.4")) || !bytes.Contains(pdf, []byte("Production gate")) {
 		t.Fatalf("unexpected PDF output: %q", pdf[:min(32, len(pdf))])
+	}
+}
+
+func TestNormalizeDeploymentReportCoercesNilCollections(t *testing.T) {
+	report := DeploymentReport{
+		Monitors: []MonitorComparison{{
+			Post:  Distribution{},
+			Steps: []StepComparison{{Post: Distribution{}}},
+		}},
+	}
+	normalizeDeploymentReport(&report)
+
+	body, err := json.Marshal(report)
+	if err != nil {
+		t.Fatalf("marshal report: %v", err)
+	}
+	encoded := string(body)
+	for _, needle := range []string{`"series":null`, `"failureCategories":null`, `"elfResults":null`, `"alertResults":null`, `"warnings":null`, `"reasons":null`, `"steps":null`, `"samples":null`} {
+		if strings.Contains(encoded, needle) {
+			t.Fatalf("expected empty collections, found %s in %s", needle, encoded)
+		}
+	}
+	if report.Monitors[0].Post.Series == nil || report.Monitors[0].Post.FailureCategories == nil {
+		t.Fatal("post distribution collections should be non-nil")
+	}
+	if report.Monitors[0].Steps[0].Post.Series == nil {
+		t.Fatal("step post series should be non-nil")
+	}
+	if report.ELFResults == nil || report.AlertResults == nil {
+		t.Fatal("report result slices should be non-nil")
 	}
 }

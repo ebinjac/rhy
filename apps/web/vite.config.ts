@@ -3,10 +3,27 @@ import { devtools } from "@tanstack/devtools-vite"
 import { tanstackStart } from "@tanstack/react-start/plugin/vite"
 import viteReact from "@vitejs/plugin-react"
 import tailwindcss from "@tailwindcss/vite"
+import mdx from "fumadocs-mdx/vite"
 
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
-  plugins: [devtools(), tailwindcss(), tanstackStart(), viteReact()],
+  optimizeDeps: {
+    exclude: [
+      "fumadocs-core",
+      "fumadocs-mdx",
+      "fumadocs-openapi",
+      "fumadocs-ui",
+    ],
+  },
+  ssr: {
+    noExternal: [
+      "fumadocs-core",
+      "fumadocs-mdx",
+      "fumadocs-openapi",
+      "fumadocs-ui",
+    ],
+  },
+  plugins: [mdx(), devtools(), tailwindcss(), tanstackStart(), viteReact()],
 })
 
 export default config

@@ -1,0 +1,34 @@
+---
+title: Applications and services
+description: Understand how Rhythm uses applications, CAR IDs, services, monitors, log queries, and alerts to express ownership.
+audience:
+  - application-engineer
+  - platform-administrator
+status: stable
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners:
+  - Rhythm Product
+keywords:
+  - applications
+  - services
+  - CAR ID
+---
+
+An **application** is Rhythm's trusted ownership boundary. It contains a name, owner, environment, CAR ID, services, linked monitors, ELF queries, and OpenSearch alert receivers.
+
+## CAR ID
+
+A CAR ID is the internal identifier your organization uses to recognize an application. It is metadata, not a secret or an authentication credential.
+
+## Services
+
+Services divide an application into deployable or operational components. A service can override its application's default ELF index pattern, time field, and semantic log-field mapping.
+
+## Trusted ownership
+
+Webhook payloads cannot move an alert to another application. The receiver's application and optional service assignment determine ownership.
+
+<SecurityNote>
+Use application masking rules for sensitive log fields. Service overrides may narrow an index pattern, but they cannot bypass the global ELF host and index allowlists.
+</SecurityNote>

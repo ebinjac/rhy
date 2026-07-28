@@ -1,0 +1,33 @@
+---
+title: Errors, pagination, and idempotency
+description: Handle Rhythm response envelopes, stable error codes, cursor pagination, retries, and asynchronous creation safely.
+audience: [application-engineer, platform-administrator]
+status: preview
+since: 0.0.1
+lastReviewed: 2026-07-27
+owners: [Rhythm API]
+keywords: [errors, pagination, idempotency]
+---
+
+## Error envelope
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "The request could not be validated.",
+    "details": {}
+  },
+  "meta": { "requestId": "req_example" }
+}
+```
+
+Use `error.code` for program logic and retain `meta.requestId` for support. Messages are safe for display but may change for clarity.
+
+## Pagination
+
+Pass the opaque `meta.page.nextCursor` to the next request. Never parse, increment, or persist assumptions about cursor structure.
+
+## Asynchronous work
+
+Manual monitor runs and deployment validations return `202 Accepted` with an ID. Poll the corresponding detail endpoint until a terminal status, or cancel through its explicit cancel operation.
