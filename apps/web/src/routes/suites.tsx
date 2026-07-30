@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import {
   AlertDialog,
@@ -29,6 +29,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   ArrowRight,
@@ -46,6 +52,7 @@ import {
 } from "lucide-react"
 
 import type {
+  DynatraceEnvironmentBindingContract,
   ValidationSuiteContract,
   ValidationSuiteRunContract,
 } from "@/lib/api-client/contracts"
@@ -60,7 +67,9 @@ import {
   updateSuite,
 } from "@/lib/api-client/suites"
 import { listELFApplications, listELFQueries } from "@/lib/api-client/elf"
+import { listApplicationEnvironments } from "@/lib/api-client/dynatrace"
 import { DeploymentWorkflow } from "@/features/suites/deployment-workflow"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/suites")({
   loader: async () => {
@@ -81,6 +90,16 @@ export const Route = createFileRoute("/suites")({
         data: { sourceType: "OPENSEARCH_ALERTING", state: "", applicationId: "", serviceId: "", severity: "" },
       }).catch(() => []),
     ])
+    const applicationEnvironments = Object.fromEntries(
+      await Promise.all(
+        applications.map(async (application) => [
+          application.id,
+          await listApplicationEnvironments({
+            data: { applicationId: application.id },
+          }).catch(() => []),
+        ])
+      )
+    )
     return {
       suites,
       monitors: monitorResult.monitors,
@@ -88,6 +107,7 @@ export const Route = createFileRoute("/suites")({
       deploymentRuns,
       applications,
       openSearchAlerts,
+      applicationEnvironments,
     }
   },
   component: SuitesPage,
@@ -95,7 +115,11 @@ export const Route = createFileRoute("/suites")({
 
 type DraftCheck = {
   id: string
-  kind: "MONITOR" | "ELF_QUERY" | "OPENSEARCH_ALERT"
+  kind:
+    | "MONITOR"
+    | "ELF_QUERY"
+    | "OPENSEARCH_ALERT"
+    | "DYNATRACE_INFRASTRUCTURE"
   monitorId: string
   queryId: string
   receiverId: string
@@ -105,6 +129,11 @@ type DraftCheck = {
   externalTriggerName: string
   name: string
   required: boolean
+  applicationId: string
+  environmentBindingId: string
+  serviceIds: string[]
+  ruleIds: string[]
+  gateMode: "ADVISORY" | "BLOCKING"
 }
 
 function alertOptionValue(alert: {
@@ -137,8 +166,12 @@ function SuitesPage() {
     deploymentRuns,
     applications,
     openSearchAlerts,
+    applicationEnvironments,
   } = Route.useLoaderData()
   const router = useRouter()
+  const formErrorId = useId()
+  const nameFieldId = useId()
+  const runResultRef = useRef<HTMLElement>(null)
   const [builderOpen, setBuilderOpen] = useState(false)
   const [editingSuiteId, setEditingSuiteId] = useState<string | null>(null)
   const [view, setView] = useState<"templates" | "deployments">("templates")
@@ -163,6 +196,11 @@ function SuitesPage() {
     externalTriggerName: "",
     name: monitors[0]?.name ?? "",
     required: true,
+    applicationId: "",
+    environmentBindingId: "",
+    serviceIds: [],
+    ruleIds: [],
+    gateMode: "ADVISORY",
   })
   const alertOptions = (() => {
     const seen = new Set<string>()
@@ -196,6 +234,11 @@ function SuitesPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState("")
 
+  useEffect(() => {
+    if (!latestRun) return
+    runResultRef.current?.focus()
+  }, [latestRun])
+
   function resetBuilder() {
     setEditingSuiteId(null)
     setName("")
@@ -219,6 +262,7 @@ function SuitesPage() {
   function openCreateBuilder() {
     resetBuilder()
     setMessage("")
+    setView("templates")
     setBuilderOpen(true)
   }
 
@@ -249,6 +293,11 @@ function SuitesPage() {
           externalTriggerName: check.externalTriggerName ?? "",
           name: check.name ?? "",
           required: check.required,
+          applicationId: check.applicationId ?? "",
+          environmentBindingId: check.environmentBindingId ?? "",
+          serviceIds: check.serviceIds ?? [],
+          ruleIds: check.ruleIds ?? [],
+          gateMode: check.gateMode ?? "ADVISORY",
         })),
       }))
     )
@@ -314,6 +363,7 @@ function SuitesPage() {
     setPending(false)
     if (!result.ok) {
       setMessage(result.message)
+      document.getElementById(nameFieldId)?.focus()
       return
     }
     closeBuilder()
@@ -359,19 +409,43 @@ function SuitesPage() {
     await router.invalidate()
   }
 
+  const saveDisabled =
+    pending ||
+    !name ||
+    stages.some(
+      (stage) =>
+        !stage.name ||
+        stage.checks.some((check) => {
+          if (check.kind === "MONITOR") return !check.monitorId
+          if (check.kind === "ELF_QUERY") return !check.queryId
+          if (check.kind === "DYNATRACE_INFRASTRUCTURE") {
+            return !check.applicationId || !check.environmentBindingId
+          }
+          return (
+            !check.receiverId ||
+            !(
+              check.externalMonitorId ||
+              check.externalMonitorName ||
+              check.externalTriggerId ||
+              check.externalTriggerName
+            )
+          )
+        })
+    )
+
   return (
-    <div className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer>
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p className="text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
             Release assurance
           </p>
-          <h1 className="mt-2 font-heading text-2xl font-semibold">
+          <h1 className="mt-2 font-heading text-2xl font-semibold text-balance">
             Validation suites
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Compose published monitors into deterministic, pipeline-ready
-            deployment gates.
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground text-pretty">
+            Compose published monitors, ELF queries, and OpenSearch alerts into
+            deterministic, pipeline-ready validation suites.
           </p>
         </div>
         {view === "templates" ? (
@@ -390,527 +464,760 @@ function SuitesPage() {
           </Button>
         )}
       </div>
-      <div
-        className="mt-6 flex gap-1 border-b"
-        role="tablist"
-        aria-label="Validation suite views"
+
+      <Tabs
+        value={view}
+        onValueChange={(value) => {
+          if (value === "templates" || value === "deployments") setView(value)
+        }}
+        className="mt-6 gap-0"
       >
-        <Button
-          className="rounded-b-none"
-          variant={view === "templates" ? "secondary" : "ghost"}
-          role="tab"
-          aria-selected={view === "templates"}
-          onClick={() => setView("templates")}
+        <TabsList
+          aria-label="Validation suite views"
+          variant="line"
+          className="h-auto w-full justify-start gap-1 rounded-none border-b bg-transparent p-0"
         >
-          Suite templates
-        </Button>
-        <Button
-          className="rounded-b-none"
-          variant={view === "deployments" ? "secondary" : "ghost"}
-          role="tab"
-          aria-selected={view === "deployments"}
-          onClick={() => setView("deployments")}
-        >
-          Deployment runs
-        </Button>
-      </div>
-      {message ? (
-        <div className="mt-5 flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-          <CircleAlert className="size-4" />
-          {message}
-        </div>
-      ) : null}
-      {view === "templates" && builderOpen ? (
-        <section className="mt-6 rounded-xl border bg-muted/15 p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <h2 className="font-heading text-lg font-semibold">
-                {editingSuiteId ? "Edit suite" : "New suite"}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {editingSuiteId
-                  ? "Update stages, checks, and gate behavior for this template."
-                  : "Compose ordered stages from published monitors and ELF queries."}
-              </p>
-            </div>
-            <Button variant="ghost" size="sm" onClick={closeBuilder}>
-              Cancel
-            </Button>
+          <TabsTrigger
+            value="templates"
+            className="rounded-none px-3 py-2 data-active:bg-transparent"
+          >
+            Suite templates
+          </TabsTrigger>
+          <TabsTrigger
+            value="deployments"
+            className="rounded-none px-3 py-2 data-active:bg-transparent"
+          >
+            Deployment runs
+          </TabsTrigger>
+        </TabsList>
+
+        {message ? (
+          <div
+            id={formErrorId}
+            role="alert"
+            aria-live="assertive"
+            className="mt-5 flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          >
+            <CircleAlert className="size-4 shrink-0" aria-hidden />
+            {message}
           </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Suite name">
-              <Input
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                placeholder="Production deployment gate"
-              />
-            </Field>
-            <Field label="Environment">
-              <Input
-                value={environment}
-                onChange={(event) => setEnvironment(event.target.value)}
-              />
-            </Field>
-            <Field label="Description" wide>
-              <Textarea
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                placeholder="Checks required before production traffic is promoted."
-              />
-            </Field>
-            <Field label="Parallel checks">
-              <Input
-                min={1}
-                max={20}
-                type="number"
-                value={parallelism}
-                onChange={(event) => setParallelism(Number(event.target.value))}
-              />
-            </Field>
-            <label className="flex items-center gap-2 self-end pb-2 text-sm">
-              <Checkbox
-                checked={failFast}
-                onCheckedChange={(checked) => setFailFast(checked === true)}
-              />{" "}
-              Stop after a required stage fails
-            </label>
-          </div>
-          <div className="mt-6 space-y-4">
-            {stages.map((stage, stageIndex) => (
-              <div
-                key={stage.id}
-                className="rounded-xl border bg-background p-4"
-              >
-                <div className="flex items-center gap-3">
-                  <span className="grid size-7 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-                    {stageIndex + 1}
-                  </span>
-                  <Input
-                    aria-label={`Stage ${stageIndex + 1} name`}
-                    className="max-w-md font-medium"
-                    value={stage.name}
-                    onChange={(event) =>
-                      updateStage(stageIndex, (current) => ({
-                        ...current,
-                        name: event.target.value,
-                      }))
-                    }
-                    placeholder="Stage name"
-                  />
-                  {stages.length > 1 ? (
-                    <Button
-                      aria-label="Remove stage"
-                      className="ml-auto"
-                      size="icon-sm"
-                      variant="ghost"
-                      onClick={() =>
-                        setStages((current) =>
-                          current
-                            .filter((_, index) => index !== stageIndex)
-                            .map((item, index) => ({
-                              ...item,
-                              order: index + 1,
-                            }))
-                        )
-                      }
-                    >
-                      <Trash2 />
-                    </Button>
-                  ) : null}
+        ) : null}
+
+        <TabsContent value="templates" className="mt-0 outline-none">
+          {builderOpen ? (
+            <section
+              className="mt-6 rounded-xl border bg-muted/15 p-4 sm:p-5"
+              aria-labelledby="suite-builder-title"
+            >
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2
+                    id="suite-builder-title"
+                    className="font-heading text-lg font-semibold"
+                  >
+                    {editingSuiteId ? "Edit suite" : "New suite"}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {editingSuiteId
+                      ? "Update stages, checks, and gate behavior for this template."
+                      : "Compose ordered stages from published monitors, ELF queries, and OpenSearch alerts."}
+                  </p>
                 </div>
-                <div className="mt-4 space-y-2">
-                  {stage.checks.map((check, checkIndex) => (
-                    <div
-                      key={check.id}
-                      className="grid items-center gap-2 rounded-lg bg-muted/40 p-3 sm:grid-cols-[130px_1fr_auto_auto]"
-                    >
+                <Button type="button" variant="ghost" size="sm" onClick={closeBuilder} disabled={pending}>
+                  Cancel
+                </Button>
+              </div>
+              <form
+                aria-describedby={message ? formErrorId : undefined}
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  if (!saveDisabled) void save()
+                }}
+              >
+                <div className="grid gap-3 sm:gap-4 md:grid-cols-2">
+                  <Field
+                    htmlFor={nameFieldId}
+                    label="Suite name"
+                    error={Boolean(message && !name.trim())}
+                  >
+                    <Input
+                      id={nameFieldId}
+                      value={name}
+                      aria-invalid={Boolean(message && !name.trim())}
+                      aria-describedby={message ? formErrorId : undefined}
+                      onChange={(event) => setName(event.target.value)}
+                      placeholder="Production deployment gate"
+                      required
+                    />
+                  </Field>
+                  <Field label="Environment">
+                    <Input
+                      value={environment}
+                      onChange={(event) => setEnvironment(event.target.value)}
+                    />
+                  </Field>
+                  <Field label="Description" wide>
+                    <Textarea
+                      value={description}
+                      onChange={(event) => setDescription(event.target.value)}
+                      placeholder="Checks required before production traffic is promoted."
+                    />
+                  </Field>
+                  <Field label="Parallel checks">
+                    <Input
+                      min={1}
+                      max={20}
+                      type="number"
+                      value={parallelism}
+                      onChange={(event) =>
+                        setParallelism(Number(event.target.value))
+                      }
+                    />
+                  </Field>
+                  <label className="flex min-h-11 items-center gap-2 self-end pb-1 text-sm sm:pb-2">
+                    <Checkbox
+                      checked={failFast}
+                      onCheckedChange={(checked) =>
+                        setFailFast(checked === true)
+                      }
+                    />{" "}
+                    Stop after a required stage fails
+                  </label>
+                </div>
+
+                <details className="mt-5 rounded-lg border bg-background">
+                  <summary className="cursor-pointer px-3 py-3 text-sm font-medium sm:px-4">
+                    Gate behavior
+                  </summary>
+                  <div className="grid gap-3 border-t px-3 py-3 sm:grid-cols-3 sm:gap-4 sm:px-4 sm:py-4">
+                    <Field label="Overall timeout (seconds)">
+                      <Input
+                        min={30}
+                        max={7200}
+                        type="number"
+                        value={timeoutSeconds}
+                        onChange={(event) =>
+                          setTimeoutSeconds(Number(event.target.value))
+                        }
+                      />
+                    </Field>
+                    <Field label="Baseline policy">
                       <Select
-                        value={check.kind}
+                        value={baselinePolicy}
                         onValueChange={(value) => {
                           if (value == null) return
-                          const kind = value
-                          const firstAlert = alertOptions[0]
-                          updateStage(stageIndex, (current) => ({
-                            ...current,
-                            checks: current.checks.map((item, index) =>
-                              index === checkIndex
-                                ? {
-                                    ...item,
-                                    kind,
-                                    monitorId:
-                                      kind === "MONITOR"
-                                        ? (monitors[0]?.id ?? "")
-                                        : "",
-                                    queryId:
-                                      kind === "ELF_QUERY"
-                                        ? (elfQueries[0]?.id ?? "")
-                                        : "",
-                                    receiverId:
-                                      kind === "OPENSEARCH_ALERT"
-                                        ? (firstAlert?.receiverId ?? "")
-                                        : "",
-                                    externalMonitorId:
-                                      kind === "OPENSEARCH_ALERT"
-                                        ? (firstAlert?.externalMonitorId ?? "")
-                                        : "",
-                                    externalTriggerId:
-                                      kind === "OPENSEARCH_ALERT"
-                                        ? (firstAlert?.externalTriggerId ?? "")
-                                        : "",
-                                    externalMonitorName:
-                                      kind === "OPENSEARCH_ALERT"
-                                        ? (firstAlert?.externalMonitorName ?? "")
-                                        : "",
-                                    externalTriggerName:
-                                      kind === "OPENSEARCH_ALERT"
-                                        ? (firstAlert?.externalTriggerName ?? "")
-                                        : "",
-                                    name:
-                                      kind === "MONITOR"
-                                        ? (monitors[0]?.name ?? "")
-                                        : kind === "ELF_QUERY"
-                                          ? (elfQueries[0]?.name ?? "")
-                                          : (firstAlert?.title ??
-                                            firstAlert?.externalTriggerName ??
-                                            ""),
-                                    required: kind !== "ELF_QUERY",
-                                  }
-                                : item
-                            ),
-                          }))
+                          setBaselinePolicy(value)
                         }}
                         items={[
-                          { value: "MONITOR", label: "Monitor" },
-                          { value: "ELF_QUERY", label: "ELF query" },
+                          { value: "NONE", label: "No baseline comparison" },
                           {
-                            value: "OPENSEARCH_ALERT",
-                            label: "OpenSearch alert",
+                            value: "WARN",
+                            label: "Warn when baseline is thin",
+                          },
+                          {
+                            value: "REQUIRE",
+                            label: "Require baseline samples",
                           },
                         ]}
                       >
-                        <SelectTrigger
-                          aria-label="Check type"
-                          className="h-9 w-full"
-                        >
+                        <SelectTrigger aria-label="Gate mode" className="h-9 w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="MONITOR">Monitor</SelectItem>
-                          <SelectItem value="ELF_QUERY">ELF query</SelectItem>
-                          <SelectItem value="OPENSEARCH_ALERT">
-                            OpenSearch alert
+                          <SelectItem value="NONE">
+                            No baseline comparison
+                          </SelectItem>
+                          <SelectItem value="WARN">
+                            Warn when baseline is thin
+                          </SelectItem>
+                          <SelectItem value="REQUIRE">
+                            Require baseline samples
                           </SelectItem>
                         </SelectContent>
                       </Select>
-                      {check.kind === "MONITOR" ? (
-                        <Select
-                          value={check.monitorId || null}
-                          onValueChange={(value) => {
-                            if (value == null) return
-                            const monitor = monitors.find(
-                              (item) => item.id === value
-                            )
+                    </Field>
+                    <Field label="Notification policy">
+                      <Select
+                        value={notificationPolicy}
+                        onValueChange={(value) => {
+                          if (value == null) return
+                          setNotificationPolicy(value)
+                        }}
+                        items={[
+                          { value: "NONE", label: "No notifications" },
+                          { value: "FAILURES", label: "Notify on failures" },
+                          { value: "ALWAYS", label: "Notify on every run" },
+                        ]}
+                      >
+                        <SelectTrigger aria-label="Environment" className="h-9 w-full">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="NONE">No notifications</SelectItem>
+                          <SelectItem value="FAILURES">
+                            Notify on failures
+                          </SelectItem>
+                          <SelectItem value="ALWAYS">
+                            Notify on every run
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
+                </details>
+
+                <div className="mt-6 divide-y rounded-xl border bg-background">
+                  {stages.map((stage, stageIndex) => (
+                    <div key={stage.id} className="p-3 sm:p-4">
+                      <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                        <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+                          {stageIndex + 1}
+                        </span>
+                        <Input
+                          aria-label={`Stage ${stageIndex + 1} name`}
+                          className="min-w-0 flex-1 font-medium sm:max-w-md"
+                          value={stage.name}
+                          onChange={(event) =>
                             updateStage(stageIndex, (current) => ({
                               ...current,
-                              checks: current.checks.map((item, index) =>
-                                index === checkIndex
-                                  ? {
-                                      ...item,
-                                      monitorId: value,
-                                      name: monitor?.name ?? "",
-                                    }
-                                  : item
-                              ),
-                            }))
-                          }}
-                          items={monitors.map((monitor) => ({
-                            value: monitor.id,
-                            label: `${monitor.name} · ${monitor.state}`,
-                          }))}
-                        >
-                          <SelectTrigger
-                            aria-label="Monitor"
-                            className="h-9 w-full min-w-0"
-                          >
-                            <SelectValue placeholder="Select monitor" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {monitors.map((monitor) => (
-                              <SelectItem key={monitor.id} value={monitor.id}>
-                                {monitor.name} · {monitor.state}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : check.kind === "ELF_QUERY" ? (
-                        <Select
-                          value={check.queryId || null}
-                          onValueChange={(value) => {
-                            if (value == null) return
-                            const query = elfQueries.find(
-                              (item) => item.id === value
-                            )
-                            updateStage(stageIndex, (current) => ({
-                              ...current,
-                              checks: current.checks.map((item, index) =>
-                                index === checkIndex
-                                  ? {
-                                      ...item,
-                                      queryId: value,
-                                      name: query?.name ?? "",
-                                      required: query?.gateMode === "BLOCKING",
-                                    }
-                                  : item
-                              ),
-                            }))
-                          }}
-                          items={elfQueries.map((query) => ({
-                            value: query.id,
-                            label: `${query.name} · ${query.gateMode}`,
-                          }))}
-                        >
-                          <SelectTrigger
-                            aria-label="ELF query"
-                            className="h-9 w-full min-w-0"
-                          >
-                            <SelectValue placeholder="Select ELF query" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {elfQueries.map((query) => (
-                              <SelectItem key={query.id} value={query.id}>
-                                {query.name} · {query.gateMode}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Select
-                          value={
-                            check.receiverId
-                              ? alertOptionValue(check)
-                              : null
-                          }
-                          onValueChange={(value) => {
-                            if (value == null) return
-                            const alert = alertOptions.find(
-                              (item) => alertOptionValue(item) === value
-                            )
-                            if (!alert) return
-                            updateStage(stageIndex, (current) => ({
-                              ...current,
-                              checks: current.checks.map((item, index) =>
-                                index === checkIndex
-                                  ? {
-                                      ...item,
-                                      receiverId: alert.receiverId ?? "",
-                                      externalMonitorId:
-                                        alert.externalMonitorId ?? "",
-                                      externalTriggerId:
-                                        alert.externalTriggerId ?? "",
-                                      externalMonitorName:
-                                        alert.externalMonitorName ?? "",
-                                      externalTriggerName:
-                                        alert.externalTriggerName ?? "",
-                                      name:
-                                        alert.title ||
-                                        alert.externalTriggerName ||
-                                        alert.externalMonitorName ||
-                                        "",
-                                    }
-                                  : item
-                              ),
-                            }))
-                          }}
-                          items={alertOptions.map((alert) => ({
-                            value: alertOptionValue(alert),
-                            label: `${alert.title} · ${alert.applicationName || "App"} · ${alert.state}`,
-                          }))}
-                        >
-                          <SelectTrigger
-                            aria-label="OpenSearch alert"
-                            className="h-9 w-full min-w-0"
-                          >
-                            <SelectValue
-                              placeholder={
-                                alertOptions.length
-                                  ? "Select OpenSearch alert"
-                                  : "No received alerts yet"
-                              }
-                            />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {alertOptions.map((alert) => (
-                              <SelectItem
-                                key={alert.id}
-                                value={alertOptionValue(alert)}
-                              >
-                                {alert.title} ·{" "}
-                                {alert.applicationName || "App"} · {alert.state}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
-                      <label className="flex items-center gap-2 text-xs">
-                        <Checkbox
-                          disabled={check.kind === "ELF_QUERY"}
-                          checked={check.required}
-                          onCheckedChange={(checked) =>
-                            updateStage(stageIndex, (current) => ({
-                              ...current,
-                              checks: current.checks.map((item, index) =>
-                                index === checkIndex
-                                  ? { ...item, required: checked === true }
-                                  : item
-                              ),
+                              name: event.target.value,
                             }))
                           }
+                          placeholder="Stage name"
+                          required
                         />
-                        {check.kind === "ELF_QUERY"
-                          ? check.required
-                            ? "Blocking"
-                            : "Advisory"
-                          : "Required"}
-                      </label>
-                      {stage.checks.length > 1 ? (
-                        <Button
-                          aria-label="Remove check"
-                          size="icon-sm"
-                          variant="ghost"
-                          onClick={() =>
-                            updateStage(stageIndex, (current) => ({
-                              ...current,
-                              checks: current.checks.filter(
-                                (_, index) => index !== checkIndex
-                              ),
-                            }))
-                          }
-                        >
-                          <Trash2 />
-                        </Button>
-                      ) : (
-                        <span className="size-8" />
-                      )}
+                        {stages.length > 1 ? (
+                          <Button
+                            type="button"
+                            aria-label="Remove stage"
+                            className="ml-auto min-h-11 min-w-11"
+                            size="icon"
+                            variant="ghost"
+                            onClick={() =>
+                              setStages((current) =>
+                                current
+                                  .filter((_, index) => index !== stageIndex)
+                                  .map((item, index) => ({
+                                    ...item,
+                                    order: index + 1,
+                                  }))
+                              )
+                            }
+                          >
+                            <Trash2 />
+                          </Button>
+                        ) : null}
+                      </div>
+                      <div className="mt-3 space-y-2 sm:mt-4">
+                        {stage.checks.map((check, checkIndex) => (
+                          <div
+                            key={check.id}
+                            className="grid items-center gap-2 rounded-lg bg-muted/40 p-2.5 sm:grid-cols-[130px_1fr_auto_auto] sm:p-3"
+                          >
+                            <Select
+                              value={check.kind}
+                              onValueChange={(value) => {
+                                if (value == null) return
+                                const kind = value
+                                const firstAlert = alertOptions[0]
+                                const firstApplication = applications[0]
+                                const firstEnvironment = firstApplication
+                                  ? applicationEnvironments[
+                                      firstApplication.id
+                                    ]?.[0]
+                                  : undefined
+                                updateStage(stageIndex, (current) => ({
+                                  ...current,
+                                  checks: current.checks.map((item, index) =>
+                                    index === checkIndex
+                                      ? {
+                                          ...item,
+                                          kind,
+                                          monitorId:
+                                            kind === "MONITOR"
+                                              ? (monitors[0]?.id ?? "")
+                                              : "",
+                                          queryId:
+                                            kind === "ELF_QUERY"
+                                              ? (elfQueries[0]?.id ?? "")
+                                              : "",
+                                          receiverId:
+                                            kind === "OPENSEARCH_ALERT"
+                                              ? (firstAlert?.receiverId ?? "")
+                                              : "",
+                                          externalMonitorId:
+                                            kind === "OPENSEARCH_ALERT"
+                                              ? (firstAlert?.externalMonitorId ??
+                                                "")
+                                              : "",
+                                          externalTriggerId:
+                                            kind === "OPENSEARCH_ALERT"
+                                              ? (firstAlert?.externalTriggerId ??
+                                                "")
+                                              : "",
+                                          externalMonitorName:
+                                            kind === "OPENSEARCH_ALERT"
+                                              ? (firstAlert?.externalMonitorName ??
+                                                "")
+                                              : "",
+                                          externalTriggerName:
+                                            kind === "OPENSEARCH_ALERT"
+                                              ? (firstAlert?.externalTriggerName ??
+                                                "")
+                                              : "",
+                                          applicationId:
+                                            kind ===
+                                            "DYNATRACE_INFRASTRUCTURE"
+                                              ? (firstApplication?.id ?? "")
+                                              : "",
+                                          environmentBindingId:
+                                            kind ===
+                                            "DYNATRACE_INFRASTRUCTURE"
+                                              ? (firstEnvironment?.id ?? "")
+                                              : "",
+                                          serviceIds: [],
+                                          ruleIds: [],
+                                          gateMode: "ADVISORY",
+                                          name:
+                                            kind === "MONITOR"
+                                              ? (monitors[0]?.name ?? "")
+                                              : kind === "ELF_QUERY"
+                                                ? (elfQueries[0]?.name ?? "")
+                                                : kind ===
+                                                    "DYNATRACE_INFRASTRUCTURE"
+                                                  ? "Dynatrace infrastructure"
+                                                : (firstAlert?.title ??
+                                                  firstAlert?.externalTriggerName ??
+                                                  ""),
+                                          required:
+                                            kind !== "ELF_QUERY" &&
+                                            kind !==
+                                              "DYNATRACE_INFRASTRUCTURE",
+                                        }
+                                      : item
+                                  ),
+                                }))
+                              }}
+                              items={[
+                                { value: "MONITOR", label: "Monitor" },
+                                { value: "ELF_QUERY", label: "ELF query" },
+                                {
+                                  value: "OPENSEARCH_ALERT",
+                                  label: "OpenSearch alert",
+                                },
+                                {
+                                  value: "DYNATRACE_INFRASTRUCTURE",
+                                  label: "Dynatrace infrastructure",
+                                },
+                              ]}
+                            >
+                              <SelectTrigger
+                                aria-label="Check type"
+                                className="h-9 w-full"
+                              >
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="MONITOR">Monitor</SelectItem>
+                                <SelectItem value="ELF_QUERY">
+                                  ELF query
+                                </SelectItem>
+                                <SelectItem value="OPENSEARCH_ALERT">
+                                  OpenSearch alert
+                                </SelectItem>
+                                <SelectItem value="DYNATRACE_INFRASTRUCTURE">
+                                  Dynatrace infrastructure
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {check.kind === "MONITOR" ? (
+                              <Select
+                                value={check.monitorId || null}
+                                onValueChange={(value) => {
+                                  if (value == null) return
+                                  const monitor = monitors.find(
+                                    (item) => item.id === value
+                                  )
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            monitorId: value,
+                                            name: monitor?.name ?? "",
+                                          }
+                                        : item
+                                    ),
+                                  }))
+                                }}
+                                items={monitors.map((monitor) => ({
+                                  value: monitor.id,
+                                  label: `${monitor.name} · ${monitor.state}`,
+                                }))}
+                              >
+                                <SelectTrigger
+                                  aria-label="Monitor"
+                                  className="h-9 w-full min-w-0"
+                                >
+                                  <SelectValue placeholder="Select monitor" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {monitors.map((monitor) => (
+                                    <SelectItem
+                                      key={monitor.id}
+                                      value={monitor.id}
+                                    >
+                                      {monitor.name} · {monitor.state}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : check.kind === "ELF_QUERY" ? (
+                              <Select
+                                value={check.queryId || null}
+                                onValueChange={(value) => {
+                                  if (value == null) return
+                                  const query = elfQueries.find(
+                                    (item) => item.id === value
+                                  )
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            queryId: value,
+                                            name: query?.name ?? "",
+                                            required:
+                                              query?.gateMode === "BLOCKING",
+                                          }
+                                        : item
+                                    ),
+                                  }))
+                                }}
+                                items={elfQueries.map((query) => ({
+                                  value: query.id,
+                                  label: `${query.name} · ${query.gateMode}`,
+                                }))}
+                              >
+                                <SelectTrigger
+                                  aria-label="ELF query"
+                                  className="h-9 w-full min-w-0"
+                                >
+                                  <SelectValue placeholder="Select ELF query" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {elfQueries.map((query) => (
+                                    <SelectItem
+                                      key={query.id}
+                                      value={query.id}
+                                    >
+                                      {query.name} · {query.gateMode}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            ) : check.kind ===
+                              "DYNATRACE_INFRASTRUCTURE" ? (
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <Select
+                                  value={check.applicationId || null}
+                                  onValueChange={(value) => {
+                                    if (value == null) return
+                                    const environment =
+                                      applicationEnvironments[value]?.[0]
+                                    const application = applications.find(
+                                      (item) => item.id === value
+                                    )
+                                    updateStage(stageIndex, (current) => ({
+                                      ...current,
+                                      checks: current.checks.map(
+                                        (item, index) =>
+                                          index === checkIndex
+                                            ? {
+                                                ...item,
+                                                applicationId: value,
+                                                environmentBindingId:
+                                                  environment?.id ?? "",
+                                                name: `${application?.name ?? "Application"} infrastructure`,
+                                              }
+                                            : item
+                                      ),
+                                    }))
+                                  }}
+                                >
+                                  <SelectTrigger
+                                    aria-label="Dynatrace application"
+                                    className="h-9 w-full min-w-0"
+                                  >
+                                    <SelectValue placeholder="Application" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {applications.map((application) => (
+                                      <SelectItem
+                                        key={application.id}
+                                        value={application.id}
+                                      >
+                                        {application.name}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <Select
+                                  value={check.environmentBindingId || null}
+                                  onValueChange={(value) => {
+                                    if (value == null) return
+                                    updateStage(stageIndex, (current) => ({
+                                      ...current,
+                                      checks: current.checks.map(
+                                        (item, index) =>
+                                          index === checkIndex
+                                            ? {
+                                                ...item,
+                                                environmentBindingId: value,
+                                              }
+                                            : item
+                                      ),
+                                    }))
+                                  }}
+                                >
+                                  <SelectTrigger
+                                    aria-label="Dynatrace application environment"
+                                    className="h-9 w-full min-w-0"
+                                  >
+                                    <SelectValue placeholder="Environment" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {(
+                                      applicationEnvironments[
+                                        check.applicationId
+                                      ] ?? []
+                                    ).map(
+                                      (
+                                        environment: DynatraceEnvironmentBindingContract
+                                      ) => (
+                                      <SelectItem
+                                        key={environment.id}
+                                        value={environment.id}
+                                      >
+                                        {environment.environmentName} ·{" "}
+                                        {environment.dynatraceConfigured
+                                          ? "configured"
+                                          : "setup required"}
+                                      </SelectItem>
+                                      )
+                                    )}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            ) : (
+                              <Select
+                                value={
+                                  check.receiverId
+                                    ? alertOptionValue(check)
+                                    : null
+                                }
+                                onValueChange={(value) => {
+                                  if (value == null) return
+                                  const alert = alertOptions.find(
+                                    (item) => alertOptionValue(item) === value
+                                  )
+                                  if (!alert) return
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            receiverId: alert.receiverId ?? "",
+                                            externalMonitorId:
+                                              alert.externalMonitorId ?? "",
+                                            externalTriggerId:
+                                              alert.externalTriggerId ?? "",
+                                            externalMonitorName:
+                                              alert.externalMonitorName ?? "",
+                                            externalTriggerName:
+                                              alert.externalTriggerName ?? "",
+                                            name:
+                                              alert.title ||
+                                              alert.externalTriggerName ||
+                                              alert.externalMonitorName ||
+                                              "",
+                                          }
+                                        : item
+                                    ),
+                                  }))
+                                }}
+                                items={alertOptions.map((alert) => ({
+                                  value: alertOptionValue(alert),
+                                  label: `${alert.title} · ${alert.applicationName || "App"} · ${alert.state}`,
+                                }))}
+                              >
+                                <SelectTrigger
+                                  aria-label="OpenSearch alert"
+                                  className="h-9 w-full min-w-0"
+                                >
+                                  <SelectValue
+                                    placeholder={
+                                      alertOptions.length
+                                        ? "Select OpenSearch alert"
+                                        : "No received alerts yet"
+                                    }
+                                  />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {alertOptions.map((alert) => (
+                                    <SelectItem
+                                      key={alert.id}
+                                      value={alertOptionValue(alert)}
+                                    >
+                                      {alert.title} ·{" "}
+                                      {alert.applicationName || "App"} ·{" "}
+                                      {alert.state}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            )}
+                            <label className="flex min-h-11 items-center gap-2 text-xs">
+                              <Checkbox
+                                disabled={check.kind === "ELF_QUERY"}
+                                checked={check.required}
+                                onCheckedChange={(checked) =>
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            required: checked === true,
+                                            ...(item.kind ===
+                                            "DYNATRACE_INFRASTRUCTURE"
+                                              ? {
+                                                  gateMode:
+                                                    checked === true
+                                                      ? ("BLOCKING" as const)
+                                                      : ("ADVISORY" as const),
+                                                }
+                                              : {}),
+                                          }
+                                        : item
+                                    ),
+                                  }))
+                                }
+                              />
+                              {check.kind === "ELF_QUERY"
+                                ? check.required
+                                  ? "Blocking"
+                                  : "Advisory"
+                                : check.kind ===
+                                    "DYNATRACE_INFRASTRUCTURE"
+                                  ? check.gateMode === "BLOCKING"
+                                    ? "Blocking"
+                                    : "Advisory"
+                                : "Required"}
+                            </label>
+                            {stage.checks.length > 1 ? (
+                              <Button
+                                type="button"
+                                aria-label="Remove check"
+                                className="min-h-11 min-w-11"
+                                size="icon"
+                                variant="ghost"
+                                onClick={() =>
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.filter(
+                                      (_, index) => index !== checkIndex
+                                    ),
+                                  }))
+                                }
+                              >
+                                <Trash2 />
+                              </Button>
+                            ) : (
+                              <span className="hidden size-11 sm:block" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      <Button
+                        type="button"
+                        className="mt-3"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => addCheck(stageIndex)}
+                      >
+                        <Plus /> Add check
+                      </Button>
                     </div>
                   ))}
                 </div>
-                <Button
-                  className="mt-3"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => addCheck(stageIndex)}
-                >
-                  <Plus /> Add check
-                </Button>
-              </div>
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-            <Button variant="outline" onClick={addStage}>
-              <GitBranch /> Add stage
-            </Button>
-            <Button
-              disabled={
-                pending ||
-                !name ||
-                stages.some(
-                  (stage) =>
-                    !stage.name ||
-                    stage.checks.some((check) => {
-                      if (check.kind === "MONITOR") return !check.monitorId
-                      if (check.kind === "ELF_QUERY") return !check.queryId
-                      return (
-                        !check.receiverId ||
-                        !(
-                          check.externalMonitorId ||
-                          check.externalMonitorName ||
-                          check.externalTriggerId ||
-                          check.externalTriggerName
-                        )
-                      )
-                    })
-                )
-              }
-              onClick={save}
-            >
-              {pending ? <LoaderCircle className="animate-spin" /> : <Check />}{" "}
-              {editingSuiteId ? "Save changes" : "Save suite"}
-            </Button>
-          </div>
-        </section>
-      ) : null}
-      {view === "templates" && latestRun ? <RunResult run={latestRun} /> : null}
-      <section className={view === "templates" ? "mt-8" : "hidden"}>
-        <h2 className="font-heading text-lg font-semibold">Deployment gates</h2>
-        {suites.length ? (
-          <div className="mt-4 grid gap-3 lg:grid-cols-2">
-            {suites.map((suite) => (
-              <article className="rounded-xl border p-5" key={suite.id}>
-                <div className="flex items-start gap-3">
-                  <div className="grid size-10 place-items-center rounded-lg bg-primary/10 text-primary">
-                    <Boxes className="size-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-medium">{suite.name}</h3>
-                      <Badge variant="secondary">
-                        {suite.environment || "Any environment"}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {suite.description ||
-                        `${suite.stages.length} ordered stage${suite.stages.length === 1 ? "" : "s"}`}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      {suite.stages.map((stage) => (
-                        <span
-                          key={stage.id}
-                          className="rounded-md bg-muted px-2 py-1"
-                        >
-                          {stage.order}. {stage.name} · {stage.checks.length}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <Button type="button" variant="outline" onClick={addStage}>
+                    <GitBranch /> Add stage
+                  </Button>
+                  <Button type="submit" disabled={pending || saveDisabled}>
+                    {pending ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Check />
+                    )}{" "}
+                    {editingSuiteId ? "Save changes" : "Save suite"}
+                  </Button>
                 </div>
-                <div className="mt-5 flex items-center justify-between border-t pt-4">
-                  <span className="text-xs text-muted-foreground">
-                    {suite.parallelism} parallel ·{" "}
-                    {suite.failFast ? "fail fast" : "run all"}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      disabled={runningID === suite.id}
-                      size="sm"
-                      onClick={() => execute(suite.id)}
-                    >
-                      {runningID === suite.id ? (
-                        <LoaderCircle className="animate-spin" />
-                      ) : (
-                        <Play />
-                      )}{" "}
-                      Run gate
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            aria-label={`More actions for ${suite.name}`}
-                            size="icon-sm"
-                            variant="ghost"
-                          />
-                        }
-                      >
-                        <MoreHorizontal />
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="min-w-48">
-                        <DropdownMenuItem
-                          onClick={() => openEditBuilder(suite)}
-                        >
-                          <FilePenLine /> Edit suite
-                        </DropdownMenuItem>
-                        <DropdownMenuItem
+              </form>
+            </section>
+          ) : null}
+
+          {latestRun ? (
+            <RunResult run={latestRun} resultRef={runResultRef} />
+          ) : null}
+
+          <section className="mt-8" aria-labelledby="suite-list-heading">
+            <h2
+              id="suite-list-heading"
+              className="font-heading text-lg font-semibold"
+            >
+              Validation suites
+            </h2>
+            {suites.length ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {suites.map((suite) => (
+                  <article className="rounded-xl border p-4 sm:p-5" key={suite.id}>
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-medium">{suite.name}</h3>
+                        <Badge variant="secondary">
+                          {suite.environment || "Any environment"}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {suite.description ||
+                          `${suite.stages.length} ordered stage${suite.stages.length === 1 ? "" : "s"}`}
+                      </p>
+                      <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                        {suite.stages.map((stage) => (
+                          <span
+                            key={stage.id}
+                            className="rounded-md bg-muted px-2 py-1"
+                          >
+                            {stage.order}. {stage.name} · {stage.checks.length}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-5 flex items-center justify-between gap-3 border-t pt-4">
+                      <span className="text-xs text-muted-foreground">
+                        {suite.parallelism} parallel ·{" "}
+                        {suite.failFast ? "fail fast" : "run all"}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          className="min-h-11 px-3 max-lg:min-w-11"
                           disabled={runningID === suite.id}
+                          size="sm"
                           onClick={() => execute(suite.id)}
                         >
                           {runningID === suite.id ? (
@@ -918,41 +1225,82 @@ function SuitesPage() {
                           ) : (
                             <Play />
                           )}{" "}
-                          Run gate
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onClick={() => requestDelete(suite)}
-                        >
-                          <Trash2 /> Delete permanently
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-4 rounded-xl border border-dashed py-14 text-center">
-            <Boxes className="mx-auto size-7 text-muted-foreground" />
-            <p className="mt-3 font-medium">No validation suites</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Build a staged release gate from published monitors.
-            </p>
-          </div>
-        )}
-      </section>
-      {view === "deployments" ? (
-        <DeploymentWorkflow
-          suites={suites}
-          applications={applications}
-          runs={deploymentRuns}
-          open={deploymentOpen}
-          onOpenChange={setDeploymentOpen}
-        />
-      ) : null}
+                          <span className="max-sm:sr-only">Run</span>
+                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger
+                            render={
+                              <Button
+                                aria-label={`More actions for ${suite.name}`}
+                                className="min-h-11 min-w-11"
+                                size="icon"
+                                variant="ghost"
+                              />
+                            }
+                          >
+                            <MoreHorizontal />
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="min-w-48">
+                            <DropdownMenuItem
+                              onClick={() => openEditBuilder(suite)}
+                            >
+                              <FilePenLine /> Edit suite
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              disabled={runningID === suite.id}
+                              onClick={() => execute(suite.id)}
+                            >
+                              {runningID === suite.id ? (
+                                <LoaderCircle className="animate-spin" />
+                              ) : (
+                                <Play />
+                              )}{" "}
+                              Run suite
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              variant="destructive"
+                              onClick={() => requestDelete(suite)}
+                            >
+                              <Trash2 /> Delete permanently
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-xl border border-dashed px-4 py-14 text-center">
+                <Boxes
+                  className="mx-auto size-7 text-muted-foreground"
+                  aria-hidden
+                />
+                <p className="mt-3 font-medium">No validation suites yet</p>
+                <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+                  Build a staged release suite from published monitors, ELF
+                  queries, and OpenSearch alerts.
+                </p>
+                <Button className="mt-5" onClick={openCreateBuilder}>
+                  <Plus /> New suite
+                </Button>
+              </div>
+            )}
+          </section>
+        </TabsContent>
+
+        <TabsContent value="deployments" className="mt-0 outline-none">
+          <DeploymentWorkflow
+            suites={suites}
+            applications={applications}
+            runs={deploymentRuns}
+            open={deploymentOpen}
+            onOpenChange={setDeploymentOpen}
+          />
+        </TabsContent>
+      </Tabs>
+
       <AlertDialog
         open={deleteOpen}
         onOpenChange={(open) => {
@@ -993,22 +1341,32 @@ function SuitesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </PageContainer>
   )
 }
 
-function RunResult({ run }: { run: ValidationSuiteRunContract }) {
+function RunResult({
+  run,
+  resultRef,
+}: {
+  run: ValidationSuiteRunContract
+  resultRef: React.RefObject<HTMLElement | null>
+}) {
   const allowed = run.gateDecision !== "BLOCK"
   return (
     <section
-      className={`mt-6 rounded-xl border p-5 ${allowed ? "border-success/30 bg-success-soft/45" : "border-destructive/30 bg-destructive/5"}`}
+      ref={resultRef}
+      tabIndex={-1}
+      role="status"
+      aria-live="polite"
+      className={`mt-6 rounded-xl border p-4 outline-none sm:p-5 ${allowed ? "border-success/30 bg-success-soft/45" : "border-destructive/30 bg-destructive/5"}`}
     >
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div className="flex items-center gap-3">
           {allowed ? (
-            <Check className="size-5 text-success-foreground" />
+            <Check className="size-5 text-success-foreground" aria-hidden />
           ) : (
-            <CircleAlert className="size-5 text-destructive" />
+            <CircleAlert className="size-5 text-destructive" aria-hidden />
           )}
           <div>
             <p className="font-heading text-lg font-semibold">
@@ -1094,14 +1452,21 @@ function RunResult({ run }: { run: ValidationSuiteRunContract }) {
 function Field({
   label,
   wide,
+  htmlFor,
+  error,
   children,
 }: {
   label: string
   wide?: boolean
+  htmlFor?: string
+  error?: boolean
   children: React.ReactNode
 }) {
   return (
-    <label className={`text-xs font-medium ${wide ? "md:col-span-2" : ""}`}>
+    <label
+      htmlFor={htmlFor}
+      className={`text-xs font-medium ${wide ? "md:col-span-2" : ""} ${error ? "text-destructive" : ""}`}
+    >
       {label}
       <span className="mt-2 block">{children}</span>
     </label>

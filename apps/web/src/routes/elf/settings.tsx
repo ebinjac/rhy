@@ -34,6 +34,7 @@ import {
 } from "@/lib/api-client/elf"
 import { listConfigurationProfiles } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/elf/settings")({
   loader: async () => {
@@ -157,7 +158,8 @@ function SettingsPage() {
     setMessage("")
   }
   return (
-    <main className="mx-auto max-w-[980px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
+      <div aria-live="polite" className="sr-only" role="status">{message}</div>
       <header>
         <div className="flex items-center gap-2">
           <h1 className="font-heading text-2xl font-semibold">
@@ -197,7 +199,7 @@ function SettingsPage() {
           label="ELF base URL"
           help="Production must use the corporate ELF Proxy."
         >
-          <Input
+          <Input aria-label="ELF base URL"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://elf-proxy.internal"
@@ -207,7 +209,7 @@ function SettingsPage() {
           label="OpenSearch Dashboards URL"
           help="Shown as an optional investigation link."
         >
-          <Input
+          <Input aria-label="OpenSearch Dashboards URL"
             value={dashboardUrl}
             onChange={(e) => setDashboardUrl(e.target.value)}
             placeholder="https://dashboards.internal"
@@ -217,7 +219,7 @@ function SettingsPage() {
           label="Default index pattern"
           help="Used only when application, service, and query do not override it."
         >
-          <Input
+          <Input aria-label="Default index pattern"
             className="font-mono"
             value={index}
             onChange={(e) => setIndex(e.target.value)}
@@ -228,7 +230,7 @@ function SettingsPage() {
           label="Allowed index patterns"
           help="Comma-separated allowlist; resolved indices must match."
         >
-          <Input
+          <Input aria-label="Allowed index patterns"
             className="font-mono"
             value={allowed}
             onChange={(e) => setAllowed(e.target.value)}
@@ -238,7 +240,7 @@ function SettingsPage() {
           label="Search timeout (seconds)"
           help="Rhythm enforces a maximum of 30 seconds."
         >
-          <Input
+          <Input aria-label="Search timeout (seconds)"
             type="number"
             min={1}
             max={30}
@@ -262,7 +264,7 @@ function SettingsPage() {
               BASIC: "Basic authentication",
             }}
           >
-            <SelectTrigger className="mt-0 h-9 w-full">
+            <SelectTrigger aria-label="Authentication mode" className="mt-0 h-9 w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -274,7 +276,7 @@ function SettingsPage() {
         </Field>
         {authMode === "BASIC" ? (
           <Field label="Username">
-            <Input
+            <Input aria-label="Username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               autoComplete="off"
@@ -315,7 +317,7 @@ function SettingsPage() {
             label="TLS / CA profile ID"
             help="Optional governed certificate and trust configuration."
           >
-            <Input
+            <Input aria-label="TLS / CA profile ID"
               value={tlsProfileId}
               onChange={(event) => setTLSProfileId(event.target.value)}
               placeholder="elf-corporate-ca"
@@ -325,7 +327,7 @@ function SettingsPage() {
             label="Outbound proxy profile ID"
             help="Optional governed route to the corporate ELF Proxy."
           >
-            <Input
+            <Input aria-label="Outbound proxy profile ID"
               value={proxyProfileId}
               onChange={(event) => setProxyProfileId(event.target.value)}
               placeholder="corporate-egress"
@@ -414,7 +416,7 @@ function SettingsPage() {
           Save settings
         </Button>
       </div>
-    </main>
+    </PageContainer>
   )
 }
 function Field({

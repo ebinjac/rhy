@@ -27,6 +27,7 @@ import {
   secretAliasFromRef,
   toSecretRef,
 } from "@/features/configuration/secret-credential-field"
+import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 import {
   createConfigurationProfile,
@@ -35,6 +36,7 @@ import {
 } from "@/lib/api-client/monitors"
 import { testProxyProfile } from "@/lib/api-client/proxies"
 import type { ProxyTestResult } from "@/lib/api-client/proxies"
+import { toast } from "@workspace/ui/components/sonner"
 
 type ProxyScheme = "HTTP" | "HTTPS" | "SOCKS5"
 
@@ -92,6 +94,9 @@ export function ProxiesPanel({
   const [testPending, setTestPending] = useState(false)
   const [testMessage, setTestMessage] = useState("")
   const [testResult, setTestResult] = useState<ProxyTestResult | null>(null)
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   function resetForm() {
     setEditing(null)
@@ -181,21 +186,21 @@ export function ProxiesPanel({
     await onChanged()
   }
 
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Monitors and ELF connections using this profile may stop working.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind: "proxies", profileId: profile.id },
+      data: { kind: "proxies", profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
-    if (testingProfile?.id === profile.id) setTestingProfile(null)
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    if (testingProfile?.id === deleteTarget.id) setTestingProfile(null)
+    setDeleteTarget(null)
     await onChanged()
   }
 
@@ -321,6 +326,7 @@ export function ProxiesPanel({
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Profile name" required>
                 <Input
+                  aria-label="Profile name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="Corporate production egress"
@@ -328,6 +334,7 @@ export function ProxiesPanel({
               </Field>
               <Field label="Description">
                 <Input
+                  aria-label="Description"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                   placeholder="Routes payments monitors through the corporate proxy"
@@ -342,6 +349,7 @@ export function ProxiesPanel({
                 required
               >
                 <Input
+                  aria-label="Proxy endpoint"
                   className="font-mono"
                   value={proxyUrl}
                   onChange={(event) => setProxyUrl(event.target.value)}
@@ -401,7 +409,7 @@ export function ProxiesPanel({
               label="Bypass proxy for"
               help="Comma- or line-separated exact hosts, IP addresses, wildcard domains such as *.internal, or * to bypass every target."
             >
-              <Textarea
+              <Textarea aria-label="Bypass proxy for"
                 className="min-h-24 font-mono"
                 value={noProxy}
                 onChange={(event) => setNoProxy(event.target.value)}
@@ -469,7 +477,7 @@ export function ProxiesPanel({
           <div className="p-5">
             <div className="flex flex-col gap-3 sm:flex-row">
               <Field label="Test target">
-                <Input
+                <Input aria-label="Test target"
                   className="min-w-0 font-mono sm:w-[420px]"
                   value={testTarget}
                   onChange={(event) => setTestTarget(event.target.value)}
@@ -516,7 +524,7 @@ export function ProxiesPanel({
               profile={profile}
               onEdit={() => beginEdit(profile)}
               onTest={() => beginTest(profile)}
-              onDelete={() => void remove(profile)}
+              onDelete={() => setDeleteTarget(profile)}
             />
           ))}
           {!profiles.length ? (
@@ -534,6 +542,17 @@ export function ProxiesPanel({
           ) : null}
         </div>
       </section>
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "proxy"}”?`}
+        description="Monitors and ELF connections using this profile may stop working. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete proxy"
+      />
     </div>
   )
 }

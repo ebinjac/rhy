@@ -3,12 +3,14 @@ import { Button } from "@workspace/ui/components/button"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { ArrowLeft, CircleAlert, RefreshCw } from "lucide-react"
 
+import { PageContainer } from "@/components/page-container"
+
 export function RoutePendingState() {
   return (
-    <main
+    <PageContainer
+      as="main"
       aria-busy="true"
       aria-label="Loading page"
-      className="mx-auto max-w-[1440px] px-4 py-6 md:px-6 md:py-8"
     >
       <Skeleton className="h-7 w-52" />
       <Skeleton className="mt-3 h-4 w-full max-w-xl" />
@@ -18,7 +20,7 @@ export function RoutePendingState() {
         <Skeleton className="h-28" />
       </div>
       <Skeleton className="mt-6 h-64" />
-    </main>
+    </PageContainer>
   )
 }
 
@@ -38,15 +40,15 @@ export function RouteErrorState({
       </p>
       <div className="mt-6 flex flex-wrap gap-2">
         <Button onClick={reset}>
-          <RefreshCw />
+          <RefreshCw data-icon="inline-start" />
           Retry
         </Button>
         <Button
           nativeButton={false}
-          render={<Link to="/" />}
+          render={<Link aria-label="Back to overview" to="/" />}
           variant="outline"
         >
-          <ArrowLeft />
+          <ArrowLeft data-icon="inline-start" />
           Back to overview
         </Button>
       </div>
@@ -65,9 +67,9 @@ export function NotFoundState() {
       <Button
         className="mt-6"
         nativeButton={false}
-        render={<Link to="/" />}
+        render={<Link aria-label="Back to overview" to="/" />}
       >
-        <ArrowLeft />
+        <ArrowLeft data-icon="inline-start" />
         Back to overview
       </Button>
     </main>

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http/cookiejar"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,10 @@ type DraftPreview struct {
 // revision, run, event, or database record. Evidence is masked by the same
 // executor used for persisted runs.
 func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) (DraftPreview, error) {
+	return s.PreviewDefinitionWithEnvironment(ctx, definition, "")
+}
+
+func (s *Service) PreviewDefinitionWithEnvironment(ctx context.Context, definition Definition, environmentID string) (DraftPreview, error) {
 	if len(definition.Steps) == 0 {
 		return DraftPreview{}, errors.New("draft has no workflow steps")
 	}
@@ -62,7 +67,13 @@ func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) 
 	if err != nil {
 		return DraftPreview{}, fmt.Errorf("create preview cookie jar: %w", err)
 	}
-	values := map[string]string{}
+	values, _, err := s.loadEnvironmentValues(ctx, environmentID)
+	if err != nil {
+		return DraftPreview{}, fmt.Errorf("selected environment could not be loaded: %w", err)
+	}
+	if err := s.executor.ResolveDefinitionSecrets(ctx, definition, values); err != nil {
+		return DraftPreview{}, err
+	}
 	if strings.TrimSpace(definition.Scripts.PreRequest.Code) != "" {
 		result, next := s.executor.ExecuteSetupScript(ctx, definition.Scripts.PreRequest, values, scripts.Info{EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}, 10000)
 		preview.SetupScript, values = &result, next
@@ -72,7 +83,16 @@ func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) 
 			preview.FailureReason = result.ErrorMessage
 		}
 	}
-	for index, step := range definition.Steps {
+	executedSteps := 0
+	for index := 0; index < len(definition.Steps); index++ {
+		step := definition.Steps[index]
+		executedSteps++
+		if executedSteps > 100 {
+			preview.Status = StatusFailed
+			preview.FailureCategory = "SCRIPT_POLICY_VIOLATION"
+			preview.FailureReason = "Workflow navigation exceeded the 100-step execution limit."
+			break
+		}
 		if preview.Status != StatusSuccess || !step.Enabled {
 			continue
 		}
@@ -91,6 +111,7 @@ func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) 
 			stepResult, produced = s.executor.ExecuteActions(ctx, step, values)
 			for key, value := range produced {
 				values[key] = value
+				values["variables."+key] = value
 				values["steps."+step.ID+".outputs."+key] = value
 			}
 		case "HTTP_REQUEST":
@@ -106,21 +127,71 @@ func (s *Service) PreviewDefinition(ctx context.Context, definition Definition) 
 			if extractor.Success && !extractor.Sensitive {
 				rendered := fmt.Sprint(extractor.Value)
 				values[extractor.Variable] = rendered
+				values["variables."+extractor.Variable] = rendered
 				values["steps."+step.ID+".outputs."+extractor.Variable] = rendered
 			}
 		}
 		for key, value := range stepResult.PrivateOutputs {
 			values[key] = value
+			values["variables."+key] = value
 			values["steps."+step.ID+".outputs."+key] = value
 		}
-		if stepResult.Status != StatusSuccess && stepResult.Status != StatusSuccessWithWarnings {
+		if stepResult.Status != StatusSuccess && stepResult.Status != StatusSuccessWithWarnings && stepResult.Status != StatusSkipped {
 			preview.Status = stepResult.Status
 			preview.FailureCategory = stepResult.FailureCategory
 			preview.FailureReason = stepResult.ErrorMessage
 		}
+		execution := scripts.Execution{}
+		if stepResult.PreRequestScript != nil && stepResult.PreRequestScript.Execution.NextRequestSet {
+			execution = stepResult.PreRequestScript.Execution
+		}
+		if stepResult.TestScript != nil && stepResult.TestScript.Execution.NextRequestSet {
+			execution = stepResult.TestScript.Execution
+		}
+		if execution.NextRequestSet {
+			if execution.NextRequest == "" {
+				break
+			}
+			nextIndex := -1
+			for candidateIndex, candidate := range definition.Steps {
+				if candidate.ID == execution.NextRequest || candidate.Name == execution.NextRequest {
+					nextIndex = candidateIndex
+					break
+				}
+			}
+			if nextIndex < 0 {
+				preview.Status = StatusFailed
+				preview.FailureCategory = "SCRIPT_POLICY_VIOLATION"
+				preview.FailureReason = fmt.Sprintf("pm.execution.setNextRequest target %q was not found.", execution.NextRequest)
+				break
+			}
+			index = nextIndex - 1
+		}
 	}
 	preview.DurationMS = s.now().Sub(started).Milliseconds()
 	return preview, nil
+}
+
+func (s *Service) loadEnvironmentValues(ctx context.Context, environmentID string) (map[string]string, EnvironmentMaterial, error) {
+	material, err := s.executor.LoadEnvironment(ctx, environmentID)
+	if err != nil {
+		return nil, EnvironmentMaterial{}, err
+	}
+	values := make(map[string]string, len(material.Variables)*2)
+	for key, value := range material.Variables {
+		values[key] = value
+		values["environment."+key] = value
+	}
+	return values, material, nil
+}
+
+func sortedStringKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func (s *Service) Monitor(ctx context.Context, monitorID string) (monitors.Monitor, error) {
@@ -291,7 +362,33 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 	if err != nil {
 		return Run{}, fmt.Errorf("create workflow cookie jar: %w", err)
 	}
-	workflowValues := make(map[string]string)
+	workflowValues, environment, environmentErr := s.loadEnvironmentValues(ctx, monitor.EnvironmentID)
+	if environmentErr != nil {
+		run.Status, run.FailureCategory = StatusFailed, "ENVIRONMENT_RESOLUTION_FAILED"
+		run.FailureReason = "The selected environment could not be loaded. Check that it is active and its secret references are valid."
+		appendRunEvent(&run, "RUN_FAILED", StatusFailed, run.FailureReason, run.FailureCategory, map[string]any{"environmentId": monitor.EnvironmentID})
+		now := s.now()
+		run.EndedAt = &now
+		run.DurationMS = now.Sub(started).Milliseconds()
+		_ = s.repository.Save(context.WithoutCancel(ctx), run)
+		return run, nil
+	}
+	if environment.ID != "" {
+		run.ExecutionContext["environment"] = map[string]any{
+			"id": environment.ID, "name": environment.Name, "stage": environment.ProfileType,
+			"updatedAt": environment.UpdatedAt, "variableNames": sortedStringKeys(environment.Variables),
+		}
+	}
+	if err := s.executor.ResolveDefinitionSecrets(ctx, definition, workflowValues); err != nil {
+		run.Status, run.FailureCategory = StatusFailed, "SECRET_RESOLUTION_FAILED"
+		run.FailureReason = "A referenced secret could not be resolved. Check the alias and secret profile state."
+		appendRunEvent(&run, "RUN_FAILED", StatusFailed, run.FailureReason, run.FailureCategory, nil)
+		now := s.now()
+		run.EndedAt = &now
+		run.DurationMS = now.Sub(started).Milliseconds()
+		_ = s.repository.Save(context.WithoutCancel(ctx), run)
+		return run, nil
+	}
 	if strings.TrimSpace(definition.Scripts.PreRequest.Code) != "" {
 		appendRunEvent(&run, "PRE_REQUEST_SCRIPT_STARTED", StatusRunning, "Monitor setup script started.", "", map[string]any{"scope": "monitor", "runtimeVersion": scripts.RuntimeVersion})
 		setupResult, values := s.executor.ExecuteSetupScript(ctx, definition.Scripts.PreRequest, workflowValues, scripts.Info{MonitorID: monitorID, RunID: runID, RevisionID: revision.ID, RequestName: monitor.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}, 10000)
@@ -305,7 +402,16 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		appendAuxiliaryRequestEvents(&run, nil, "monitor", setupResult.AuxiliaryRequests)
 		_ = s.repository.Save(context.WithoutCancel(ctx), run)
 	}
-	for index, step := range definition.Steps {
+	executedSteps := 0
+	for index := 0; index < len(definition.Steps); index++ {
+		step := definition.Steps[index]
+		executedSteps++
+		if executedSteps > 100 {
+			run.Status = StatusFailed
+			run.FailureCategory = "SCRIPT_POLICY_VIOLATION"
+			run.FailureReason = "Workflow navigation exceeded the 100-step execution limit."
+			break
+		}
 		if run.Status != StatusRunning {
 			break
 		}
@@ -336,11 +442,15 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			stepResult, produced = s.executor.ExecuteActions(ctx, step, workflowValues)
 			for key, value := range produced {
 				workflowValues[key] = value
+				workflowValues["variables."+key] = value
 				workflowValues["steps."+step.ID+".outputs."+key] = value
 			}
 		} else if step.Type == "HTTP_REQUEST" {
 			if strings.TrimSpace(step.Request.PreRequestScript.Code) != "" {
 				appendRunEvent(&run, "PRE_REQUEST_SCRIPT_STARTED", StatusRunning, "Request pre-request script started.", "", map[string]any{"scope": "request", "stepId": step.ID, "runtimeVersion": scripts.RuntimeVersion})
+			}
+			if strings.TrimSpace(step.Request.TestScript.Code) != "" {
+				appendRunEvent(&run, "TEST_SCRIPT_STARTED", StatusRunning, "Response Tests script scheduled.", "", map[string]any{"scope": "test", "stepId": step.ID, "runtimeVersion": scripts.RuntimeVersion})
 			}
 			stepResult = s.executor.ExecuteWithScriptState(ctx, step, jar, workflowValues, ScriptExecutionContext{MonitorID: monitorID, RunID: runID, RevisionID: revision.ID, StepID: step.ID, StepName: step.Name})
 		} else if step.Type == "METRIC_VALIDATION" {
@@ -362,6 +472,14 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			}
 			appendStepEvent(&run, stepResult, eventType, stepResult.Status, message, stepResult.PreRequestScript.ErrorCategory, map[string]any{"scope": "request", "durationMs": stepResult.PreRequestScript.DurationMS, "tests": len(stepResult.PreRequestScript.Tests), "changes": len(stepResult.PreRequestScript.RequestChanges) + len(stepResult.PreRequestScript.VariableChanges), "line": stepResult.PreRequestScript.ErrorLine, "auxiliaryRequests": len(stepResult.PreRequestScript.AuxiliaryRequests)})
 			appendAuxiliaryRequestEvents(&run, &stepResult, "request", stepResult.PreRequestScript.AuxiliaryRequests)
+		}
+		if stepResult.TestScript != nil {
+			eventType, message := "TEST_SCRIPT_COMPLETED", "Response Tests script completed."
+			if stepResult.TestScript.Status != "SUCCESS" {
+				eventType, message = "TEST_SCRIPT_FAILED", "Response Tests script failed."
+			}
+			appendStepEvent(&run, stepResult, eventType, stepResult.Status, message, stepResult.TestScript.ErrorCategory, map[string]any{"scope": "test", "durationMs": stepResult.TestScript.DurationMS, "tests": len(stepResult.TestScript.Tests), "changes": len(stepResult.TestScript.VariableChanges), "line": stepResult.TestScript.ErrorLine, "auxiliaryRequests": len(stepResult.TestScript.AuxiliaryRequests), "visualizer": stepResult.TestScript.Visualizer != nil})
+			appendAuxiliaryRequestEvents(&run, &stepResult, "test", stepResult.TestScript.AuxiliaryRequests)
 		}
 		if step.Type == "HTTP_REQUEST" {
 			appendStepEvent(&run, stepResult, "REQUEST_COMPLETED", stepResult.Status, "HTTP request completed.", stepResult.FailureCategory, map[string]any{"status": stepResult.ResponseSummary["status"], "attempts": stepResult.AttemptCount})
@@ -392,11 +510,13 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			if extractor.Success && !extractor.Sensitive {
 				value := fmt.Sprint(extractor.Value)
 				workflowValues[extractor.Variable] = value
+				workflowValues["variables."+extractor.Variable] = value
 				workflowValues["steps."+step.ID+".outputs."+extractor.Variable] = value
 			}
 		}
 		for key, value := range stepResult.PrivateOutputs {
 			workflowValues[key] = value
+			workflowValues["variables."+key] = value
 			workflowValues["steps."+step.ID+".outputs."+key] = value
 		}
 		// Non-secret metric results are first-class workflow outputs, so a
@@ -405,6 +525,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			if value, ok := stepResult.Outputs["value"]; ok {
 				rendered := fmt.Sprint(value)
 				workflowValues["value"] = rendered
+				workflowValues["variables.value"] = rendered
 				workflowValues["steps."+step.ID+".outputs.value"] = rendered
 			}
 		}
@@ -421,6 +542,34 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		}
 		if err := s.repository.Save(context.WithoutCancel(ctx), run); err != nil {
 			return Run{}, err
+		}
+		execution := scripts.Execution{}
+		if stepResult.PreRequestScript != nil && stepResult.PreRequestScript.Execution.NextRequestSet {
+			execution = stepResult.PreRequestScript.Execution
+		}
+		if stepResult.TestScript != nil && stepResult.TestScript.Execution.NextRequestSet {
+			execution = stepResult.TestScript.Execution
+		}
+		if execution.NextRequestSet {
+			appendStepEvent(&run, stepResult, "SCRIPT_WORKFLOW_NAVIGATION", stepResult.Status, "JavaScript selected the next workflow step.", "", map[string]any{"nextRequest": execution.NextRequest})
+			if execution.NextRequest == "" {
+				break
+			}
+			nextIndex := -1
+			for candidateIndex, candidate := range definition.Steps {
+				if candidate.ID == execution.NextRequest || candidate.Name == execution.NextRequest {
+					nextIndex = candidateIndex
+					break
+				}
+			}
+			if nextIndex < 0 {
+				run.Status = StatusFailed
+				run.FailureCategory = "SCRIPT_POLICY_VIOLATION"
+				run.FailureReason = fmt.Sprintf("pm.execution.setNextRequest target %q was not found.", execution.NextRequest)
+				run.FailedStepID = step.ID
+				break
+			}
+			index = nextIndex - 1
 		}
 	}
 	if run.Status == StatusRunning {

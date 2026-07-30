@@ -17,6 +17,7 @@ import {
   restoreMonitorRevision,
 } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/monitors/$monitorId/revisions")({
   loader: ({ params }) =>
@@ -29,7 +30,7 @@ function RevisionsPage() {
   const [compare, setCompare] = useState<Set<string>>(new Set())
   const selected = revisions.filter((revision) => compare.has(revision.id))
   return (
-    <div className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer>
       <Button
         render={<Link to="/monitors" />}
         nativeButton={false}
@@ -105,7 +106,7 @@ function RevisionsPage() {
           />
         ))}
       </div>
-    </div>
+    </PageContainer>
   )
 }
 function RevisionRow({

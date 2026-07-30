@@ -9,6 +9,7 @@ import {
 } from "@/components/operational-status"
 import { getELFRun } from "@/lib/api-client/elf"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/elf/run/$runId")({
   loader: ({ params }) => getELFRun({ data: { runId: params.runId } }),
@@ -18,7 +19,7 @@ export const Route = createFileRoute("/elf/run/$runId")({
 function ELFRunDetail() {
   const run = Route.useLoaderData()
   return (
-    <main className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <Button
         nativeButton={false}
         render={<Link to="/elf/runs" />}
@@ -133,7 +134,7 @@ function ELFRunDetail() {
           </section>
         </div>
       </div>
-    </main>
+    </PageContainer>
   )
 }
 

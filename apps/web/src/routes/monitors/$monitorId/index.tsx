@@ -20,6 +20,7 @@ import {
 } from "@/lib/api-client/monitors"
 import { listUnifiedAlerts } from "@/lib/api-client/opensearch-alerts"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/monitors/$monitorId/")({
   loader: async ({ params }) => {
@@ -91,7 +92,7 @@ function MonitorOverview() {
   }
 
   return (
-    <main className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <header className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <div className="flex flex-wrap items-center gap-2">
@@ -251,7 +252,7 @@ function MonitorOverview() {
           </dl>
         </section>
       </div>
-    </main>
+    </PageContainer>
   )
 }
 

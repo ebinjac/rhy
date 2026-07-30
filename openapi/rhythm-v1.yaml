@@ -13,6 +13,8 @@ tags:
   - name: Monitors
   - name: Runs
   - name: Applications
+  - name: Alerts
+  - name: Dynatrace
   - name: ELF
   - name: Deployment validation
 paths:
@@ -127,11 +129,20 @@ paths:
           application/json:
             schema:
               type: object
-              required: [deploymentStart]
+              required: [deployment]
               properties:
-                deploymentStart: { type: string, format: date-time }
                 baselineWindow: { type: string, enum: [24h, 7d, 30d] }
-                postSamples: { type: integer, minimum: 3, maximum: 50 }
+                sampleCount: { type: integer, minimum: 3, maximum: 50 }
+                sampleIntervalSeconds: { type: integer, minimum: 1, maximum: 300 }
+                deployment:
+                  type: object
+                  required: [deploymentStart]
+                  properties:
+                    deploymentStart: { type: string, format: date-time }
+                    deploymentCompletedAt:
+                      type: string
+                      format: date-time
+                      description: Required when the suite contains a Dynatrace infrastructure check.
       responses:
         "202":
           description: Deployment validation queued
@@ -139,6 +150,296 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+  /api/v1/applications/{applicationId}/environments:
+    get:
+      tags: [Dynatrace]
+      operationId: listApplicationEnvironments
+      summary: List Environment profile bindings for an application
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [Dynatrace]
+      operationId: createApplicationEnvironment
+      summary: Bind an Environment profile to an application
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [environmentProfileId]
+              properties:
+                environmentProfileId: { type: string, format: uuid }
+                enabled: { type: boolean, default: true }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}:
+    patch:
+      tags: [Dynatrace]
+      operationId: updateApplicationEnvironment
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [environmentProfileId]
+              properties:
+                environmentProfileId: { type: string, format: uuid }
+                enabled: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    delete:
+      tags: [Dynatrace]
+      operationId: deleteApplicationEnvironment
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "204": { description: Environment binding deleted }
+  /api/v1/applications/{applicationId}/dynatrace/context:
+    post:
+      tags: [Dynatrace]
+      operationId: ensureApplicationDynatraceContext
+      summary: Prepare the internal Dynatrace context from application metadata
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace:
+    get:
+      tags: [Dynatrace]
+      operationId: getApplicationDynatrace
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [Dynatrace]
+      operationId: saveApplicationDynatrace
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DynatraceConfigurationInput" }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/test:
+    post:
+      tags: [Dynatrace]
+      operationId: testApplicationDynatrace
+      summary: Verify entities.read and metrics.read using the effective credential
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/management-zones:
+    get:
+      tags: [Dynatrace]
+      operationId: listDynatraceManagementZones
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources:
+    get:
+      tags: [Dynatrace]
+      operationId: getDynatraceResourcePreview
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+        - name: serviceId
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources/preview:
+    post:
+      tags: [Dynatrace]
+      operationId: previewDynatraceResources
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                serviceId: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources/discover:
+    post:
+      tags: [Dynatrace]
+      operationId: discoverDynatraceResources
+      summary: Discover selectable Hydra workloads or TIMS servers
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [platform]
+              properties:
+                platform: { type: string, enum: [HYDRA, TIMS] }
+                managementZones:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "502": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/rules:
+    get:
+      tags: [Dynatrace]
+      operationId: listDynatraceRules
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    put:
+      tags: [Dynatrace]
+      operationId: saveDynatraceRules
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/DynatraceRule" }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/query:
+    post:
+      tags: [Dynatrace]
+      operationId: queryApplicationDynatrace
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [timeFrom, timeTo]
+              properties:
+                serviceId: { type: string, format: uuid }
+                platform: { type: string, enum: [HYDRA, TIMS] }
+                timeFrom: { type: string, format: date-time }
+                timeTo: { type: string, format: date-time }
+                resolution: { type: string, example: 1m }
+                deploymentRunId: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/applications/{applicationId}/services/{serviceId}/environments/{environmentBindingId}/dynatrace:
+    get:
+      tags: [Dynatrace]
+      operationId: getServiceDynatrace
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/ServiceId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    put:
+      tags: [Dynatrace]
+      operationId: saveServiceDynatrace
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/ServiceId"
+        - $ref: "#/components/parameters/EnvironmentBindingId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/applications/{applicationId}/opensearch-alerts/service-assignment:
+    post:
+      tags: [Alerts]
+      operationId: assignOpenSearchAlertsToService
+      summary: Tag selected OpenSearch receiver alerts to an application service
+      parameters:
+        - $ref: "#/components/parameters/ApplicationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OpenSearchAlertServiceAssignmentInput"
+      responses:
+        "200":
+          description: Alerts were assigned atomically
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/OpenSearchAlertServiceAssignmentResult"
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/dynatrace/runs:
+    get:
+      tags: [Dynatrace]
+      operationId: listDynatraceRuns
+      parameters:
+        - { name: applicationId, in: query, schema: { type: string, format: uuid } }
+        - { name: environmentBindingId, in: query, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/dynatrace/runs/{runId}:
+    get:
+      tags: [Dynatrace]
+      operationId: getDynatraceRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/dynatrace/runs/{runId}/cancel:
+    post:
+      tags: [Dynatrace]
+      operationId: cancelDynatraceRun
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "202": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     bearerAuth:
@@ -156,6 +457,26 @@ components:
       schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
     MonitorId:
       name: monitorId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ApplicationId:
+      name: applicationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EnvironmentBindingId:
+      name: environmentBindingId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    ServiceId:
+      name: serviceId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    RunId:
+      name: runId
       in: path
       required: true
       schema: { type: string, format: uuid }
@@ -203,3 +524,99 @@ components:
           properties:
             nextCursor: { type: [string, "null"] }
             limit: { type: integer }
+    OpenSearchAlertServiceAssignmentInput:
+      type: object
+      additionalProperties: false
+      required: [alertIds, serviceId]
+      properties:
+        alertIds:
+          type: array
+          minItems: 1
+          maxItems: 200
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        serviceId:
+          description: Application service UUID, or an empty string to clear the assignment.
+          anyOf:
+            - type: string
+              format: uuid
+            - const: ""
+    OpenSearchAlertServiceAssignmentResult:
+      type: object
+      required: [assignedCount]
+      properties:
+        assignedCount: { type: integer, minimum: 0, maximum: 200 }
+        serviceId: { type: string, format: uuid }
+        serviceName: { type: string }
+    DynatraceConfigurationInput:
+      type: object
+      required: [connectionProfileId, platforms, managementZones, metricMappings, resourceMappings, rules]
+      properties:
+        connectionProfileId: { type: string, format: uuid }
+        credentialSecretRef:
+          type: string
+          description: A secret:// reference; resolved values are never accepted or returned.
+        platforms:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [HYDRA, TIMS] }
+        managementZones:
+          type: array
+          items: { type: string }
+        metricMappings:
+          type: object
+          description: Platform-specific base metrics. Rhythm compiles AVG and MAX selectors with the governed Hydra or TIMS split dimension.
+          properties:
+            cpu: { type: string }
+            memory: { type: string }
+            hydraCpu:
+              type: string
+              default: builtin:containers.cpu.usagePercent
+            hydraMemory:
+              type: string
+              default: builtin:containers.memory.usagePercent
+            timsCpu:
+              type: string
+              default: builtin:host.cpu.usage
+            timsMemory:
+              type: string
+              default: builtin:host.mem.usage
+        baselineWindowSeconds: { type: integer, minimum: 300, maximum: 2592000 }
+        stabilizationSeconds: { type: integer, minimum: 0, maximum: 86400 }
+        postWindowSeconds: { type: integer, minimum: 60, maximum: 86400 }
+        enabled: { type: boolean }
+        resourceMappings:
+          type: array
+          items: { $ref: "#/components/schemas/DynatraceResourceMapping" }
+        rules:
+          type: array
+          items: { $ref: "#/components/schemas/DynatraceRule" }
+    DynatraceResourceMapping:
+      type: object
+      required: [platform, entityType, mappingType, value]
+      properties:
+        serviceId: { type: string, format: uuid }
+        platform: { type: string, enum: [HYDRA, TIMS] }
+        entityType: { type: string }
+        mappingType:
+          type: string
+          enum: [ENTITY_ID, TAG, HOST_GROUP, NAMESPACE, WORKLOAD, CONTAINER_GROUP, CLUSTER, HOST]
+        value: { type: string, maxLength: 500 }
+        label: { type: string }
+        enabled: { type: boolean, default: true }
+    DynatraceRule:
+      type: object
+      required: [name, metric, statistic, operator, threshold, comparison, scope, gateMode]
+      properties:
+        serviceId: { type: string, format: uuid }
+        name: { type: string }
+        metric: { type: string, enum: [CPU, MEMORY] }
+        statistic: { type: string, enum: [AVERAGE, MAXIMUM, LATEST, P50, P95] }
+        operator: { type: string, enum: [GT, GTE, LT, LTE, EQ] }
+        threshold: { type: number }
+        comparison: { type: string, enum: [ABSOLUTE, BASELINE_ABSOLUTE, BASELINE_PERCENT] }
+        scope: { type: string, enum: [APPLICATION, SERVICE, RESOURCE] }
+        gateMode: { type: string, enum: [ADVISORY, BLOCKING] }
+        minimumCoveragePercent: { type: number, minimum: 0, maximum: 100 }
+        consecutivePoints: { type: integer, minimum: 1 }
+        enabled: { type: boolean }

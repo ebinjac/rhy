@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -30,6 +30,14 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@workspace/ui/components/table"
+import {
   Archive,
   ChartNoAxesCombined,
   Check,
@@ -48,21 +56,32 @@ import {
   Search,
   Trash2,
   TriangleAlert,
+  Upload,
   Workflow,
 } from "lucide-react"
 
+import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
+import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
 import type { MonitorStatus } from "@/features/monitors/seed-data"
 import {
-  fromMonitorSummaryStatus,
+  effectiveMonitorListStatus,
+  listMonitorOperationalStatus,
   OperationalStatusBadge,
 } from "@/components/operational-status"
 import {
+  createMonitor,
   listMonitors,
   mutateMonitor,
   permanentlyDeleteMonitors,
   runMonitor,
 } from "@/lib/api-client/monitors"
+import { PageContainer } from "@/components/page-container"
 
+/**
+ * List filtering uses URL search params as the source of truth with client-side
+ * matching. The monitors API does not yet accept q/status/applicationId/page —
+ * extend GET /api/v1/monitors when server-backed filtering is needed.
+ */
 export const Route = createFileRoute("/monitors/")({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.q === "string" && search.q ? { q: search.q } : {}),
@@ -88,6 +107,11 @@ const STATUS_FILTER_OPTIONS: [MonitorStatus, string][] = [
   ["unknown", "Unknown"],
 ]
 
+const FILTER_ALL_LABELS: Record<string, string> = {
+  Status: "All statuses",
+  Application: "All applications",
+}
+
 function MonitorsPage() {
   const { monitors, applications } = Route.useLoaderData()
   const search = Route.useSearch()
@@ -102,11 +126,18 @@ function MonitorsPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState("")
   const [bulkPending, setBulkPending] = useState("")
+  const [importOpen, setImportOpen] = useState(false)
+  const importCreationId = useRef("")
   const normalizedQuery = query.trim().toLowerCase()
+  const hasActiveFilters = Boolean(normalizedQuery || status || applicationId)
   const filtered = useMemo(
     () =>
       monitors.filter((monitor) => {
-        if (status && monitor.status !== status) return false
+        const listStatus = effectiveMonitorListStatus(
+          monitor.status,
+          monitor.successRate
+        )
+        if (status && listStatus !== status) return false
         if (applicationId && monitor.applicationId !== applicationId)
           return false
         if (!normalizedQuery) return true
@@ -115,6 +146,7 @@ function MonitorsPage() {
           monitor.description,
           monitor.application,
           monitor.slug,
+          ...monitor.tags,
         ].some((value) => value.toLowerCase().includes(normalizedQuery))
       }),
     [monitors, status, applicationId, normalizedQuery]
@@ -172,6 +204,55 @@ function MonitorsPage() {
     setDeleteOpen(true)
   }
 
+  async function importMonitor(draft: ImportedMonitorDraft) {
+    importCreationId.current ||= crypto.randomUUID()
+    const name = draft.name.slice(0, 255)
+    const result = await createMonitor({
+      data: {
+        creationId: importCreationId.current,
+        name,
+        slug: uniqueImportSlug(name, monitors.map((monitor) => monitor.slug)),
+        description: draft.description.slice(0, 2000),
+        ownerId: "",
+        tags: ["imported", draft.source],
+        definition: draft.definition,
+        enabled: false,
+        schedule: {
+          type: "MANUAL",
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+          jitterSeconds: 0,
+          concurrencyPolicy: "SKIP_IF_RUNNING",
+          missedRunPolicy: "SKIP",
+        },
+      },
+    })
+    if (!result.ok) {
+      if (result.monitorId) {
+        const monitorId = result.monitorId
+        importCreationId.current = ""
+        toast.warning(
+          `${result.message} The imported draft is available for review.`
+        )
+        await router.invalidate()
+        await navigate({
+          to: "/monitors/$monitorId/edit",
+          params: { monitorId },
+        })
+        return
+      }
+      throw new Error(result.message)
+    }
+    importCreationId.current = ""
+    toast.success(
+      `${draft.source === "postman" ? "Postman collection" : "cURL request"} imported as a draft monitor.`
+    )
+    await router.invalidate()
+    await navigate({
+      to: "/monitors/$monitorId/edit",
+      params: { monitorId: result.monitor.id },
+    })
+  }
+
   async function confirmDelete() {
     setDeleting(true)
     setDeleteError("")
@@ -222,8 +303,24 @@ function MonitorsPage() {
   const targetNames = monitors
     .filter((monitor) => deleteTargets.includes(monitor.id))
     .map((monitor) => monitor.name)
+
+  function SelectAllCheckbox() {
+    return (
+      <Checkbox
+        aria-label="Select all visible monitors"
+        aria-checked={
+          someVisibleSelected && !allVisibleSelected
+            ? "mixed"
+            : allVisibleSelected
+        }
+        checked={allVisibleSelected}
+        onCheckedChange={(checked) => toggleAllVisible(checked === true)}
+      />
+    )
+  }
+
   return (
-    <div className="mx-auto max-w-[1480px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer>
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">
@@ -233,13 +330,23 @@ function MonitorsPage() {
             Define, publish, and operate synthetic API workflows.
           </p>
         </div>
-        <Button
-          render={<Link to="/monitors/new" />}
-          nativeButton={false}
-          size="lg"
-        >
-          <Plus data-icon="inline-start" /> New monitor
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="lg"
+            onClick={() => setImportOpen(true)}
+          >
+            <Upload data-icon="inline-start" /> Import
+          </Button>
+          <Button
+            render={<Link to="/monitors/new" />}
+            nativeButton={false}
+            size="lg"
+          >
+            <Plus data-icon="inline-start" /> New monitor
+          </Button>
+        </div>
       </div>
 
       <div className="mt-7 flex flex-col gap-3 border-b pb-4 lg:flex-row lg:items-center">
@@ -251,7 +358,7 @@ function MonitorsPage() {
           <Input
             aria-label="Search monitors"
             className="h-9 pl-9"
-            placeholder="Search by name or tag"
+            placeholder="Search by name, application, slug, or tag"
             value={query}
             onChange={(event) => updateSearch({ q: event.target.value })}
           />
@@ -336,112 +443,272 @@ function MonitorsPage() {
         </p>
       ) : null}
 
-      <div className="mt-4 overflow-hidden rounded-xl border">
-        <div className="hidden grid-cols-[24px_minmax(270px,1.5fr)_115px_120px_110px_100px_90px] gap-4 border-b bg-muted/45 px-4 py-2.5 text-xs font-medium text-muted-foreground lg:grid">
-          <Checkbox
-            aria-label="Select all visible monitors"
-            aria-checked={
-              someVisibleSelected && !allVisibleSelected
-                ? "mixed"
-                : allVisibleSelected
-            }
-            checked={allVisibleSelected}
-            onCheckedChange={(checked) => toggleAllVisible(checked === true)}
-          />
-          <span>Monitor</span>
-          <span>Status</span>
-          <span>Application</span>
-          <span>Success · 24h</span>
-          <span>Last run</span>
-          <span className="text-right">Actions</span>
+      {visible.length ? (
+        <div className="mt-4 flex items-center gap-3 rounded-xl border border-b-0 rounded-b-none bg-muted/45 px-4 py-2.5 lg:hidden">
+          <SelectAllCheckbox />
+          <span className="text-xs font-medium text-muted-foreground">
+            Select all on this page
+          </span>
         </div>
-        {visible.map((monitor) => (
-          <div
-            className={`grid grid-cols-[24px_1fr] gap-3 border-b px-4 py-4 last:border-b-0 hover:bg-muted/25 lg:grid-cols-[24px_minmax(270px,1.5fr)_115px_120px_110px_100px_90px] lg:items-center lg:gap-4 ${selected.has(monitor.id) ? "bg-primary/5" : ""}`}
-            key={monitor.id}
-          >
-            <Checkbox
-              aria-label={`Select ${monitor.name}`}
-              checked={selected.has(monitor.id)}
-              onCheckedChange={(checked) =>
-                toggleMonitor(monitor.id, checked === true)
-              }
-            />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <Workflow
-                  aria-hidden="true"
-                  className="size-4 shrink-0 text-muted-foreground"
-                />
-                <Link
-                  className="truncate text-sm font-medium hover:underline"
-                  params={{ monitorId: monitor.id }}
-                  to="/monitors/$monitorId"
+      ) : null}
+
+      <div
+        className={`overflow-hidden rounded-xl border ${visible.length ? "mt-0 rounded-t-none border-t-0 lg:mt-4 lg:rounded-t-xl lg:border-t" : "mt-4"}`}
+      >
+        <div className="hidden lg:block">
+          <Table>
+            <TableHeader>
+              <TableRow className="bg-muted/45 hover:bg-muted/45">
+                <TableHead className="w-10">
+                  <SelectAllCheckbox />
+                </TableHead>
+                <TableHead>Monitor</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Application</TableHead>
+                <TableHead>Success · 24h</TableHead>
+                <TableHead>Last run</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {visible.map((monitor) => (
+                <TableRow
+                  className={
+                    selected.has(monitor.id) ? "bg-primary/5" : undefined
+                  }
+                  key={`desktop-${monitor.id}`}
                 >
-                  {monitor.name}
-                </Link>
+                  <TableCell>
+                    <Checkbox
+                      aria-label={`Select ${monitor.name}`}
+                      checked={selected.has(monitor.id)}
+                      onCheckedChange={(checked) =>
+                        toggleMonitor(monitor.id, checked === true)
+                      }
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Workflow
+                          aria-hidden="true"
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                        <Link
+                          className="truncate text-sm font-medium hover:underline"
+                          params={{ monitorId: monitor.id }}
+                          to="/monitors/$monitorId"
+                        >
+                          {monitor.name}
+                        </Link>
+                      </div>
+                      <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
+                        {monitor.description}
+                      </p>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <OperationalStatusBadge
+                      status={listMonitorOperationalStatus(
+                        monitor.status,
+                        monitor.successRate
+                      )}
+                    />
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {monitor.application}
+                  </TableCell>
+                  <TableCell>
+                    <AvailabilityValue value={monitor.successRate} />
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {monitor.lastRun}
+                  </TableCell>
+                  <TableCell>
+                    <div className="flex justify-end gap-1">
+                      <RunButton monitor={monitor} />
+                      <Button
+                        aria-label={`View run history for ${monitor.name}`}
+                        render={
+                          <Link
+                            params={{ monitorId: monitor.id }}
+                            to="/monitors/$monitorId/runs"
+                          />
+                        }
+                        nativeButton={false}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <History />
+                      </Button>
+                      <Button
+                        aria-label={`View metrics for ${monitor.name}`}
+                        render={
+                          <Link
+                            params={{ monitorId: monitor.id }}
+                            to="/monitors/$monitorId/metrics"
+                          />
+                        }
+                        nativeButton={false}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <ChartNoAxesCombined />
+                      </Button>
+                      <MonitorActions
+                        monitor={monitor}
+                        onDelete={() => requestDelete([monitor.id])}
+                      />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        <ul className="divide-y lg:hidden">
+          {visible.map((monitor) => (
+            <li
+              className={`grid grid-cols-[24px_1fr] gap-3 px-4 py-4 ${selected.has(monitor.id) ? "bg-primary/5" : ""}`}
+              key={`mobile-${monitor.id}`}
+            >
+              <Checkbox
+                aria-label={`Select ${monitor.name}`}
+                checked={selected.has(monitor.id)}
+                onCheckedChange={(checked) =>
+                  toggleMonitor(monitor.id, checked === true)
+                }
+              />
+              <div className="min-w-0 space-y-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Workflow
+                      aria-hidden="true"
+                      className="size-4 shrink-0 text-muted-foreground"
+                    />
+                    <Link
+                      className="truncate text-sm font-medium hover:underline"
+                      params={{ monitorId: monitor.id }}
+                      to="/monitors/$monitorId"
+                    >
+                      {monitor.name}
+                    </Link>
+                  </div>
+                  <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
+                    {monitor.description}
+                  </p>
+                  <p className="mt-1 pl-6 text-xs text-muted-foreground">
+                    {monitor.cadence}
+                  </p>
+                </div>
+                <dl className="grid gap-2 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-xs font-medium text-muted-foreground">
+                      Status
+                    </dt>
+                    <dd>
+                      <OperationalStatusBadge
+                        status={listMonitorOperationalStatus(
+                          monitor.status,
+                          monitor.successRate
+                        )}
+                      />
+                    </dd>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-xs font-medium text-muted-foreground">
+                      Application
+                    </dt>
+                    <dd className="text-muted-foreground">
+                      {monitor.application}
+                    </dd>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-xs font-medium text-muted-foreground">
+                      Success · 24h
+                    </dt>
+                    <dd>
+                      <AvailabilityValue value={monitor.successRate} />
+                    </dd>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <dt className="text-xs font-medium text-muted-foreground">
+                      Last run
+                    </dt>
+                    <dd className="text-muted-foreground">{monitor.lastRun}</dd>
+                  </div>
+                </dl>
+                <div className="flex justify-end gap-1">
+                  <RunButton monitor={monitor} />
+                  <Button
+                    aria-label={`View run history for ${monitor.name}`}
+                    render={
+                      <Link
+                        params={{ monitorId: monitor.id }}
+                        to="/monitors/$monitorId/runs"
+                      />
+                    }
+                    nativeButton={false}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <History />
+                  </Button>
+                  <Button
+                    aria-label={`View metrics for ${monitor.name}`}
+                    render={
+                      <Link
+                        params={{ monitorId: monitor.id }}
+                        to="/monitors/$monitorId/metrics"
+                      />
+                    }
+                    nativeButton={false}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <ChartNoAxesCombined />
+                  </Button>
+                  <MonitorActions
+                    monitor={monitor}
+                    onDelete={() => requestDelete([monitor.id])}
+                  />
+                </div>
               </div>
-              <p className="mt-1 truncate pl-6 text-xs text-muted-foreground">
-                {monitor.description}
-              </p>
-              <p className="mt-1 pl-6 text-xs text-muted-foreground lg:hidden">
-                {monitor.application} · {monitor.cadence}
-              </p>
-            </div>
-            <div className="col-start-2 lg:col-auto">
-              <OperationalStatusBadge
-                status={fromMonitorSummaryStatus(monitor.status)}
-              />
-            </div>
-            <span className="col-start-2 text-sm text-muted-foreground lg:col-auto">
-              {monitor.application}
-            </span>
-            <AvailabilityCell value={monitor.successRate} />
-            <span className="col-start-2 text-sm text-muted-foreground lg:col-auto">
-              {monitor.lastRun}
-            </span>
-            <div className="col-start-2 flex justify-end gap-1 lg:col-auto">
-              <RunButton monitor={monitor} />
+            </li>
+          ))}
+        </ul>
+
+        {!monitors.length ? (
+          <div className="px-6 py-12 text-center">
+            <p className="text-sm font-medium">No monitors yet</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Create a monitor to start publishing and operating synthetic API
+              workflows.
+            </p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
               <Button
-                aria-label={`View run history for ${monitor.name}`}
-                render={
-                  <Link
-                    params={{ monitorId: monitor.id }}
-                    to="/monitors/$monitorId/runs"
-                  />
-                }
-                nativeButton={false}
-                size="icon-sm"
-                variant="ghost"
+                type="button"
+                variant="outline"
+                onClick={() => setImportOpen(true)}
               >
-                <History />
+                <Upload data-icon="inline-start" /> Import collection
               </Button>
               <Button
-                aria-label={`View metrics for ${monitor.name}`}
-                render={
-                  <Link
-                    params={{ monitorId: monitor.id }}
-                    to="/monitors/$monitorId/metrics"
-                  />
-                }
+                render={<Link to="/monitors/new" />}
                 nativeButton={false}
-                size="icon-sm"
-                variant="ghost"
               >
-                <ChartNoAxesCombined />
+                <Plus data-icon="inline-start" /> New monitor
               </Button>
-              <MonitorActions
-                monitor={monitor}
-                onDelete={() => requestDelete([monitor.id])}
-              />
             </div>
           </div>
-        ))}
-        {!filtered.length ? (
+        ) : !filtered.length ? (
           <div className="px-6 py-12 text-center">
-            <p className="text-sm font-medium">No monitors found</p>
+            <p className="text-sm font-medium">No monitors match</p>
             <p className="mt-1 text-xs text-muted-foreground">
-              Try a different name, application, tag, or slug.
+              {hasActiveFilters
+                ? "Try a different name, application, slug, tag, or clear filters."
+                : "Try a different name, application, slug, or tag."}
             </p>
           </div>
         ) : null}
@@ -542,8 +809,32 @@ function MonitorsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+      <MonitorImportDialog
+        open={importOpen}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) importCreationId.current = ""
+          setImportOpen(nextOpen)
+        }}
+        onImport={importMonitor}
+        actionLabel="Import as draft"
+      />
+    </PageContainer>
   )
+}
+
+function uniqueImportSlug(name: string, existing: string[]) {
+  const base =
+    name
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 220) || "imported-monitor"
+  const used = new Set(existing)
+  if (!used.has(base)) return base
+  let suffix = 2
+  while (used.has(`${base}-${suffix}`)) suffix += 1
+  return `${base}-${suffix}`
 }
 
 function positivePage(value: unknown) {
@@ -563,18 +854,12 @@ function availabilityToneClass(value: number) {
   return "text-destructive"
 }
 
-function AvailabilityCell({ value }: { value: number | null }) {
+function AvailabilityValue({ value }: { value: number | null }) {
   if (value === null || Number.isNaN(value)) {
-    return (
-      <span className="col-start-2 text-sm text-muted-foreground lg:col-auto">
-        Not captured
-      </span>
-    )
+    return <span className="text-sm text-muted-foreground">Not captured</span>
   }
   return (
-    <span
-      className={`col-start-2 font-mono text-sm lg:col-auto ${availabilityToneClass(value)}`}
-    >
+    <span className={`font-mono text-sm ${availabilityToneClass(value)}`}>
       {formatAvailabilityPercent(value)}
     </span>
   )
@@ -784,7 +1069,7 @@ function ListFilter({
   onChange: (value: string) => void
   options: string[][]
 }) {
-  const allLabel = `All ${label.toLowerCase()}s`
+  const allLabel = FILTER_ALL_LABELS[label] ?? `All ${label.toLowerCase()}`
   return (
     <label className="text-xs font-medium">
       <span className="sr-only">{label}</span>

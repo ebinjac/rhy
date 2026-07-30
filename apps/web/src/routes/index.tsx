@@ -18,6 +18,7 @@ import {
   Check,
   CircleAlert,
   FileSearch,
+  Info,
   Plus,
   Rocket,
   Settings2,
@@ -26,9 +27,11 @@ import {
 } from "lucide-react"
 
 import { SystemNotice } from "@/components/app-shell/app-shell"
+import { PageContainer } from "@/components/page-container"
 import { OnboardingChecklist } from "@/components/onboarding-checklist"
 import {
-  fromMonitorSummaryStatus,
+  effectiveMonitorListStatus,
+  listMonitorOperationalStatus,
   OperationalStatusBadge,
 } from "@/components/operational-status"
 import type { OnboardingStep } from "@/components/onboarding-checklist"
@@ -130,12 +133,20 @@ function OverviewPage() {
     (alert) => alert.severity === "CRITICAL" || alert.severity === "HIGH"
   )
   const enabled = monitors.filter((monitor) => monitor.enabled)
-  const healthy = enabled.filter((monitor) => monitor.status === "healthy")
+  const listStatusOf = (monitor: MonitorSummary) =>
+    effectiveMonitorListStatus(monitor.status, monitor.successRate)
+  const healthy = enabled.filter(
+    (monitor) => listStatusOf(monitor) === "healthy"
+  )
   const attentionMonitors = monitors
-    .filter(
-      (monitor) => monitor.status === "failing" || monitor.status === "warning"
+    .filter((monitor) => {
+      const listStatus = listStatusOf(monitor)
+      return listStatus === "failing" || listStatus === "warning"
+    })
+    .sort(
+      (left, right) =>
+        statusRank(listStatusOf(left)) - statusRank(listStatusOf(right))
     )
-    .sort((left, right) => statusRank(left.status) - statusRank(right.status))
   const failedRuns = runs.filter((run) => FAILED_RUN_STATUSES.has(run.status))
   const recentDeployments = [...deployments]
     .sort(
@@ -156,19 +167,33 @@ function OverviewPage() {
 
   const visibleMonitors = useMemo(() => {
     const sorted = [...monitors].sort(
-      (left, right) => statusRank(left.status) - statusRank(right.status)
+      (left, right) =>
+        statusRank(
+          effectiveMonitorListStatus(left.status, left.successRate)
+        ) -
+        statusRank(
+          effectiveMonitorListStatus(right.status, right.successRate)
+        )
     )
     if (focus === "healthy") {
-      return sorted.filter((monitor) => monitor.status === "healthy")
+      return sorted.filter(
+        (monitor) =>
+          effectiveMonitorListStatus(monitor.status, monitor.successRate) ===
+          "healthy"
+      )
     }
     if (focus === "attention") {
-      const needing = sorted.filter(
-        (monitor) =>
-          monitor.status === "failing" ||
-          monitor.status === "warning" ||
-          monitor.status === "unknown"
-      )
-      return needing.length ? needing : sorted.slice(0, 6)
+      return sorted.filter((monitor) => {
+        const listStatus = effectiveMonitorListStatus(
+          monitor.status,
+          monitor.successRate
+        )
+        return (
+          listStatus === "failing" ||
+          listStatus === "warning" ||
+          listStatus === "unknown"
+        )
+      })
     }
     return sorted
   }, [monitors, focus])
@@ -222,7 +247,7 @@ function OverviewPage() {
   return (
     <>
       <SystemNotice alert={activeAlerts[0]} alertCount={activeAlerts.length} />
-      <div className="mx-auto max-w-[1480px] px-4 py-6 md:px-6 md:py-8">
+      <PageContainer>
         <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
             <p className="mb-1 text-sm text-muted-foreground">
@@ -236,19 +261,6 @@ function OverviewPage() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            {activeAlerts.length ? (
-              <Button
-                render={<Link to="/alerts" />}
-                nativeButton={false}
-                variant="outline"
-              >
-                <CircleAlert data-icon="inline-start" />
-                Open alerts
-                <Badge className="ml-1" variant="secondary">
-                  {activeAlerts.length}
-                </Badge>
-              </Button>
-            ) : null}
             <Button
               render={<Link to="/monitors/new" />}
               nativeButton={false}
@@ -291,17 +303,27 @@ function OverviewPage() {
                   enabled.length ? `${healthy.length}/${enabled.length}` : "—"
                 }
                 tone={
-                  attentionMonitors.some((m) => m.status === "failing")
+                  attentionMonitors.some(
+                    (m) => listStatusOf(m) === "failing"
+                  )
                     ? "danger"
-                    : healthy.length === enabled.length && enabled.length
-                      ? "success"
-                      : "default"
+                    : attentionMonitors.length
+                      ? "warning"
+                      : healthy.length === enabled.length && enabled.length
+                        ? "success"
+                        : "default"
                 }
               />
               <Stat
                 label="Open alerts"
                 value={String(activeAlerts.length)}
-                tone={activeAlerts.length ? "danger" : "default"}
+                tone={
+                  criticalAlerts.length
+                    ? "danger"
+                    : activeAlerts.length
+                      ? "warning"
+                      : "default"
+                }
               />
               <Stat label="Applications" value={String(applications.length)} />
             </dl>
@@ -319,54 +341,47 @@ function OverviewPage() {
                     id="alerts-heading"
                     title="Needs triage"
                     description="Open and acknowledged alerts waiting on a decision."
-                    action={
-                      <Button
-                        render={<Link to="/alerts" />}
-                        nativeButton={false}
-                        variant="ghost"
-                      >
-                        Alert inbox <ArrowRight data-icon="inline-end" />
-                      </Button>
-                    }
                   />
                   <ul className="mt-4 divide-y rounded-xl border">
-                    {activeAlerts.slice(0, 5).map((alert) => (
-                      <li key={alert.id}>
-                        <Link
-                          to="/alerts"
-                          className="flex items-start gap-3 px-4 py-3.5 transition-colors duration-150 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
-                        >
-                          <div className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-full bg-destructive/10 text-destructive">
-                            <CircleAlert className="size-3.5" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">
-                              {alert.sourceType === "OPENSEARCH_ALERTING"
-                                ? alert.title
-                                : alert.monitorName || alert.title}
-                            </p>
-                            <p className="mt-1 truncate text-xs text-muted-foreground">
-                              {alert.applicationName || "Unassigned"} ·{" "}
-                              {alert.severity.toLowerCase()} ·{" "}
-                              {alert.consecutiveFailures
-                                ? `${alert.consecutiveFailures} consecutive`
-                                : alert.state.toLowerCase()}
-                            </p>
-                          </div>
-                          <Badge
-                            className={
-                              alert.severity === "CRITICAL" ||
-                              alert.severity === "HIGH"
-                                ? "bg-destructive/10 text-destructive"
-                                : "bg-warning-soft text-warning-foreground"
-                            }
-                            variant="secondary"
+                    {activeAlerts.slice(0, 5).map((alert) => {
+                      const chrome = alertSeverityChrome(alert.severity)
+                      const Icon = chrome.icon
+                      return (
+                        <li key={alert.id}>
+                          <Link
+                            to="/alerts"
+                            hash={`alert-${alert.id}`}
+                            className="flex items-start gap-3 px-4 py-3.5 transition-colors duration-150 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
                           >
-                            {alert.state.toLowerCase()}
-                          </Badge>
-                        </Link>
-                      </li>
-                    ))}
+                            <div
+                              className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-full ${chrome.surface}`}
+                            >
+                              <Icon className="size-3.5" aria-hidden="true" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium">
+                                {alert.sourceType === "OPENSEARCH_ALERTING"
+                                  ? alert.title
+                                  : alert.monitorName || alert.title}
+                              </p>
+                              <p className="mt-1 truncate text-xs text-muted-foreground">
+                                {alert.applicationName || "Unassigned"} ·{" "}
+                                {alert.severity.toLowerCase()} ·{" "}
+                                {alert.consecutiveFailures
+                                  ? `${alert.consecutiveFailures} consecutive`
+                                  : alert.state.toLowerCase()}
+                              </p>
+                            </div>
+                            <Badge
+                              className={chrome.badge}
+                              variant="secondary"
+                            >
+                              {alert.state.toLowerCase()}
+                            </Badge>
+                          </Link>
+                        </li>
+                      )
+                    })}
                   </ul>
                 </section>
               ) : null}
@@ -375,7 +390,13 @@ function OverviewPage() {
                 <SectionHeader
                   id="monitors-heading"
                   title="Monitor health"
-                  description="Failing and warning workflows first, then the rest of the fleet."
+                  description={
+                    focus === "attention"
+                      ? "Monitors that are failing, degraded, or missing a recent signal."
+                      : focus === "healthy"
+                        ? "Monitors meeting health and ≥99% success over the last 24 hours."
+                        : "Fleet status with success rate over the last 24 hours."
+                  }
                   action={
                     <div className="flex items-center gap-2">
                       <Select
@@ -385,16 +406,18 @@ function OverviewPage() {
                         }
                       >
                         <SelectTrigger
-                          aria-label="Filter monitors"
-                          className="w-[140px]"
+                          aria-label="Filter monitors by health"
+                          className="min-h-11 w-[168px] touch-manipulation md:min-h-7"
                           size="sm"
                         >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="attention">Attention</SelectItem>
-                          <SelectItem value="all">All</SelectItem>
-                          <SelectItem value="healthy">Healthy</SelectItem>
+                          <SelectItem value="attention">
+                            Needs attention
+                          </SelectItem>
+                          <SelectItem value="all">All monitors</SelectItem>
+                          <SelectItem value="healthy">Healthy only</SelectItem>
                         </SelectContent>
                       </Select>
                       <Button
@@ -409,57 +432,174 @@ function OverviewPage() {
                 />
 
                 <div className="mt-4 overflow-hidden rounded-xl border">
-                  <div className="hidden grid-cols-[minmax(220px,1.5fr)_100px_110px_100px_90px] gap-4 border-b bg-muted/45 px-4 py-2.5 text-xs font-medium text-muted-foreground md:grid">
-                    <span>Monitor</span>
-                    <span>State</span>
-                    <span>Last run</span>
-                    <span>Success · 24h</span>
-                    <span className="text-right">Latency</span>
+                  <div className="hidden md:block">
+                    <div className="grid grid-cols-[minmax(220px,1.5fr)_100px_110px_100px_90px] gap-4 border-b bg-muted/45 px-4 py-2.5 text-xs font-medium text-muted-foreground">
+                      <span>Monitor</span>
+                      <span>State</span>
+                      <span>Last run</span>
+                      <span>Success · 24h</span>
+                      <span className="text-right">Latency</span>
+                    </div>
+                    {visibleMonitors.length ? (
+                      visibleMonitors.slice(0, 8).map((monitor) => {
+                        const listStatus = effectiveMonitorListStatus(
+                          monitor.status,
+                          monitor.successRate
+                        )
+                        const operational = listMonitorOperationalStatus(
+                          monitor.status,
+                          monitor.successRate
+                        )
+                        const degradedSuccess =
+                          monitor.successRate != null &&
+                          monitor.successRate < 99 &&
+                          listStatus !== "failing"
+                        return (
+                          <Link
+                            key={monitor.id}
+                            to="/monitors/$monitorId/runs"
+                            params={{ monitorId: monitor.id }}
+                            className="grid grid-cols-[minmax(220px,1.5fr)_100px_110px_100px_90px] items-center gap-4 border-b px-4 py-3.5 transition-colors duration-150 last:border-b-0 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <StatusDot status={listStatus} />
+                                <p className="truncate text-sm font-medium">
+                                  {monitor.name}
+                                </p>
+                              </div>
+                              <p className="mt-1 truncate pl-4 text-xs text-muted-foreground">
+                                {pluralCount(monitor.stepCount, "step")} ·{" "}
+                                {monitor.application}
+                              </p>
+                            </div>
+                            <OperationalStatusBadge status={operational} />
+                            <span className="text-sm text-muted-foreground">
+                              {monitor.lastRun}
+                            </span>
+                            <span
+                              className={`font-mono text-sm ${
+                                degradedSuccess
+                                  ? "text-warning-foreground"
+                                  : "text-muted-foreground"
+                              }`}
+                              title={
+                                degradedSuccess
+                                  ? "Below 99% success over 24h — shown as degraded"
+                                  : undefined
+                              }
+                            >
+                              {monitor.successRate != null
+                                ? formatSuccessRate(monitor.successRate)
+                                : "—"}
+                            </span>
+                            <span className="font-mono text-sm text-right">
+                              {monitor.latencyMs
+                                ? `${monitor.latencyMs} ms`
+                                : "—"}
+                            </span>
+                          </Link>
+                        )
+                      })
+                    ) : (
+                      <MonitorFilterEmpty
+                        focus={focus}
+                        onShowAll={() => setFocus("all")}
+                      />
+                    )}
                   </div>
-                  {visibleMonitors.length ? (
-                    visibleMonitors.slice(0, 8).map((monitor) => (
-                      <Link
-                        key={monitor.id}
-                        to="/monitors/$monitorId/runs"
-                        params={{ monitorId: monitor.id }}
-                        className="grid gap-3 border-b px-4 py-3.5 transition-colors duration-150 last:border-b-0 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset md:grid-cols-[minmax(220px,1.5fr)_100px_110px_100px_90px] md:items-center md:gap-4"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <StatusDot status={monitor.status} />
-                            <p className="truncate text-sm font-medium">
-                              {monitor.name}
-                            </p>
-                          </div>
-                          <p className="mt-1 truncate pl-4 text-xs text-muted-foreground">
-                            {pluralCount(monitor.stepCount, "step")} ·{" "}
-                            {monitor.application}
-                          </p>
-                        </div>
-                        <OperationalStatusBadge
-                          status={fromMonitorSummaryStatus(monitor.status)}
+
+                  <ul className="divide-y md:hidden">
+                    {visibleMonitors.length ? (
+                      visibleMonitors.slice(0, 8).map((monitor) => {
+                        const listStatus = effectiveMonitorListStatus(
+                          monitor.status,
+                          monitor.successRate
+                        )
+                        const operational = listMonitorOperationalStatus(
+                          monitor.status,
+                          monitor.successRate
+                        )
+                        const degradedSuccess =
+                          monitor.successRate != null &&
+                          monitor.successRate < 99 &&
+                          listStatus !== "failing"
+                        return (
+                          <li key={`mobile-${monitor.id}`}>
+                            <Link
+                              to="/monitors/$monitorId/runs"
+                              params={{ monitorId: monitor.id }}
+                              className="block px-4 py-3.5 transition-colors duration-150 hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset"
+                            >
+                              <div className="flex items-center gap-2">
+                                <StatusDot status={listStatus} />
+                                <p className="truncate text-sm font-medium">
+                                  {monitor.name}
+                                </p>
+                              </div>
+                              <p className="mt-1 truncate pl-4 text-xs text-muted-foreground">
+                                {pluralCount(monitor.stepCount, "step")} ·{" "}
+                                {monitor.application}
+                              </p>
+                              <dl className="mt-3 grid gap-2 pl-4 text-sm">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <dt className="text-xs font-medium text-muted-foreground">
+                                    State
+                                  </dt>
+                                  <dd>
+                                    <OperationalStatusBadge
+                                      status={operational}
+                                    />
+                                  </dd>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <dt className="text-xs font-medium text-muted-foreground">
+                                    Last run
+                                  </dt>
+                                  <dd className="text-muted-foreground">
+                                    {monitor.lastRun}
+                                  </dd>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <dt className="text-xs font-medium text-muted-foreground">
+                                    Success · 24h
+                                  </dt>
+                                  <dd
+                                    className={`font-mono ${
+                                      degradedSuccess
+                                        ? "text-warning-foreground"
+                                        : "text-muted-foreground"
+                                    }`}
+                                  >
+                                    {monitor.successRate != null
+                                      ? formatSuccessRate(monitor.successRate)
+                                      : "—"}
+                                  </dd>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <dt className="text-xs font-medium text-muted-foreground">
+                                    Latency
+                                  </dt>
+                                  <dd className="font-mono text-muted-foreground">
+                                    {monitor.latencyMs
+                                      ? `${monitor.latencyMs} ms`
+                                      : "—"}
+                                  </dd>
+                                </div>
+                              </dl>
+                            </Link>
+                          </li>
+                        )
+                      })
+                    ) : (
+                      <li>
+                        <MonitorFilterEmpty
+                          focus={focus}
+                          onShowAll={() => setFocus("all")}
                         />
-                        <span className="text-sm text-muted-foreground">
-                          {monitor.lastRun}
-                        </span>
-                        <span className="font-mono text-sm text-muted-foreground">
-                          {monitor.successRate != null
-                            ? formatSuccessRate(monitor.successRate)
-                            : "—"}
-                        </span>
-                        <span className="font-mono text-sm md:text-right">
-                          {monitor.latencyMs ? `${monitor.latencyMs} ms` : "—"}
-                        </span>
-                      </Link>
-                    ))
-                  ) : (
-                    <EmptyBlock
-                      title="Nothing in this view"
-                      body="Try switching the focus filter, or create another monitor."
-                      actionLabel="New monitor"
-                      actionTo="/monitors/new"
-                    />
-                  )}
+                      </li>
+                    )}
+                  </ul>
                 </div>
               </section>
             </div>
@@ -682,7 +822,7 @@ function OverviewPage() {
             </aside>
           </div>
         )}
-      </div>
+      </PageContainer>
     </>
   )
 }
@@ -723,22 +863,22 @@ function derivePosture({
           ? `${alertCount} open alert${alertCount === 1 ? "" : "s"}`
           : null,
         attentionCount
-          ? `${attentionCount} monitor${attentionCount === 1 ? "" : "s"} failing or warning`
+          ? `${attentionCount} monitor${attentionCount === 1 ? "" : "s"} failing or degraded`
           : null,
-        `${healthyCount} of ${enabledCount} enabled monitors healthy`,
+        `${healthyCount} of ${enabledCount} enabled monitors healthy (≥99% · 24h)`,
       ]
         .filter(Boolean)
         .join(" · "),
-      surface: "bg-destructive/8",
-      title: "text-destructive",
-      dot: "bg-destructive",
+      surface: criticalCount ? "bg-destructive/8" : "bg-warning-soft",
+      title: criticalCount ? "text-destructive" : "text-warning-foreground",
+      dot: criticalCount ? "bg-destructive" : "bg-warning",
       pulse: true,
     }
   }
   if (alertCount) {
     return {
       headline: "Alerts waiting on triage",
-      summary: `${alertCount} open alert${alertCount === 1 ? "" : "s"} · ${healthyCount} of ${enabledCount} enabled monitors healthy.`,
+      summary: `${alertCount} open alert${alertCount === 1 ? "" : "s"} · ${healthyCount} of ${enabledCount} enabled monitors healthy (≥99% · 24h).`,
       surface: "bg-warning-soft",
       title: "text-warning-foreground",
       dot: "bg-warning",
@@ -747,7 +887,7 @@ function derivePosture({
   }
   return {
     headline: "All clear",
-    summary: `${healthyCount} of ${enabledCount} enabled monitor${enabledCount === 1 ? "" : "s"} healthy · no open alerts.`,
+    summary: `${healthyCount} of ${enabledCount} enabled monitor${enabledCount === 1 ? "" : "s"} healthy (≥99% · 24h) · no open alerts.`,
     surface: "bg-success-soft/60",
     title: "text-success-foreground",
     dot: "bg-success",
@@ -758,6 +898,83 @@ function derivePosture({
 function formatSuccessRate(value: number) {
   const rounded = Math.round(value * 10) / 10
   return Number.isInteger(rounded) ? `${rounded}%` : `${rounded.toFixed(1)}%`
+}
+
+function alertSeverityChrome(severity: AlertContract["severity"]) {
+  if (severity === "CRITICAL" || severity === "HIGH") {
+    return {
+      icon: CircleAlert,
+      surface: "bg-destructive/10 text-destructive",
+      badge: "bg-destructive/10 text-destructive",
+    }
+  }
+  if (severity === "WARNING") {
+    return {
+      icon: TriangleAlert,
+      surface: "bg-warning-soft text-warning-foreground",
+      badge: "bg-warning-soft text-warning-foreground",
+    }
+  }
+  return {
+    icon: Info,
+    surface: "bg-primary/10 text-primary",
+    badge: "bg-muted text-muted-foreground",
+  }
+}
+
+function MonitorFilterEmpty({
+  focus,
+  onShowAll,
+}: {
+  focus: FocusFilter
+  onShowAll: () => void
+}) {
+  if (focus === "attention") {
+    return (
+      <div className="px-5 py-8 text-center">
+        <p className="text-sm font-medium">Nothing needs attention</p>
+        <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-pretty text-muted-foreground">
+          No monitors are failing, degraded, or missing a signal. Switch to All
+          monitors to browse the fleet.
+        </p>
+        <Button
+          className="mt-4"
+          size="sm"
+          variant="outline"
+          onClick={onShowAll}
+        >
+          Show all monitors
+        </Button>
+      </div>
+    )
+  }
+  if (focus === "healthy") {
+    return (
+      <div className="px-5 py-8 text-center">
+        <p className="text-sm font-medium">No healthy monitors</p>
+        <p className="mx-auto mt-1 max-w-sm text-xs leading-5 text-pretty text-muted-foreground">
+          Healthy means latest status is good and success over 24h is at least
+          99%. Switch filters or investigate failures.
+        </p>
+        <Button
+          className="mt-4"
+          size="sm"
+          variant="outline"
+          onClick={onShowAll}
+        >
+          Show all monitors
+        </Button>
+      </div>
+    )
+  }
+  return (
+    <EmptyBlock
+      title="Nothing in this view"
+      body="Try switching the focus filter, or create another monitor."
+      actionLabel="New monitor"
+      actionTo="/monitors/new"
+    />
+  )
 }
 
 function pluralCount(count: number, noun: string) {
@@ -788,14 +1005,16 @@ function Stat({
 }: {
   label: string
   value: string
-  tone?: "default" | "success" | "danger"
+  tone?: "default" | "success" | "warning" | "danger"
 }) {
   const toneClass =
     tone === "success"
       ? "text-success-foreground"
-      : tone === "danger"
-        ? "text-destructive"
-        : "text-foreground"
+      : tone === "warning"
+        ? "text-warning-foreground"
+        : tone === "danger"
+          ? "text-destructive"
+          : "text-foreground"
   return (
     <div>
       <dt className="text-xs text-muted-foreground">{label}</dt>

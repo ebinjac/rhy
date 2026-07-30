@@ -34,6 +34,8 @@ import {
   YAxis,
 } from "recharts"
 
+import { PageContainer } from "@/components/page-container"
+
 import type {
   DeploymentDistributionContract,
   DeploymentValidationRunContract,
@@ -121,7 +123,7 @@ function DeploymentRunPage() {
     ? Math.round((run.progress.completed / run.progress.total) * 100)
     : 0
   return (
-    <main className="mx-auto max-w-[1440px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
         <div>
           <Link
@@ -230,7 +232,7 @@ function DeploymentRunPage() {
           <MetricInfo text="Latency uses API response time only. Preparation, scripts, extraction, assertions, queue delay, and post-processing do not affect the performance gate." />
         </div>
         <div className="mt-4 overflow-hidden border-y">
-          <div className="grid grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-9">
+          <div className="grid grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-10">
             <Metric
               label="Baseline window"
               value={run.configuration.baselineWindow}
@@ -264,6 +266,10 @@ function DeploymentRunPage() {
               value={String(report.alertResults?.length ?? 0)}
             />
             <Metric
+              label="Dynatrace"
+              value={String(report.dynatraceResults?.length ?? 0)}
+            />
+            <Metric
               label="Completed evidence"
               value={`${run.progress.completed}/${run.progress.total}`}
             />
@@ -292,6 +298,118 @@ function DeploymentRunPage() {
           {!report.monitors?.length ? (
             <p className="py-10 text-center text-sm text-muted-foreground">
               Monitor comparison evidence will appear after baseline capture.
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="mt-8" aria-labelledby="dynatrace-heading">
+        <h2
+          id="dynatrace-heading"
+          className="font-heading text-lg font-semibold"
+        >
+          Dynatrace infrastructure comparison
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          CPU and memory evidence captured before deployment and after the
+          configured stabilization window. Missing measurements are never
+          treated as zero.
+        </p>
+        <div className="mt-4 divide-y border-y">
+          {(report.dynatraceResults ?? []).map((result, index) => (
+            <div className="py-5" key={`${result.checkId}-${result.serviceId ?? index}`}>
+              <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
+                <div>
+                  <p className="font-medium">{result.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {result.gateMode.toLowerCase()} ·{" "}
+                    {result.baselineResourceCount} baseline resources ·{" "}
+                    {result.postResourceCount} post resources
+                    {result.missingResources
+                      ? ` · ${result.missingResources} missing`
+                      : ""}
+                    {result.addedResources
+                      ? ` · ${result.addedResources} added`
+                      : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <StatusBadge status={result.status} />
+                  <Link
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                    params={{ applicationId: result.applicationId }}
+                    search={{ section: "dynatrace" }}
+                    to="/applications/$applicationId"
+                  >
+                    Dynatrace <ArrowRight className="size-3" />
+                  </Link>
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {(["CPU", "MEMORY"] as const).flatMap((metric) => {
+                  const before = result.baselineSummary[metric]
+                  const after = result.postSummary[metric]
+                  if (!before && !after) return []
+                  return [
+                    <div className="border-l pl-3" key={`${metric}-p95`}>
+                      <p className="text-xs text-muted-foreground">
+                        {metric} p95
+                      </p>
+                      <p className="mt-1 font-medium">
+                        {before?.p95 == null
+                          ? "Not recorded"
+                          : before.p95.toFixed(2)}
+                        {" → "}
+                        {after?.p95 == null
+                          ? "Not recorded"
+                          : after.p95.toFixed(2)}
+                      </p>
+                    </div>,
+                    <div className="border-l pl-3" key={`${metric}-average`}>
+                      <p className="text-xs text-muted-foreground">
+                        {metric} average
+                      </p>
+                      <p className="mt-1 font-medium">
+                        {before?.average == null
+                          ? "Not recorded"
+                          : before.average.toFixed(2)}
+                        {" → "}
+                        {after?.average == null
+                          ? "Not recorded"
+                          : after.average.toFixed(2)}
+                      </p>
+                    </div>,
+                  ]
+                })}
+              </div>
+              {result.ruleResults.length ? (
+                <div className="mt-4 space-y-2">
+                  {result.ruleResults.map((rule) => (
+                    <div
+                      className="flex items-start justify-between gap-4 text-sm"
+                      key={rule.ruleId}
+                    >
+                      <span>
+                        {rule.ruleName}
+                        <span className="ml-2 text-xs text-muted-foreground">
+                          {rule.reason}
+                        </span>
+                      </span>
+                      <Badge variant="outline">{rule.status.toLowerCase()}</Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {result.failureReason ? (
+                <p className="mt-3 text-sm text-destructive">
+                  {result.failureReason}
+                </p>
+              ) : null}
+            </div>
+          ))}
+          {!report.dynatraceResults?.length ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              Dynatrace checks have not run yet or this suite has none.
             </p>
           ) : null}
         </div>
@@ -395,7 +513,7 @@ function DeploymentRunPage() {
           <ReasonList title="Warnings" values={report.warnings ?? []} />
         </section>
       ) : null}
-    </main>
+    </PageContainer>
   )
 }
 

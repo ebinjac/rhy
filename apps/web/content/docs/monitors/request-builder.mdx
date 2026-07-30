@@ -12,9 +12,26 @@ owners:
 keywords:
   - HTTP request
   - monitor builder
+  - Postman import
+  - cURL import
 ---
 
 Each HTTP step contains a request plus its automation, checks, and network policy. Rhythm renders the final request only after controlled pre-request actions and JavaScript complete.
+
+## Import an existing request workflow
+
+Select **Import** on the Monitors page to create a draft monitor, or select **Import Postman or cURL** in the new-monitor workbench to populate the unsaved draft.
+
+- A Postman Collection v2.0 or v2.1 JSON file becomes one Rhythm monitor. Requests are flattened into ordered steps while folder names remain in each step name.
+- Collection and folder authentication, parameters, headers, bodies, cookies, pre-request scripts, and test scripts are mapped where Rhythm has an equivalent.
+- One cURL command becomes one HTTP request. Common method, header, body, auth, cookie, redirect, retry, timeout, proxy, and TLS flags are mapped.
+- Postman v3 multi-file YAML collections must first be exported or migrated to Collection v2.1 JSON.
+
+Rhythm shows a review before importing. Unsupported features are listed rather than silently discarded. Saved Postman response examples and local file paths are not imported.
+
+<SecurityNote>
+Likely bearer tokens, passwords, cookies, API keys, proxy credentials, and sensitive JSON fields are replaced with `{"{{ secrets.alias }}"}` placeholders. Map those placeholders to governed Rhythm secret profiles before previewing or publishing the monitor. Imported shell text is parsed locally and is never executed.
+</SecurityNote>
 
 ## Execution order
 

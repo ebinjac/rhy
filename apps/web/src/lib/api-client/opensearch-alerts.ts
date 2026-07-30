@@ -8,6 +8,7 @@ import type {
   ApiSuccess,
   OpenSearchAlertDeliveryContract,
   OpenSearchAlertReceiverContract,
+  OpenSearchAlertServiceAssignmentContract,
   OpenSearchAlertSetupContract,
   JsonValue,
 } from "@/lib/api-client/contracts"
@@ -147,6 +148,40 @@ export const listOpenSearchAlertDeliveries = createServerFn({ method: "GET" })
     )
   )
 
+export const assignOpenSearchAlertsToService = createServerFn({
+  method: "POST",
+})
+  .validator(
+    z.object({
+      applicationId: z.string().min(1),
+      alertIds: z.array(z.string().min(1)).min(1).max(200),
+      serviceId: z.string(),
+    })
+  )
+  .handler(async ({ data }) => {
+    try {
+      const result = await json<OpenSearchAlertServiceAssignmentContract>(
+        `/api/v1/applications/${encodeURIComponent(data.applicationId)}/opensearch-alerts/service-assignment`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            alertIds: data.alertIds,
+            serviceId: data.serviceId,
+          }),
+        }
+      )
+      return { ok: true as const, result }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to assign the selected alerts.",
+      }
+    }
+  })
+
 export const listUnifiedAlerts = createServerFn({ method: "GET" })
   .validator(
     z.object({
@@ -159,6 +194,7 @@ export const listUnifiedAlerts = createServerFn({ method: "GET" })
   )
   .handler(async ({ data }): Promise<AlertContract[]> => {
     const params = new URLSearchParams()
+    params.set("limit", "200")
     Object.entries(data).forEach(([key, value]) => {
       if (value) params.set(key, value)
     })

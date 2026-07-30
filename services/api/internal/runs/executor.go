@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -41,6 +42,23 @@ const defaultMaxBodyBytes = 1 << 20
 
 var templatePattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
+func int64FromAny(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		parsed, _ := strconv.ParseInt(fmt.Sprint(value), 10, 64)
+		return parsed
+	}
+}
+
 type HTTPExecutor struct {
 	allowPrivate bool
 	resolver     RuntimeResolver
@@ -62,6 +80,13 @@ type TelemetryMaterial struct {
 	BaseURL string
 	Token   string
 }
+type EnvironmentMaterial struct {
+	ID, Name, ProfileType, BaseURL, Region, UpdatedAt string
+	Variables                                         map[string]string
+}
+type EnvironmentResolver interface {
+	ResolveEnvironmentProfile(context.Context, string) (EnvironmentMaterial, error)
+}
 type RuntimeResolver interface {
 	ResolveSecret(context.Context, string) (string, error)
 	ResolveTLSProfile(context.Context, string, string) (TLSMaterial, error)
@@ -78,6 +103,17 @@ func NewHTTPExecutorWithResolver(allowPrivate bool, resolver RuntimeResolver) *H
 }
 
 func (e *HTTPExecutor) SetScriptExecutor(executor scripts.Executor) { e.scripts = executor }
+
+func (e *HTTPExecutor) LoadEnvironment(ctx context.Context, environmentID string) (EnvironmentMaterial, error) {
+	if strings.TrimSpace(environmentID) == "" {
+		return EnvironmentMaterial{Variables: map[string]string{}}, nil
+	}
+	resolver, ok := e.resolver.(EnvironmentResolver)
+	if !ok {
+		return EnvironmentMaterial{}, errors.New("environment profiles require the configuration library resolver")
+	}
+	return resolver.ResolveEnvironmentProfile(ctx, environmentID)
+}
 
 type ScriptExecutionContext struct {
 	MonitorID, RunID, RevisionID, StepID, StepName string
@@ -115,10 +151,17 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 			continue
 		}
 		if value, ok := outputs[action.Output]; ok {
+			workflowValues[action.Output] = value
+			workflowValues["variables."+action.Output] = value
 			result.Outputs[action.Output] = safeActionOutput(definition.Request.PreRequest, action.Output, value)
 			if action.Sensitive {
 				result.PrivateOutputs[action.Output] = value
 			}
+		}
+	}
+	for key, value := range workflowValues {
+		if _, exists := outputs[key]; !exists {
+			outputs[key] = value
 		}
 	}
 	requestConfig := definition.Request
@@ -130,7 +173,7 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		if secretErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_POLICY_VIOLATION", secretErr.Error(), started)
 		}
-		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: cloneStringMap(outputs), Environment: map[string]string{}, Collection: cloneStringMap(workflowValues), Globals: map[string]string{}, Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
+		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: scopeValues(workflowValues, "variables."), Environment: scopeValues(workflowValues, "environment."), Collection: scopeValues(workflowValues, "collection."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
 		if scriptErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_RUNTIME_LOST", "JavaScript runner could not complete the script.", started)
 		}
@@ -138,8 +181,8 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 			scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalCookies, scriptResult.InternalRequest = nil, nil, nil, nil, nil
 			result.PreRequestScript = &scriptResult
 			result.Timing = map[string]any{
-				"preparationMs":       time.Since(started).Milliseconds(),
-				"auxiliaryRequestMs":  scripts.AuxiliaryRequestDurationMS(scriptResult),
+				"preparationMs":         time.Since(started).Milliseconds(),
+				"auxiliaryRequestMs":    scripts.AuxiliaryRequestDurationMS(scriptResult),
 				"auxiliaryRequestCount": len(scriptResult.AuxiliaryRequests),
 			}
 			return finishStep(result, StatusFailed, scriptResult.ErrorCategory, scriptResult.ErrorMessage, started)
@@ -147,14 +190,24 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		for key, value := range firstScriptValues(scriptResult.InternalVariables, scriptResult.Variables) {
 			outputs[key] = value
 			workflowValues[key] = value
+			workflowValues["variables."+key] = value
+			if scriptResult.Variables[key] == "MASKED" || sensitiveKey(key) {
+				result.PrivateOutputs["script."+key] = value
+				workflowValues["secrets.__tainted."+key] = value
+			}
 		}
 		for key, value := range firstScriptValues(scriptResult.InternalEnvironment, scriptResult.Environment) {
 			workflowValues[key] = value
+			workflowValues["environment."+key] = value
 		}
 		for key, value := range firstScriptValues(scriptResult.InternalCollection, scriptResult.Collection) {
 			workflowValues[key] = value
+			workflowValues["collection."+key] = value
 		}
-		scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection = nil, nil, nil
+		for key, value := range firstScriptValues(scriptResult.InternalGlobals, scriptResult.Globals) {
+			workflowValues["globals."+key] = value
+		}
+		scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalGlobals = nil, nil, nil, nil
 		if scriptRequestResult := firstScriptRequest(scriptResult.InternalRequest, scriptResult.Request); scriptRequestResult != nil {
 			requestConfig = applyScriptRequest(requestConfig, scriptRequestResult)
 		}
@@ -162,6 +215,20 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		scriptResult.InternalCookies = nil
 		scriptResult.InternalRequest = nil
 		result.PreRequestScript = &scriptResult
+		if scriptResult.Execution.RequestSkipped {
+			result.Timing = map[string]any{
+				"preparationMs":         time.Since(started).Milliseconds(),
+				"preRequestScriptMs":    scriptResult.DurationMS,
+				"auxiliaryRequestMs":    scripts.AuxiliaryRequestDurationMS(scriptResult),
+				"auxiliaryRequestCount": len(scriptResult.AuxiliaryRequests),
+			}
+			return finishStep(result, StatusSkipped, "", "", started)
+		}
+	}
+	for key, value := range outputs {
+		if strings.HasPrefix(key, "secrets.") || sensitiveKey(key) {
+			result.PrivateOutputs[key] = value
+		}
 	}
 
 	timeout := time.Duration(requestConfig.Settings.TimeoutMS) * time.Millisecond
@@ -253,6 +320,72 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 			result.ResponseSummary["bodyCapture"].(map[string]any)["state"] = "MASKED"
 		}
 	}
+	if strings.TrimSpace(requestConfig.TestScript.Code) != "" {
+		if e.scripts == nil {
+			return finishStep(result, StatusFailed, "SCRIPT_RUNTIME_LOST", "JavaScript runner is unavailable.", started)
+		}
+		secrets, secretErr := e.resolveScriptSecrets(ctx, requestConfig.TestScript.Code)
+		if secretErr != nil {
+			return finishStep(result, StatusFailed, "SCRIPT_POLICY_VIOLATION", secretErr.Error(), started)
+		}
+		for key, value := range result.PrivateOutputs {
+			if value != "" {
+				secrets["response."+key] = value
+			}
+		}
+		responseHeaders := make(map[string]string, len(response.Header))
+		for key, values := range response.Header {
+			responseHeaders[key] = strings.Join(values, ", ")
+		}
+		testStarted := time.Now()
+		testResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{
+			Script:              normalizeScript(requestConfig.TestScript),
+			Scope:               "test",
+			Variables:           scopeValues(workflowValues, "variables."),
+			Environment:         scopeValues(workflowValues, "environment."),
+			Collection:          scopeValues(workflowValues, "collection."),
+			Globals:             scopeValues(workflowValues, "globals."),
+			Secrets:             secrets,
+			Cookies:             scriptCookies(requestConfig, jar),
+			Request:             scriptRequest(requestConfig),
+			Response:            &scripts.Response{Code: response.StatusCode, Status: response.Status, Headers: responseHeaders, Body: string(body), ResponseTimeMS: int64FromAny(result.Timing["apiResponseTimeMs"]), ResponseSize: len(body), ContentType: response.Header.Get("Content-Type"), Truncated: truncated},
+			AllowPrivateTargets: e.allowPrivate,
+			TimeoutMS:           scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS),
+			Info:                scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "test", Iteration: 0, IterationCount: 1, RuntimeVersion: scripts.RuntimeVersion},
+		})
+		result.Timing["testScriptMs"] = time.Since(testStarted).Milliseconds()
+		if scriptErr != nil {
+			return finishStep(result, StatusFailed, "SCRIPT_RUNTIME_LOST", "JavaScript runner could not complete the Tests script.", started)
+		}
+		result.TestScript = &testResult
+		if testResult.Status != "SUCCESS" {
+			testResult.InternalVariables, testResult.InternalEnvironment, testResult.InternalCollection, testResult.InternalGlobals, testResult.InternalCookies, testResult.InternalRequest, testResult.InternalState = nil, nil, nil, nil, nil, nil, nil
+			result.TestScript = &testResult
+			return finishStep(result, StatusFailed, testResult.ErrorCategory, testResult.ErrorMessage, started)
+		}
+		for key, value := range firstScriptValues(testResult.InternalVariables, testResult.Variables) {
+			outputs[key] = value
+			workflowValues[key] = value
+			workflowValues["variables."+key] = value
+			if testResult.Variables[key] == "MASKED" || sensitiveKey(key) {
+				result.PrivateOutputs["script."+key] = value
+				workflowValues["secrets.__tainted."+key] = value
+			}
+		}
+		for key, value := range firstScriptValues(testResult.InternalEnvironment, testResult.Environment) {
+			workflowValues[key] = value
+			workflowValues["environment."+key] = value
+		}
+		for key, value := range firstScriptValues(testResult.InternalCollection, testResult.Collection) {
+			workflowValues[key] = value
+			workflowValues["collection."+key] = value
+		}
+		for key, value := range firstScriptValues(testResult.InternalGlobals, testResult.Globals) {
+			workflowValues["globals."+key] = value
+		}
+		testResult.InternalVariables, testResult.InternalEnvironment, testResult.InternalCollection, testResult.InternalGlobals, testResult.InternalCookies, testResult.InternalRequest, testResult.InternalState = nil, nil, nil, nil, nil, nil, nil
+		result.TestScript = &testResult
+	}
 	assertionStarted := time.Now()
 	result.Assertions = evaluateAssertions(requestConfig.Assertions, response, body, time.Since(started))
 	result.Timing["assertionMs"] = time.Since(assertionStarted).Milliseconds()
@@ -278,6 +411,30 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 }
 
 var vaultCallPattern = regexp.MustCompile(`pm\.vault\.get\(\s*["']([^"']+)["']\s*\)`)
+var templateSecretPattern = regexp.MustCompile(`\{\{\s*secrets\.([A-Za-z0-9_.-]+)\s*\}\}`)
+
+func (e *HTTPExecutor) ResolveDefinitionSecrets(ctx context.Context, definition Definition, values map[string]string) error {
+	encoded, err := json.Marshal(definition)
+	if err != nil {
+		return errors.New("monitor definition could not be inspected for secret references")
+	}
+	for _, match := range templateSecretPattern.FindAllStringSubmatch(string(encoded), -1) {
+		alias := strings.TrimSpace(match[1])
+		key := "secrets." + alias
+		if _, exists := values[key]; exists {
+			continue
+		}
+		if e.resolver == nil {
+			return fmt.Errorf("secret alias %q cannot be resolved", alias)
+		}
+		value, resolveErr := e.resolver.ResolveSecret(ctx, "secret://"+alias)
+		if resolveErr != nil {
+			return fmt.Errorf("secret alias %q could not be resolved", alias)
+		}
+		values[key] = value
+	}
+	return nil
+}
 
 func (e *HTTPExecutor) resolveScriptSecrets(ctx context.Context, code string) (map[string]string, error) {
 	secrets := map[string]string{}
@@ -306,23 +463,42 @@ func (e *HTTPExecutor) ExecuteSetupScript(ctx context.Context, script scripts.Sc
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_POLICY_VIOLATION", ErrorMessage: err.Error()}, workflowValues
 	}
-	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: cloneStringMap(workflowValues), Collection: cloneStringMap(workflowValues), Environment: map[string]string{}, Globals: map[string]string{}, Secrets: secrets, AllowPrivateTargets: e.allowPrivate, TimeoutMS: timeoutMS, Info: info})
+	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: scopeValues(workflowValues, "variables."), Collection: scopeValues(workflowValues, "collection."), Environment: scopeValues(workflowValues, "environment."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, AllowPrivateTargets: e.allowPrivate, TimeoutMS: timeoutMS, Info: info})
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_RUNTIME_LOST", ErrorMessage: "JavaScript runner could not complete the setup script."}, workflowValues
 	}
 	if result.Status == "SUCCESS" {
 		for key, value := range firstScriptValues(result.InternalVariables, result.Variables) {
 			workflowValues[key] = value
+			workflowValues["variables."+key] = value
 		}
 		for key, value := range firstScriptValues(result.InternalCollection, result.Collection) {
 			workflowValues[key] = value
+			workflowValues["collection."+key] = value
 		}
 		for key, value := range firstScriptValues(result.InternalEnvironment, result.Environment) {
 			workflowValues[key] = value
+			workflowValues["environment."+key] = value
+		}
+		for key, value := range firstScriptValues(result.InternalGlobals, result.Globals) {
+			workflowValues["globals."+key] = value
 		}
 	}
-	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalCookies, result.InternalRequest = nil, nil, nil, nil, nil
+	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies, result.InternalRequest = nil, nil, nil, nil, nil, nil
 	return result, workflowValues
+}
+
+func scopeValues(values map[string]string, prefix string) map[string]string {
+	result := make(map[string]string)
+	for key, value := range values {
+		if strings.HasPrefix(key, prefix) {
+			result[strings.TrimPrefix(key, prefix)] = value
+		}
+		if prefix == "variables." && !strings.Contains(key, ".") {
+			result[key] = value
+		}
+	}
+	return result
 }
 
 func firstScriptValues(internal, safe map[string]string) map[string]string {
@@ -971,6 +1147,8 @@ func (e *HTTPExecutor) buildRequest(ctx context.Context, config RequestConfig, v
 		request.Header.Add(header.Key, value)
 		if header.Sensitive || sensitiveHeader(header.Key) {
 			safeHeaderSummary[header.Key] = "••••••••"
+		} else if maskKnownValue(value, values) != value {
+			safeHeaderSummary[header.Key] = "••••••••"
 		} else {
 			safeHeaderSummary[header.Key] = value
 		}
@@ -1013,7 +1191,7 @@ func (e *HTTPExecutor) buildRequest(ctx context.Context, config RequestConfig, v
 	if automaticContentType != "" && request.Header.Get("Content-Type") == "" {
 		request.Header.Set("Content-Type", automaticContentType)
 	}
-	summary := map[string]any{"method": request.Method, "url": safeRequestURL(request.URL, config.Auth), "headers": safeHeaderSummary, "bodyBytes": len(body)}
+	summary := map[string]any{"method": request.Method, "url": safeRequestURL(request.URL, config.Auth, values), "headers": safeHeaderSummary, "bodyBytes": len(body)}
 	summary["bodyCapture"] = captureState(config.Settings.CaptureBody, len(body), false, true)
 	if config.Settings.CaptureBody && len(body) > 0 {
 		summary["body"] = safeBody([]byte(body), values)
@@ -1908,7 +2086,7 @@ func render(value string, variables map[string]string) (string, error) {
 	var unresolved string
 	rendered := templatePattern.ReplaceAllStringFunc(value, func(match string) string {
 		key := strings.TrimSpace(templatePattern.FindStringSubmatch(match)[1])
-		resolved, ok := variables[key]
+		resolved, ok := resolveTemplateValue(key, variables)
 		if !ok {
 			unresolved = key
 			return match
@@ -1919,6 +2097,40 @@ func render(value string, variables map[string]string) (string, error) {
 		return "", fmt.Errorf("template variable %q is unresolved", unresolved)
 	}
 	return rendered, nil
+}
+
+func resolveTemplateValue(key string, variables map[string]string) (string, bool) {
+	switch key {
+	case "$guid", "$uuid":
+		value, err := id.NewUUID()
+		return value, err == nil
+	case "$timestamp":
+		return strconv.FormatInt(time.Now().UTC().Unix(), 10), true
+	case "$isoTimestamp":
+		return time.Now().UTC().Format(time.RFC3339Nano), true
+	case "$randomInt":
+		value, err := rand.Int(rand.Reader, big.NewInt(1001))
+		if err != nil {
+			return "", false
+		}
+		return value.String(), true
+	}
+	if strings.Contains(key, ".") {
+		value, ok := variables[key]
+		return value, ok
+	}
+	if value, ok := variables["variables."+key]; ok {
+		return value, true
+	}
+	if value, ok := variables[key]; ok {
+		return value, true
+	}
+	for _, scope := range []string{"environment.", "collection.", "globals."} {
+		if value, ok := variables[scope+key]; ok {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 func finishStep(result StepRun, status Status, category, message string, started time.Time) StepRun {
@@ -2007,7 +2219,7 @@ func safeError(err error) string {
 	return message
 }
 
-func safeRequestURL(target *url.URL, auth AuthConfig) string {
+func safeRequestURL(target *url.URL, auth AuthConfig, knownValues ...map[string]string) string {
 	safe := *target
 	query := safe.Query()
 	for key := range query {
@@ -2016,7 +2228,22 @@ func safeRequestURL(target *url.URL, auth AuthConfig) string {
 		}
 	}
 	safe.RawQuery = query.Encode()
-	return safe.String()
+	result := safe.String()
+	if len(knownValues) > 0 {
+		result = maskKnownValue(result, knownValues[0])
+	}
+	return result
+}
+
+func maskKnownValue(value string, known map[string]string) string {
+	masked := value
+	for key, candidate := range known {
+		if candidate == "" || (!strings.HasPrefix(key, "secrets.") && !sensitiveKey(key)) {
+			continue
+		}
+		masked = strings.ReplaceAll(masked, candidate, "••••••••")
+	}
+	return masked
 }
 
 func safeObserved(config AssertionConfig, observed any) any {

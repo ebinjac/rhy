@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Alert, AlertDescription } from "@workspace/ui/components/alert"
 import { Badge } from "@workspace/ui/components/badge"
@@ -18,11 +18,10 @@ import {
   Save,
 } from "lucide-react"
 
-import {
-  normalizeDefinitionScripts,
-  RequestWorkbench,
-} from "@/features/monitors/request-workbench"
-import type { RequestDefinition } from "@/features/monitors/request-workbench"
+import { normalizeDefinitionScripts } from "@/features/monitors/request-definition"
+import type { RequestDefinition } from "@/features/monitors/request-definition"
+import { RequestWorkbench } from "@/features/monitors/request-workbench"
+import { PageContainer } from "@/components/page-container"
 import type { ScheduleContract } from "@/lib/api-client/contracts"
 import {
   listELFApplications,
@@ -34,19 +33,23 @@ import {
   listConfigurationProfiles,
   mutateMonitor,
   saveMonitorDraft,
+  saveMonitorEnvironment,
   saveMonitorSchedule,
 } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
 
 export const Route = createFileRoute("/monitors/$monitorId/edit")({
-  loader: async ({ params }) => ({
-    ...(await getMonitorDraft({ data: { monitorId: params.monitorId } })),
-    applications: await listELFApplications(),
-    secrets: await listConfigurationProfiles({ data: { kind: "secrets" } }),
-    schedule: await getMonitorSchedule({
-      data: { monitorId: params.monitorId },
-    }),
-  }),
+  loader: async ({ params }) => {
+    const [draft, applications, secrets, environments, schedule] =
+      await Promise.all([
+        getMonitorDraft({ data: { monitorId: params.monitorId } }),
+        listELFApplications(),
+        listConfigurationProfiles({ data: { kind: "secrets" } }),
+        listConfigurationProfiles({ data: { kind: "environments" } }),
+        getMonitorSchedule({ data: { monitorId: params.monitorId } }),
+      ])
+    return { ...draft, applications, secrets, environments, schedule }
+  },
   component: EditMonitorPage,
 })
 
@@ -79,6 +82,13 @@ function EditMonitorPage() {
   const [applicationId, setApplicationId] = useState(initialApplicationId)
   const [linkedApplicationId, setLinkedApplicationId] =
     useState(initialApplicationId)
+  const [environmentId, setEnvironmentId] = useState(
+    loaded.monitor.environmentId ?? ""
+  )
+  const [savedEnvironmentId, setSavedEnvironmentId] = useState(
+    loaded.monitor.environmentId ?? ""
+  )
+  const monitorUpdatedAt = useRef(loaded.monitor.updatedAt)
   const [schedule, setSchedule] = useState<ScheduleContract>(
     loaded.schedule ?? defaultSchedule
   )
@@ -142,6 +152,22 @@ function EditMonitorPage() {
       }
       setLinkedApplicationId(applicationId)
     }
+    if (savedEnvironmentId !== environmentId) {
+      const environmentResult = await saveMonitorEnvironment({
+        data: {
+          monitorId: loaded.monitor.id,
+          environmentId,
+          updatedAt: monitorUpdatedAt.current,
+        },
+      })
+      if (!environmentResult.ok) {
+        setState("error")
+        setMessage(environmentResult.message)
+        return false
+      }
+      monitorUpdatedAt.current = environmentResult.monitor.updatedAt
+      setSavedEnvironmentId(environmentId)
+    }
     setState("saved")
     setMessage(`Draft revision ${result.revision.revisionNumber} saved`)
     return true
@@ -190,7 +216,7 @@ function EditMonitorPage() {
   return (
     <div className="min-h-full">
       <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-[1600px] items-center gap-3 px-4 py-3 md:px-6">
+        <PageContainer padding="header" className="flex items-center gap-3">
           <Button
             render={<Link to="/monitors" />}
             nativeButton={false}
@@ -247,9 +273,9 @@ function EditMonitorPage() {
             )}
             {publishing ? "Publishing…" : "Publish"}
           </Button>
-        </div>
+        </PageContainer>
       </header>
-      <main className="mx-auto max-w-[1600px] px-4 py-6 md:px-6">
+      <PageContainer as="main">
         {state === "error" ? (
           <Alert className="mb-5" variant="destructive">
             <CircleAlert />
@@ -294,6 +320,23 @@ function EditMonitorPage() {
                 ))}
               </NativeSelect>
             </ScheduleField>
+            <ScheduleField label="Runtime environment">
+              <NativeSelect
+                className="w-full md:w-72"
+                value={environmentId}
+                onChange={(event) => {
+                  setEnvironmentId(event.target.value)
+                  setState("idle")
+                }}
+              >
+                <NativeSelectOption value="">No environment</NativeSelectOption>
+                {loaded.environments.map((profile) => (
+                  <NativeSelectOption key={profile.id} value={profile.id}>
+                    {profile.name} · {profile.profileType}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </ScheduleField>
           </div>
         </section>
         <div className="mb-4">
@@ -311,6 +354,8 @@ function EditMonitorPage() {
           monitorId={loaded.monitor.id}
           revisionId={loaded.revision.id}
           secrets={loaded.secrets}
+          environments={loaded.environments}
+          environmentId={environmentId}
         />
         <section className="mt-6 rounded-xl border p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
@@ -345,6 +390,7 @@ function EditMonitorPage() {
             {schedule.type === "INTERVAL" ? (
               <ScheduleField label="Every seconds">
                 <Input
+                  aria-label="Every seconds"
                   type="number"
                   min={10}
                   value={schedule.intervalSeconds ?? 60}
@@ -360,6 +406,7 @@ function EditMonitorPage() {
             {schedule.type === "CRON" ? (
               <ScheduleField label="Cron expression">
                 <Input
+                  aria-label="Cron expression"
                   className="font-mono"
                   value={schedule.expression ?? "*/5 * * * *"}
                   onChange={(event) =>
@@ -370,6 +417,7 @@ function EditMonitorPage() {
             ) : null}
             <ScheduleField label="Timezone">
               <Input
+                aria-label="Timezone"
                 value={schedule.timezone}
                 onChange={(event) =>
                   setSchedule({ ...schedule, timezone: event.target.value })
@@ -422,7 +470,7 @@ function EditMonitorPage() {
             <Save data-icon="inline-start" /> Save draft
           </Button>
         </div>
-      </main>
+      </PageContainer>
     </div>
   )
 }
@@ -433,8 +481,9 @@ function normalizeDefinition(value: RequestDefinition): RequestDefinition {
     scripts?: Partial<RequestDefinition["scripts"]>
     steps: Array<
       Omit<Step, "request"> & {
-        request: Omit<Step["request"], "preRequestScript"> & {
+        request: Omit<Step["request"], "preRequestScript" | "testScript"> & {
           preRequestScript?: Step["request"]["preRequestScript"]
+          testScript?: Step["request"]["testScript"]
         }
       }
     >
@@ -446,21 +495,27 @@ function normalizeDefinition(value: RequestDefinition): RequestDefinition {
       enabled: false,
       language: "javascript",
       code: "",
-      runtimeVersion: "rhythm-js-1",
+      runtimeVersion: "rhythm-js-2",
     },
   }
   next.scripts.preRequest ??= {
     enabled: false,
     language: "javascript",
     code: "",
-    runtimeVersion: "rhythm-js-1",
+    runtimeVersion: "rhythm-js-2",
   }
   for (const step of next.steps) {
     step.request.preRequestScript ??= {
       enabled: false,
       language: "javascript",
       code: "",
-      runtimeVersion: "rhythm-js-1",
+      runtimeVersion: "rhythm-js-2",
+    }
+    step.request.testScript ??= {
+      enabled: false,
+      language: "javascript",
+      code: "",
+      runtimeVersion: "rhythm-js-2",
     }
   }
   // Migrate stuck enabled:false from the old toggle UI when script has content.

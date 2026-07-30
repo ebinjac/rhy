@@ -207,6 +207,46 @@ func roundedPercent(value, total int) float64 {
 	return math.Round((float64(value)/float64(total)*100)*10) / 10
 }
 
+// SampleHistoryMetricPoints bounds the chart payload while preserving recent
+// executions, detected spikes, and an even chronological trend sample. Summary
+// statistics are calculated before sampling and therefore remain exact.
+func SampleHistoryMetricPoints(points []HistoryMetricPoint, limit int) []HistoryMetricPoint {
+	if limit <= 0 || len(points) <= limit {
+		return points
+	}
+	keep := make(map[int]bool, limit)
+	recentCount := min(50, limit)
+	for index := len(points) - recentCount; index < len(points); index++ {
+		keep[index] = true
+	}
+	for index, point := range points {
+		if point.Spike && len(keep) < limit {
+			keep[index] = true
+		}
+	}
+	remaining := limit - len(keep)
+	olderCount := len(points) - recentCount
+	if remaining > 0 && olderCount > 0 {
+		step := float64(olderCount) / float64(remaining)
+		for sample := 0; sample < remaining; sample++ {
+			index := min(olderCount-1, int(math.Floor(float64(sample)*step)))
+			for index < olderCount && keep[index] {
+				index++
+			}
+			if index < olderCount {
+				keep[index] = true
+			}
+		}
+	}
+	out := make([]HistoryMetricPoint, 0, len(keep))
+	for index, point := range points {
+		if keep[index] {
+			out = append(out, point)
+		}
+	}
+	return out
+}
+
 func standardDeviation(values []int64, mean float64) float64 {
 	if len(values) < 2 {
 		return 0

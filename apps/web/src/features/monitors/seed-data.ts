@@ -10,6 +10,7 @@ export type MonitorSummary = {
   applicationId: string | null
   application: string
   cadence: string
+  tags: string[]
   owner: string
   successRate: number | null
   latencyMs: number | null

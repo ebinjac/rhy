@@ -92,7 +92,7 @@ export function SafeApiPlayground() {
       <label className="mt-4 grid gap-1.5 text-sm font-medium">
         Bearer token
         <input
-          autoComplete="off"
+          autoComplete="current-password"
           className="h-11 rounded-lg border bg-background px-3 font-mono text-sm font-normal"
           onChange={(event) => setToken(event.target.value)}
           placeholder="Held in memory only"

@@ -91,3 +91,28 @@ func TestMetricsRejectsUnknownWindow(t *testing.T) {
 		t.Fatalf("expected MetricsValidationError, got %v", err)
 	}
 }
+
+func TestSampleHistoryMetricPointsPreservesRecentRunsAndSpikes(t *testing.T) {
+	t.Parallel()
+	points := make([]HistoryMetricPoint, 1000)
+	for index := range points {
+		points[index] = HistoryMetricPoint{RunID: "run-" + time.Duration(index).String()}
+	}
+	points[123].Spike = true
+	sampled := SampleHistoryMetricPoints(points, 400)
+	if len(sampled) != 400 {
+		t.Fatalf("sample count=%d", len(sampled))
+	}
+	seen := map[string]bool{}
+	for _, point := range sampled {
+		seen[point.RunID] = true
+	}
+	if !seen[points[123].RunID] {
+		t.Fatal("detected spike was removed from the chart sample")
+	}
+	for index := 950; index < 1000; index++ {
+		if !seen[points[index].RunID] {
+			t.Fatalf("recent run %d was removed from the chart sample", index)
+		}
+	}
+}

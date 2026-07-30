@@ -2,10 +2,18 @@ import { useState } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Activity, FilePenLine, Gauge, KeyRound, Trash2 } from "lucide-react"
 
 import {
   ConfigurationIntro,
+  DeleteProfileDialog,
   EmptyProfiles,
   FormField,
   GuidedForm,
@@ -23,14 +31,19 @@ import {
   deleteConfigurationProfile,
   saveConfigurationProfile,
 } from "@/lib/api-client/monitors"
+import { toast } from "@workspace/ui/components/sonner"
 
 export function TelemetryPanel({
   profiles,
   secrets,
+  certificates,
+  proxies,
   onChanged,
 }: {
   profiles: ConfigurationProfileContract[]
   secrets: ConfigurationProfileContract[]
+  certificates: ConfigurationProfileContract[]
+  proxies: ConfigurationProfileContract[]
   onChanged: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
@@ -44,18 +57,29 @@ export function TelemetryPanel({
   const [selector, setSelector] = useState("")
   const [windowValue, setWindowValue] = useState("10m")
   const [resolution, setResolution] = useState("1m")
+  const [timeoutSeconds, setTimeoutSeconds] = useState(30)
+  const [tlsProfileId, setTlsProfileId] = useState("")
+  const [caProfileId, setCaProfileId] = useState("")
+  const [proxyProfileId, setProxyProfileId] = useState("")
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   function reset() {
     setEditing(null)
     setName("")
     setDescription("")
-    setBaseUrl("")
+    setBaseUrl("https://amex-prod.live.dynatrace.com")
     setTokenAlias("")
     setSelector("")
     setWindowValue("10m")
     setResolution("1m")
+    setTimeoutSeconds(30)
+    setTlsProfileId("")
+    setCaProfileId("")
+    setProxyProfileId("")
     setMessage("")
   }
   function beginCreate() {
@@ -71,6 +95,10 @@ export function TelemetryPanel({
     setSelector(text(profile.config.defaultMetricSelector))
     setWindowValue(text(profile.config.defaultWindow) || "10m")
     setResolution(text(profile.config.defaultResolution) || "1m")
+    setTimeoutSeconds(number(profile.config.timeoutSeconds, 30))
+    setTlsProfileId(text(profile.config.tlsProfileId))
+    setCaProfileId(text(profile.config.caProfileId))
+    setProxyProfileId(text(profile.config.proxyProfileId))
     setMessage("")
     setOpen(true)
   }
@@ -94,6 +122,10 @@ export function TelemetryPanel({
         defaultMetricSelector: selector.trim(),
         defaultWindow: windowValue.trim(),
         defaultResolution: resolution.trim(),
+        timeoutSeconds,
+        tlsProfileId,
+        caProfileId,
+        proxyProfileId,
       },
     }
     const result = editing
@@ -110,25 +142,28 @@ export function TelemetryPanel({
     reset()
     await onChanged()
   }
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Metric checks using this profile may stop working.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind: "telemetry", profileId: profile.id },
+      data: { kind: "telemetry", profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
     await onChanged()
   }
 
   return (
     <>
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
       <ConfigurationIntro
         icon={<Activity className="size-5" />}
         title="Telemetry connections"
@@ -167,7 +202,7 @@ export function TelemetryPanel({
             required
             help="Your Dynatrace environment root, without the metrics API path."
           >
-            <Input
+            <Input aria-label="Environment URL"
               className="font-mono"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
@@ -191,7 +226,7 @@ export function TelemetryPanel({
             wide
             help="Optional. New metric checks can start with this selector and override it."
           >
-            <Input
+            <Input aria-label="Default metric selector"
               className="font-mono"
               value={selector}
               onChange={(e) => setSelector(e.target.value)}
@@ -199,7 +234,7 @@ export function TelemetryPanel({
             />
           </FormField>
           <FormField label="Default lookback window">
-            <Input
+            <Input aria-label="Default lookback window"
               className="font-mono"
               value={windowValue}
               onChange={(e) => setWindowValue(e.target.value)}
@@ -207,11 +242,59 @@ export function TelemetryPanel({
             />
           </FormField>
           <FormField label="Default resolution">
-            <Input
+            <Input aria-label="Default resolution"
               className="font-mono"
               value={resolution}
               onChange={(e) => setResolution(e.target.value)}
               placeholder="1m"
+            />
+          </FormField>
+          <FormField
+            label="Request timeout"
+            help="Bounded between 1 and 30 seconds."
+          >
+            <Input
+              aria-label="Dynatrace request timeout in seconds"
+              max={30}
+              min={1}
+              onChange={(event) =>
+                setTimeoutSeconds(Number(event.target.value) || 30)
+              }
+              type="number"
+              value={timeoutSeconds}
+            />
+          </FormField>
+          <FormField
+            label="Client certificate"
+            help="Optional mTLS certificate or keystore profile."
+          >
+            <ProfileSelect
+              ariaLabel="Dynatrace client certificate"
+              profiles={certificates}
+              value={tlsProfileId}
+              onChange={setTlsProfileId}
+            />
+          </FormField>
+          <FormField
+            label="Trusted CA bundle"
+            help="Optional certificate profile used to extend trusted roots."
+          >
+            <ProfileSelect
+              ariaLabel="Dynatrace CA bundle"
+              profiles={certificates}
+              value={caProfileId}
+              onChange={setCaProfileId}
+            />
+          </FormField>
+          <FormField
+            label="Outbound proxy"
+            help="Optional governed proxy profile. Its no-proxy policy remains authoritative."
+          >
+            <ProfileSelect
+              ariaLabel="Dynatrace outbound proxy"
+              profiles={proxies}
+              value={proxyProfileId}
+              onChange={setProxyProfileId}
             />
           </FormField>
           <div className="grid gap-3 rounded-xl border bg-muted/30 p-4 sm:grid-cols-3 md:col-span-2">
@@ -273,6 +356,18 @@ export function TelemetryPanel({
                   label="Resolution"
                   value={text(profile.config.defaultResolution)}
                 />
+                <ReadonlyValue
+                  label="Timeout"
+                  value={`${number(profile.config.timeoutSeconds, 30)} seconds`}
+                />
+                <ReadonlyValue
+                  label="Network route"
+                  value={
+                    text(profile.config.proxyProfileId)
+                      ? "Governed proxy"
+                      : "Direct"
+                  }
+                />
               </dl>
               {text(profile.config.defaultMetricSelector) ? (
                 <div className="mt-4 rounded-lg bg-muted/50 p-3">
@@ -295,7 +390,7 @@ export function TelemetryPanel({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => void remove(profile)}
+                  onClick={() => setDeleteTarget(profile)}
                 >
                   <Trash2 /> Delete
                 </Button>
@@ -310,10 +405,56 @@ export function TelemetryPanel({
           onCreate={beginCreate}
         />
       ) : null}
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "connection"}”?`}
+        description="Metric checks using this telemetry connection may stop working. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete connection"
+      />
     </>
   )
 }
 
 function text(value: unknown) {
   return typeof value === "string" ? value : ""
+}
+
+function number(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback
+}
+
+function ProfileSelect({
+  profiles,
+  value,
+  onChange,
+  ariaLabel,
+}: {
+  profiles: ConfigurationProfileContract[]
+  value: string
+  onChange: (value: string) => void
+  ariaLabel: string
+}) {
+  return (
+    <Select
+      value={value || null}
+      onValueChange={(next) => onChange(next ?? "")}
+    >
+      <SelectTrigger aria-label={ariaLabel} className="w-full">
+        <SelectValue placeholder="None" />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={null}>None</SelectItem>
+        {profiles.map((profile) => (
+          <SelectItem key={profile.id} value={profile.id}>
+            {profile.name} · {profile.profileType}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
 }

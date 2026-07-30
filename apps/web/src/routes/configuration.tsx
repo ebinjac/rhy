@@ -3,6 +3,7 @@ import { createFileRoute, useRouter } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import { toast } from "@workspace/ui/components/sonner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   Boxes,
@@ -16,6 +17,7 @@ import {
 import { CertificatesPanel } from "@/features/configuration/certificates-panel"
 import { AuthPanel } from "@/features/configuration/auth-panel"
 import { EnvironmentsPanel } from "@/features/configuration/environments-panel"
+import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import { NotificationsPanel } from "@/features/configuration/notifications-panel"
 import { ProxiesPanel } from "@/features/configuration/proxies-panel"
 import { SecretsPanel } from "@/features/configuration/secrets-panel"
@@ -27,6 +29,7 @@ import {
   saveConfigurationProfile,
 } from "@/lib/api-client/monitors"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
+import { PageContainer } from "@/components/page-container"
 
 const kinds = [
   "environments",
@@ -93,18 +96,28 @@ export const Route = createFileRoute("/configuration")({
       return {
         profiles,
         secrets: [] as Awaited<ReturnType<typeof listConfigurationProfiles>>,
+        certificates: [] as Awaited<
+          ReturnType<typeof listConfigurationProfiles>
+        >,
+        proxies: [] as Awaited<ReturnType<typeof listConfigurationProfiles>>,
       }
     }
-    const secrets = await listConfigurationProfiles({
-      data: { kind: "secrets" },
-    })
-    return { profiles, secrets }
+    const [secrets, certificates, proxies] = await Promise.all([
+      listConfigurationProfiles({ data: { kind: "secrets" } }),
+      deps.kind === "telemetry"
+        ? listConfigurationProfiles({ data: { kind: "certificates" } })
+        : Promise.resolve([]),
+      deps.kind === "telemetry"
+        ? listConfigurationProfiles({ data: { kind: "proxies" } })
+        : Promise.resolve([]),
+    ])
+    return { profiles, secrets, certificates, proxies }
   },
   component: ConfigurationPage,
 })
 
 function ConfigurationPage() {
-  const { profiles, secrets } = Route.useLoaderData()
+  const { profiles, secrets, certificates, proxies } = Route.useLoaderData()
   const { kind } = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
@@ -117,6 +130,9 @@ function ConfigurationPage() {
   const [message, setMessage] = useState("")
   const [editingId, setEditingId] = useState("")
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   async function create() {
     let parsed: Record<string, unknown>
@@ -191,20 +207,20 @@ function ConfigurationPage() {
     setName(`${profile.name} copy`)
   }
 
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Monitors that reference this profile may stop working.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind, profileId: profile.id },
+      data: { kind, profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
     await router.invalidate()
   }
 
@@ -222,7 +238,9 @@ function ConfigurationPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <>
+      <div aria-live="polite" className="sr-only" role="status">{message}</div>
+    <PageContainer>
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <p className="text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
@@ -277,7 +295,7 @@ function ConfigurationPage() {
       {kind === "secrets" ? (
         <SecretsPanel
           profiles={profiles}
-          onCreated={async () => {
+          onChanged={async () => {
             await router.invalidate()
           }}
         />
@@ -300,7 +318,7 @@ function ConfigurationPage() {
         <NotificationsPanel
           profiles={profiles}
           secrets={secrets}
-          onCreated={async () => {
+          onChanged={async () => {
             await router.invalidate()
           }}
         />
@@ -324,6 +342,8 @@ function ConfigurationPage() {
         <TelemetryPanel
           profiles={profiles}
           secrets={secrets}
+          certificates={certificates}
+          proxies={proxies}
           onChanged={async () => {
             await router.invalidate()
           }}
@@ -334,20 +354,20 @@ function ConfigurationPage() {
             <section className="mt-5 rounded-xl border bg-muted/20 p-5">
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Name">
-                  <Input
+                  <Input aria-label="Name"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                   />
                 </Field>
                 <Field label="Profile type">
-                  <Input
+                  <Input aria-label="Profile type"
                     value={profileType}
                     onChange={(event) => setProfileType(event.target.value)}
                     placeholder={kind === "telemetry" ? "DYNATRACE" : "default"}
                   />
                 </Field>
                 <Field label="Description" wide>
-                  <Input
+                  <Input aria-label="Description"
                     value={description}
                     onChange={(event) => setDescription(event.target.value)}
                   />
@@ -355,6 +375,7 @@ function ConfigurationPage() {
                 {(profileFields[kind as Kind] ?? []).map((field) => (
                   <Field label={field.label} key={field.key}>
                     <Input
+                      aria-label={field.label}
                       value={fieldValues[field.key] ?? ""}
                       onChange={(event) =>
                         setFieldValues((current) => ({
@@ -435,7 +456,7 @@ function ConfigurationPage() {
                         Clone
                       </Button>
                       <Button
-                        onClick={() => void remove(profile)}
+                        onClick={() => setDeleteTarget(profile)}
                         size="sm"
                         variant="ghost"
                       >
@@ -457,9 +478,21 @@ function ConfigurationPage() {
               </div>
             ) : null}
           </div>
+          <DeleteProfileDialog
+            open={Boolean(deleteTarget)}
+            onOpenChange={(next) => {
+              if (!next) setDeleteTarget(null)
+            }}
+            title={`Delete “${deleteTarget?.name ?? "profile"}”?`}
+            description="Monitors that reference this profile may stop working. This cannot be undone."
+            confirming={deleting}
+            onConfirm={() => void confirmDelete()}
+            confirmLabel="Delete profile"
+          />
         </>
       )}
-    </div>
+    </PageContainer>
+    </>
   )
 }
 

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -17,12 +18,16 @@ import (
 	"net/url"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/dop251/goja"
 )
+
+//go:embed runtime_bootstrap_v2.js
+var runtimeBootstrapV2 string
 
 const (
 	maxSourceBytes = 64 << 10
@@ -36,10 +41,17 @@ const (
 )
 
 type Runtime struct {
-	client *http.Client
+	client       *http.Client
+	packageMu    sync.RWMutex
+	packageCache map[string]string
 }
 
-func NewRuntime() *Runtime { return &Runtime{client: &http.Client{Timeout: 10 * time.Second}} }
+func NewRuntime() *Runtime {
+	return &Runtime{
+		client:       &http.Client{Timeout: 10 * time.Second},
+		packageCache: make(map[string]string),
+	}
+}
 
 func (r *Runtime) Validate(code string) Validation {
 	problems := make([]Problem, 0)
@@ -57,8 +69,8 @@ func (r *Runtime) Validate(code string) Validation {
 
 func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, returnErr error) {
 	started := time.Now()
-	result = Result{Status: "SUCCESS", RuntimeVersion: RuntimeVersion, Logs: []Log{}, Tests: []Test{}, VariableChanges: []Change{}, RequestChanges: []Change{}, AuxiliaryRequests: []AuxiliaryRequest{}, Problems: []Problem{}}
-	if input.Script.RuntimeVersion != "" && input.Script.RuntimeVersion != RuntimeVersion {
+	result = Result{Status: "SUCCESS", RuntimeVersion: RuntimeVersion, Logs: []Log{}, Tests: []Test{}, VariableChanges: []Change{}, RequestChanges: []Change{}, AuxiliaryRequests: []AuxiliaryRequest{}, PackageImports: []PackageImport{}, Problems: []Problem{}}
+	if input.Script.RuntimeVersion != "" && input.Script.RuntimeVersion != RuntimeVersion && input.Script.RuntimeVersion != LegacyRuntimeVersion {
 		return failed(result, started, "SCRIPT_POLICY_VIOLATION", "Unsupported JavaScript runtime version."), nil
 	}
 	validation := r.Validate(input.Script.Code)
@@ -76,6 +88,19 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 	}
 	wallContext, cancel := context.WithTimeout(ctx, time.Duration(input.TimeoutMS)*time.Millisecond)
 	defer cancel()
+	resolvedExternalPackages := make(map[string]string)
+	for _, match := range externalPackageCallPattern.FindAllStringSubmatch(input.Script.Code, -1) {
+		specifier := match[1]
+		if _, exists := resolvedExternalPackages[specifier]; exists {
+			continue
+		}
+		source, evidence, err := r.resolveExternalPackage(wallContext, specifier)
+		result.PackageImports = append(result.PackageImports, evidence)
+		if err != nil {
+			return failed(result, started, "SCRIPT_PACKAGE_ERROR", safeError(err.Error(), nil)), nil
+		}
+		resolvedExternalPackages[specifier] = source
+	}
 
 	vm := goja.New()
 	secretValues := make([]string, 0, len(input.Secrets))
@@ -120,6 +145,19 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 		mu.Unlock()
 		return response, err
 	}
+	hostRequirePackage := func(specifier string) (string, error) {
+		if source, exists := resolvedExternalPackages[strings.TrimSpace(specifier)]; exists {
+			return source, nil
+		}
+		if strings.HasPrefix(strings.TrimSpace(specifier), "npm:") || strings.HasPrefix(strings.TrimSpace(specifier), "jsr:") {
+			return "", errors.New("external package imports must use a literal exact-version specifier")
+		}
+		source, evidence, err := r.resolvePackage(wallContext, specifier, input.Script.Packages)
+		mu.Lock()
+		result.PackageImports = append(result.PackageImports, evidence)
+		mu.Unlock()
+		return source, err
+	}
 	host := map[string]any{
 		"log": hostLog,
 		"sleep": func(milliseconds int64) error {
@@ -143,8 +181,9 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			}
 			return value, nil
 		},
-		"sendRequest": hostSendRequest,
-		"randomUUID":  randomUUID,
+		"sendRequest":    hostSendRequest,
+		"requirePackage": hostRequirePackage,
+		"randomUUID":     randomUUID,
 		"randomBytes": func(length int) ([]int, error) {
 			if length < 0 || length > 65536 {
 				return nil, errors.New("random byte request exceeds 65536 bytes")
@@ -191,20 +230,31 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 	if err := vm.Set("__host", host); err != nil {
 		return Result{}, err
 	}
-	initial := map[string]any{"variables": cloneMap(input.Variables), "environment": cloneMap(input.Environment), "collection": cloneMap(input.Collection), "globals": cloneMap(input.Globals), "cookies": cloneMap(input.Cookies), "request": input.Request, "info": input.Info}
+	initial := map[string]any{
+		"variables": cloneMap(input.Variables), "environment": cloneMap(input.Environment),
+		"collection": cloneMap(input.Collection), "globals": cloneMap(input.Globals),
+		"cookies": cloneMap(input.Cookies), "request": genericJSON(input.Request), "response": genericJSON(input.Response),
+		"iterationData": cloneMap(input.IterationData), "state": input.State, "info": genericJSON(input.Info),
+		"preview": input.Preview, "scope": input.Scope,
+	}
 	if err := vm.Set("__initial", initial); err != nil {
 		return Result{}, err
 	}
-	if _, err := vm.RunString(runtimeBootstrap); err != nil {
+	if _, err := vm.RunString(runtimeBootstrapV2); err != nil {
 		return Result{}, err
 	}
 
 	cpuTimer := time.AfterFunc(defaultCPUTime, func() { vm.Interrupt("JavaScript CPU time limit exceeded") })
 	defer cpuTimer.Stop()
-	value, err := vm.RunString("(async function(){\n" + input.Script.Code + "\n})()")
+	value, err := vm.RunString("(async function(){\n" + input.Script.Code + "\n;await Promise.all(globalThis.__pendingTests || []);\n})()")
 	if err == nil {
-		if promise, ok := value.Export().(*goja.Promise); ok && promise.State() == goja.PromiseStateRejected {
-			err = fmt.Errorf("%v", promise.Result())
+		if promise, ok := value.Export().(*goja.Promise); ok {
+			switch promise.State() {
+			case goja.PromiseStateRejected:
+				err = fmt.Errorf("%v", promise.Result())
+			case goja.PromiseStatePending:
+				return failed(result, started, "SCRIPT_TIMEOUT", "JavaScript did not settle before the deterministic event queue completed."), nil
+			}
 		}
 	}
 	if err != nil {
@@ -225,7 +275,7 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			_ = json.Unmarshal([]byte(testsJSON), &result.Tests)
 		}
 	}
-	stateValue, err := vm.RunString("JSON.stringify({variables:__stores.variables,environment:__stores.environment,collection:__stores.collection,cookies:__stores.cookies,request:__serializeRequest()})")
+	stateValue, err := vm.RunString("JSON.stringify({variables:__stores.variables,environment:__stores.environment,collection:__stores.collection,globals:__stores.globals,cookies:__stores.cookies,state:__stores.state,request:__serializeRequest(),visualizer:globalThis.__visualizer||null,execution:globalThis.__execution||{}})")
 	if err != nil {
 		return failed(result, started, "SCRIPT_RUNTIME_ERROR", safeError(err.Error(), secretValues)), nil
 	}
@@ -233,23 +283,32 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 		Variables   map[string]string `json:"variables"`
 		Environment map[string]string `json:"environment"`
 		Collection  map[string]string `json:"collection"`
+		Globals     map[string]string `json:"globals"`
 		Cookies     map[string]string `json:"cookies"`
+		State       map[string]any    `json:"state"`
 		Request     *Request          `json:"request"`
+		Visualizer  *Visualizer       `json:"visualizer"`
+		Execution   Execution         `json:"execution"`
 	}
 	if err := json.Unmarshal([]byte(stateValue.String()), &state); err != nil {
 		return failed(result, started, "SCRIPT_OUTPUT_LIMIT", "Script produced values that cannot be serialized."), nil
 	}
-	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalCookies = state.Variables, state.Environment, state.Collection, state.Cookies
+	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies = state.Variables, state.Environment, state.Collection, state.Globals, state.Cookies
+	result.InternalState = state.State
 	result.InternalRequest = state.Request
-	result.Variables, result.Environment, result.Collection, result.Cookies, result.Request = maskedMap(state.Variables, secretValues), maskedMap(state.Environment, secretValues), maskedMap(state.Collection, secretValues), maskedMap(state.Cookies, secretValues), maskedRequest(state.Request, secretValues)
+	result.State = maskedObject(state.State, secretValues, false)
+	result.Visualizer = maskedVisualizer(state.Visualizer, secretValues)
+	result.Execution = state.Execution
+	result.Variables, result.Environment, result.Collection, result.Globals, result.Cookies, result.Request = maskedMap(state.Variables, secretValues), maskedMap(state.Environment, secretValues), maskedMap(state.Collection, secretValues), maskedMap(state.Globals, secretValues), maskedMap(state.Cookies, secretValues), maskedRequest(state.Request, secretValues)
 	result.VariableChanges = append(result.VariableChanges, diffMap("variables", input.Variables, state.Variables, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("environment", input.Environment, state.Environment, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("collection", input.Collection, state.Collection, secretValues)...)
+	result.VariableChanges = append(result.VariableChanges, diffMap("globals", input.Globals, state.Globals, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("cookies", input.Cookies, state.Cookies, secretValues)...)
 	result.RequestChanges = diffRequest(input.Request, state.Request, secretValues)
 	for _, test := range result.Tests {
 		if !test.Passed && !test.Skipped {
-			return failed(result, started, "SCRIPT_ASSERTION_FAILURE", "A pre-request script test failed."), nil
+			return failed(result, started, "SCRIPT_ASSERTION_FAILURE", "A JavaScript test failed."), nil
 		}
 	}
 	encodedOutput, _ := json.Marshal(result)
@@ -260,9 +319,180 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 	return result, nil
 }
 
+func genericJSON(value any) any {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil
+	}
+	var output any
+	if err := json.Unmarshal(encoded, &output); err != nil {
+		return nil
+	}
+	return output
+}
+
 func failed(result Result, started time.Time, category, message string) Result {
 	result.Status, result.ErrorCategory, result.ErrorMessage, result.DurationMS = "FAILED", category, message, time.Since(started).Milliseconds()
 	return result
+}
+
+var externalPackagePattern = regexp.MustCompile(`^(npm|jsr):(@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$`)
+var externalPackageCallPattern = regexp.MustCompile(`(?:pm\.)?require\(\s*["']((?:npm|jsr):(?:@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)["']\s*\)`)
+var teamPackagePattern = regexp.MustCompile(`^@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+
+func (r *Runtime) resolvePackage(ctx context.Context, specifier string, packages []TeamPackage) (string, PackageImport, error) {
+	specifier = strings.TrimSpace(specifier)
+	if teamPackagePattern.MatchString(specifier) {
+		started := time.Now()
+		evidence := PackageImport{Specifier: specifier, Registry: "team", Version: "revision"}
+		for _, item := range packages {
+			if strings.TrimSpace(item.Name) != specifier {
+				continue
+			}
+			if len(item.Code) > maxSourceBytes {
+				evidence.DurationMS = time.Since(started).Milliseconds()
+				return "", evidence, errors.New("team package exceeds the 64 KB source limit")
+			}
+			source := `"use strict";const module={exports:{}};const exports=module.exports;` + "\n" + item.Code + "\nreturn module.exports;"
+			if _, err := goja.Compile("team-package.js", "(function(){"+source+"})", false); err != nil {
+				evidence.DurationMS = time.Since(started).Milliseconds()
+				return "", evidence, errors.New("team package contains invalid JavaScript")
+			}
+			evidence.Cached = true
+			evidence.DurationMS = time.Since(started).Milliseconds()
+			return source, evidence, nil
+		}
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, fmt.Errorf("team package %q is not installed in this script", specifier)
+	}
+	return r.resolveExternalPackage(ctx, specifier)
+}
+
+func (r *Runtime) resolveExternalPackage(ctx context.Context, specifier string) (string, PackageImport, error) {
+	started := time.Now()
+	specifier = strings.TrimSpace(specifier)
+	evidence := PackageImport{Specifier: specifier}
+	match := externalPackagePattern.FindStringSubmatch(specifier)
+	if len(match) != 4 {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, errors.New("external packages require an exact npm: or jsr: version")
+	}
+	evidence.Registry, evidence.Version = match[1], match[3]
+	r.packageMu.RLock()
+	source, cached := r.packageCache[specifier]
+	r.packageMu.RUnlock()
+	if cached {
+		evidence.Cached = true
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return source, evidence, nil
+	}
+
+	registrySpecifier := specifier
+	if strings.HasPrefix(registrySpecifier, "npm:") {
+		registrySpecifier = strings.TrimPrefix(registrySpecifier, "npm:")
+	}
+	entryURL := "https://esm.sh/" + registrySpecifier + "?bundle&target=es2020"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, entryURL, nil)
+	if err != nil {
+		return "", evidence, errors.New("package registry request could not be created")
+	}
+	request.Header.Set("Accept", "application/javascript")
+	packageClient := *r.client
+	packageClient.CheckRedirect = func(request *http.Request, _ []*http.Request) error {
+		if request.URL.Scheme != "https" || request.URL.Hostname() != "esm.sh" {
+			return errors.New("package registry redirect was blocked")
+		}
+		return nil
+	}
+	response, err := packageClient.Do(request)
+	if err != nil {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, errors.New("package registry could not be reached")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, fmt.Errorf("package registry returned HTTP %d", response.StatusCode)
+	}
+	path := strings.TrimSpace(response.Header.Get("X-ESM-Path"))
+	if path == "" || !strings.HasPrefix(path, "/") {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, errors.New("package registry did not return a bundled module")
+	}
+	bundleURL := "https://esm.sh" + path
+	bundleRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, bundleURL, nil)
+	bundleRequest.Header.Set("Accept", "application/javascript")
+	bundleResponse, err := packageClient.Do(bundleRequest)
+	if err != nil {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, errors.New("package bundle could not be downloaded")
+	}
+	defer bundleResponse.Body.Close()
+	if bundleResponse.StatusCode != http.StatusOK {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, fmt.Errorf("package bundle returned HTTP %d", bundleResponse.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(bundleResponse.Body, (2<<20)+1))
+	if err != nil || len(raw) > 2<<20 {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, errors.New("package bundle exceeds the 2 MB sandbox limit")
+	}
+	source, err = convertESModuleBundle(string(raw))
+	if err != nil {
+		evidence.DurationMS = time.Since(started).Milliseconds()
+		return "", evidence, err
+	}
+	r.packageMu.Lock()
+	if len(r.packageCache) < 32 {
+		r.packageCache[specifier] = source
+	}
+	r.packageMu.Unlock()
+	evidence.DurationMS = time.Since(started).Milliseconds()
+	return source, evidence, nil
+}
+
+func convertESModuleBundle(source string) (string, error) {
+	trimmed := strings.TrimSpace(source)
+	if regexp.MustCompile(`(?m)^\s*import\s`).MatchString(trimmed) {
+		return "", errors.New("package bundle contains unsupported external imports")
+	}
+	index := strings.LastIndex(trimmed, "export{")
+	prefixLength := len("export{")
+	if index < 0 {
+		index = strings.LastIndex(trimmed, "export {")
+		prefixLength = len("export {")
+	}
+	if index < 0 {
+		return "", errors.New("package bundle has an unsupported module format")
+	}
+	end := strings.Index(trimmed[index+prefixLength:], "};")
+	if end < 0 {
+		return "", errors.New("package bundle export table is incomplete")
+	}
+	exportTable := trimmed[index+prefixLength : index+prefixLength+end]
+	properties := make([]string, 0)
+	for _, item := range strings.Split(exportTable, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		parts := strings.Fields(item)
+		sourceName, exportName := parts[0], parts[0]
+		if len(parts) == 3 && parts[1] == "as" {
+			exportName = parts[2]
+		}
+		if !regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`).MatchString(sourceName) {
+			return "", errors.New("package bundle contains an invalid export")
+		}
+		properties = append(properties, strconv.Quote(exportName)+":"+sourceName)
+	}
+	if len(properties) == 0 {
+		return "", errors.New("package bundle did not expose any exports")
+	}
+	return trimmed[:index] + "\nreturn {" + strings.Join(properties, ",") + "};\n", nil
 }
 
 func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (response map[string]any, evidence AuxiliaryRequest, err error) {
@@ -429,7 +659,7 @@ func diffMap(scope string, before, after map[string]string, secrets []string) []
 		}
 		state := "CAPTURED"
 		oldSafe, nextSafe := mask(old, secrets), mask(next, secrets)
-		if oldSafe != old || nextSafe != next {
+		if sensitiveRequestKey(key) || oldSafe != old || nextSafe != next {
 			state, oldSafe, nextSafe = "MASKED", "MASKED", "MASKED"
 		}
 		changes = append(changes, Change{Scope: scope, Key: key, Operation: op, Before: oldSafe, After: nextSafe, State: state})
@@ -465,6 +695,10 @@ func cloneMap(input map[string]string) map[string]string {
 func maskedMap(input map[string]string, secrets []string) map[string]string {
 	output := map[string]string{}
 	for key, value := range input {
+		if sensitiveRequestKey(key) {
+			output[key] = "MASKED"
+			continue
+		}
 		masked := mask(value, secrets)
 		if masked != value {
 			masked = "MASKED"
@@ -492,6 +726,18 @@ func maskedRequest(input *Request, secrets []string) *Request {
 	}
 	return output
 }
+
+func maskedVisualizer(input *Visualizer, secrets []string) *Visualizer {
+	if input == nil {
+		return nil
+	}
+	return &Visualizer{
+		Template: mask(input.Template, secrets),
+		Data:     maskedObject(input.Data, secrets, false),
+		Options:  maskedObject(input.Options, secrets, false),
+	}
+}
+
 func maskedObject(input map[string]any, secrets []string, maskValues bool) map[string]any {
 	output := make(map[string]any, len(input))
 	for key, value := range input {

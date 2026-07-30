@@ -145,6 +145,8 @@ export function OperationalStatusBadge({
 }) {
   const definition = operationalStatuses[status]
   const Icon = definition.icon
+  // Prefer title over sr-only / aria-describedby so nested badges do not
+  // pollute interactive ancestors (links, buttons) with a long accessible name.
   return (
     <Badge
       className={`${definition.className} ${className}`}
@@ -206,4 +208,31 @@ export function fromMonitorSummaryStatus(
     default:
       return "NO_SIGNAL"
   }
+}
+
+/** Align list badges with AvailabilityCell thresholds (≥99 healthy, &lt;99 degraded). */
+export function listMonitorOperationalStatus(
+  status: MonitorStatus,
+  successRate: number | null
+): OperationalStatus {
+  const base = fromMonitorSummaryStatus(status)
+  if (base === "FAILING" || base === "PAUSED") return base
+  if (successRate !== null && !Number.isNaN(successRate) && successRate < 99) {
+    return "DEGRADED"
+  }
+  return base
+}
+
+/** Map API health + success rate into the list filter vocabulary. */
+export function effectiveMonitorListStatus(
+  status: MonitorStatus,
+  successRate: number | null
+): MonitorStatus {
+  if (status === "failing" || status === "paused" || status === "unknown") {
+    return status
+  }
+  if (successRate !== null && !Number.isNaN(successRate) && successRate < 99) {
+    return "warning"
+  }
+  return status
 }

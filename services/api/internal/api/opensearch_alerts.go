@@ -53,6 +53,37 @@ func (s *server) listReceivers(w http.ResponseWriter, r *http.Request, applicati
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: items, Meta: s.meta(r)})
 }
 
+func (s *server) assignOpenSearchAlertsToService(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "ALERTING_UNAVAILABLE", "OpenSearch alert assignment requires PostgreSQL.", nil)
+		return
+	}
+	var input alerts.ServiceAssignmentInput
+	if err := decodeStrictJSON(w, r, &input); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.", nil)
+		return
+	}
+	principal, _ := authz.PrincipalFromContext(r.Context())
+	result, err := s.alerts.AssignOpenSearchAlertsToService(
+		r.Context(),
+		r.PathValue("applicationId"),
+		input,
+		principal.ID,
+	)
+	switch {
+	case errors.Is(err, alerts.ErrServiceNotFound):
+		s.writeError(w, r, http.StatusUnprocessableEntity, "SERVICE_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, alerts.ErrAlertScopeMismatch):
+		s.writeError(w, r, http.StatusConflict, "ALERT_SCOPE_MISMATCH", err.Error(), nil)
+	case errors.Is(err, alerts.ErrInvalidServiceAssignment):
+		s.writeError(w, r, http.StatusUnprocessableEntity, "ALERT_ASSIGNMENT_INVALID", err.Error(), nil)
+	case err != nil:
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to assign the selected alerts.", nil)
+	default:
+		s.writeJSON(w, r, http.StatusOK, successResponse{Data: result, Meta: s.meta(r)})
+	}
+}
+
 func (s *server) getOpenSearchAlertReceiver(w http.ResponseWriter, r *http.Request) {
 	if s.alerts == nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "ALERTING_UNAVAILABLE", "OpenSearch alert receivers require PostgreSQL.", nil)

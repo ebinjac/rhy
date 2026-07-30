@@ -4,6 +4,7 @@
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";
 @import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/jetbrains-mono";
 
 @custom-variant dark (&:is(.dark *));
 @source "../../../apps/**/*.{ts,tsx}";
@@ -64,7 +65,7 @@
   --card-foreground: oklch(0.97 0.004 254);
   --popover: oklch(0.15 0.006 254);
   --popover-foreground: oklch(0.97 0.004 254);
-  --primary: oklch(0.68 0.14 253.7);
+  --primary: oklch(98.592% 0.00594 240.386);
   --primary-foreground: oklch(0.12 0.01 254);
   --secondary: oklch(0.2 0.008 254);
   --secondary-foreground: oklch(0.97 0.004 254);
@@ -75,7 +76,7 @@
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(0.97 0.004 254 / 10%);
   --input: oklch(0.97 0.004 254 / 14%);
-  --ring: oklch(0.68 0.13 253.7);
+  --ring: oklch(98.081% 0.00917 258.497);
   --success: oklch(0.7 0.14 154);
   --success-soft: oklch(0.2 0.04 154);
   --success-foreground: oklch(0.84 0.09 154);
@@ -147,6 +148,7 @@
   --color-sidebar-ring: var(--sidebar-ring);
   --font-sans: "Instrument Sans Variable", sans-serif;
   --font-heading: "Instrument Sans Variable", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
 }
 
 @layer base {
@@ -173,7 +175,8 @@
     color: oklch(0.18 0.03 254);
   }
   @media (max-width: 767px) {
-    [data-slot="button"] {
+    [data-slot="button"],
+    [data-slot="dropdown-menu-trigger"] {
       min-width: 2.75rem;
       min-height: 2.75rem;
     }

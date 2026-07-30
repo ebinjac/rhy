@@ -46,6 +46,7 @@ import {
   saveELFQuery,
   validateELFQuery,
 } from "@/lib/api-client/elf"
+import { PageContainer } from "@/components/page-container"
 import { formatDateTime } from "@/lib/format-date"
 
 const MonacoEditor = lazy(async () => ({
@@ -58,6 +59,11 @@ export const Route = createFileRoute("/elf/$queryId")({
   }),
   component: ELFWorkbench,
 })
+
+type Outcome = {
+  tone: "ok" | "error"
+  text: string
+}
 
 function ELFWorkbench() {
   const loaded = Route.useLoaderData()
@@ -79,7 +85,7 @@ function ELFWorkbench() {
   const [pending, setPending] = useState<
     "save" | "probe" | "test" | "validate" | ""
   >("")
-  const [message, setMessage] = useState("")
+  const [outcome, setOutcome] = useState<Outcome | null>(null)
   const [problems, setProblems] = useState<
     Array<{ path: string; message: string }>
   >([])
@@ -107,7 +113,10 @@ function ELFWorkbench() {
     try {
       return JSON.parse(code) as Record<string, JsonValue>
     } catch {
-      setMessage("Search body must be valid JSON before it can run.")
+      setOutcome({
+        tone: "error",
+        text: "Search body must be valid JSON before it can run.",
+      })
       return null
     }
   }
@@ -115,50 +124,70 @@ function ELFWorkbench() {
     const searchBody = body()
     if (!searchBody) return null
     if (!Number.isInteger(threshold) || threshold < 0) {
-      setMessage("Enter a whole-number hit-count threshold of zero or greater.")
+      setOutcome({
+        tone: "error",
+        text: "Enter a whole-number hit-count threshold of zero or greater.",
+      })
       return null
     }
     setPending("save")
-    setMessage("")
-    const result = await saveELFQuery({
-      data: {
-        id: loaded.id,
-        name: loaded.name,
-        description: loaded.description ?? "",
-        applicationId,
-        serviceId,
-        indexOverride: loaded.indexOverride ?? "",
-        active: loaded.active,
-        searchBody,
-        defaultWindowSeconds: windowSeconds,
-        checkKind: "HIT_COUNT",
-        criteria: { operator, value: threshold },
-        gateMode,
-        semanticMapping: loaded.semanticMapping,
-      },
-    })
-    setPending("")
-    if (!result.ok) {
-      setMessage(result.message)
-      return null
+    try {
+      const result = await saveELFQuery({
+        data: {
+          id: loaded.id,
+          name: loaded.name,
+          description: loaded.description ?? "",
+          applicationId,
+          serviceId,
+          indexOverride: loaded.indexOverride ?? "",
+          active: loaded.active,
+          searchBody,
+          defaultWindowSeconds: windowSeconds,
+          checkKind: "HIT_COUNT",
+          criteria: { operator, value: threshold },
+          gateMode,
+          semanticMapping: loaded.semanticMapping,
+        },
+      })
+      if (!result.ok) {
+        setOutcome({ tone: "error", text: result.message })
+        return null
+      }
+      setOutcome({
+        tone: "ok",
+        text: `Saved immutable revision ${result.query.revisionNumber}.`,
+      })
+      await router.invalidate()
+      return result.query
+    } finally {
+      setPending("")
     }
-    setMessage(`Saved immutable revision ${result.query.revisionNumber}.`)
-    await router.invalidate()
-    return result.query
   }
   async function validate() {
     setPending("validate")
-    setMessage("")
     try {
       const result = await validateELFQuery({ data: { queryId: loaded.id } })
       setProblems(result.problems)
-      setMessage(
-        result.valid
-          ? result.policyNotes.join(" ")
-          : `${result.problems.length} policy problem${result.problems.length === 1 ? "" : "s"} found.`
-      )
+      if (result.valid) {
+        setOutcome({
+          tone: "ok",
+          text:
+            result.policyNotes.length > 0
+              ? result.policyNotes.join(" ")
+              : "Validation passed. No policy problems found.",
+        })
+      } else {
+        setOutcome({
+          tone: "error",
+          text: `${result.problems.length} policy problem${result.problems.length === 1 ? "" : "s"} found.`,
+        })
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Validation failed.")
+      setProblems([])
+      setOutcome({
+        tone: "error",
+        text: error instanceof Error ? error.message : "Validation failed.",
+      })
     } finally {
       setPending("")
     }
@@ -167,21 +196,25 @@ function ELFWorkbench() {
     const saved = await save()
     if (!saved) return
     setPending(kind)
-    setMessage("")
-    const result = await runELFQuery({
-      data: { queryId: loaded.id, mode: kind, windowSeconds, size: 100 },
-    })
-    setPending("")
-    if (!result.ok) {
-      setMessage(result.message)
-      return
+    try {
+      const result = await runELFQuery({
+        data: { queryId: loaded.id, mode: kind, windowSeconds, size: 100 },
+      })
+      if (!result.ok) {
+        setOutcome({ tone: "error", text: result.message })
+        return
+      }
+      setRun(result.run)
+      setOutcome({
+        tone: "ok",
+        text:
+          kind === "probe"
+            ? `Probe found ${result.run.hitCount.toLocaleString()} matching events.`
+            : `Check decision: ${result.run.decision}.`,
+      })
+    } finally {
+      setPending("")
     }
-    setRun(result.run)
-    setMessage(
-      kind === "probe"
-        ? `Probe found ${result.run.hitCount.toLocaleString()} matching events.`
-        : `Check decision: ${result.run.decision}.`
-    )
   }
   const selectedApplication = loaded.applications.find(
     (application) => application.id === applicationId
@@ -200,12 +233,15 @@ function ELFWorkbench() {
     selectedApplication?.defaultTimeField ||
     "@timestamp"
   return (
-    <main className="min-h-[calc(100svh-7rem)]">
-      <header className="border-b px-4 py-4 md:px-6">
-        <div className="mx-auto flex max-w-[1480px] flex-col gap-4 lg:flex-row lg:items-center">
+    <div className="min-h-[calc(100svh-7rem)]">
+      <header className="border-b py-4">
+        <PageContainer
+          padding="none"
+          className="flex flex-col gap-4 lg:flex-row lg:items-center"
+        >
           <div className="min-w-0 flex-1">
             <Link
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              className="inline-flex min-h-11 items-center gap-1 text-xs text-muted-foreground hover:text-foreground md:min-h-0"
               to="/elf"
             >
               <ArrowLeft className="size-3.5" />
@@ -223,8 +259,9 @@ function ELFWorkbench() {
               </Badge>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button
+              className="max-md:min-h-11"
               variant="outline"
               onClick={() => void validate()}
               disabled={!!pending}
@@ -237,6 +274,7 @@ function ELFWorkbench() {
               Validate
             </Button>
             <Button
+              className="max-md:min-h-11"
               variant="outline"
               onClick={() => void save()}
               disabled={!!pending}
@@ -249,6 +287,7 @@ function ELFWorkbench() {
               Save
             </Button>
             <Button
+              className="max-md:min-h-11"
               onClick={() =>
                 void execute(mode === "explore" ? "probe" : "test")
               }
@@ -262,12 +301,19 @@ function ELFWorkbench() {
               {mode === "explore" ? "Run probe" : "Test check"}
             </Button>
           </div>
-        </div>
+        </PageContainer>
       </header>
-      <section className="border-b bg-muted/15 px-4 py-3 md:px-6">
-        <div className="mx-auto flex max-w-[1480px] flex-wrap items-end gap-x-6 gap-y-3">
-          <div className="text-xs font-medium">
-            Application
+      <section className="border-b bg-muted/15 py-3">
+        <PageContainer
+          padding="none"
+          className="flex flex-wrap items-end gap-x-6 gap-y-3"
+        >          <div>
+            <label
+              htmlFor="elf-application"
+              className="text-xs font-medium"
+            >
+              Application
+            </label>
             <Select
               value={applicationId}
               onValueChange={(value) => {
@@ -280,7 +326,10 @@ function ELFWorkbench() {
                 label: `${application.name}${application.carId ? ` · ${application.carId}` : ""}`,
               }))}
             >
-              <SelectTrigger aria-label="Application" className="mt-1 min-w-48">
+              <SelectTrigger
+                id="elf-application"
+                className="mt-1 min-w-48 max-md:min-h-11"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -293,8 +342,10 @@ function ELFWorkbench() {
               </SelectContent>
             </Select>
           </div>
-          <div className="text-xs font-medium">
-            Service
+          <div>
+            <label htmlFor="elf-service" className="text-xs font-medium">
+              Service
+            </label>
             <Select
               value={serviceId || null}
               onValueChange={(value) => setServiceId(value ?? "")}
@@ -306,7 +357,10 @@ function ELFWorkbench() {
                 })),
               ]}
             >
-              <SelectTrigger aria-label="Service" className="mt-1 min-w-44">
+              <SelectTrigger
+                id="elf-service"
+                className="mt-1 min-w-44 max-md:min-h-11"
+              >
                 <SelectValue placeholder="All services" />
               </SelectTrigger>
               <SelectContent>
@@ -321,8 +375,10 @@ function ELFWorkbench() {
           </div>
           <Context label="Resolved index" value={resolvedIndex} mono />
           <Context label="Time field" value={resolvedTimeField} mono />
-          <div className="ml-auto text-xs font-medium">
-            Range
+          <div className="ml-auto">
+            <label htmlFor="elf-range" className="text-xs font-medium">
+              Range
+            </label>
             <Select
               value={String(windowSeconds)}
               onValueChange={(value) => {
@@ -336,7 +392,10 @@ function ELFWorkbench() {
                 "86400": "Last 24 hours",
               }}
             >
-              <SelectTrigger aria-label="Time range" className="mt-1">
+              <SelectTrigger
+                id="elf-range"
+                className="mt-1 max-md:min-h-11"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -347,21 +406,30 @@ function ELFWorkbench() {
               </SelectContent>
             </Select>
           </div>
-        </div>
+        </PageContainer>
       </section>
       <WorkbenchModeNavigator mode={mode} setMode={setMode} />
-      {message ? (
+      {outcome ? (
         <div
-          className={`border-b px-4 py-2.5 text-sm md:px-6 ${problems.length ? "bg-destructive/5 text-destructive" : "bg-primary/5 text-foreground"}`}
+          role={outcome.tone === "error" ? "alert" : "status"}
+          aria-live={outcome.tone === "error" ? "assertive" : "polite"}
+          className={`border-b py-2.5 text-sm ${
+            outcome.tone === "error"
+              ? "bg-destructive/5 text-destructive"
+              : "bg-primary/5 text-foreground"
+          }`}
         >
-          {message}
+          <PageContainer padding="none">{outcome.text}</PageContainer>
         </div>
       ) : null}
-      <div className="mx-auto grid max-w-[1480px] lg:grid-cols-[minmax(420px,44%)_minmax(0,1fr)]">
+      <PageContainer
+        padding="none"
+        className="grid lg:grid-cols-[minmax(420px,44%)_minmax(0,1fr)]"
+      >
         <section className="min-w-0 border-b lg:border-r lg:border-b-0">
           {mode === "explore" ? (
             <>
-              <div className="flex h-11 items-center gap-2 border-b px-3">
+              <div className="flex min-h-11 items-center gap-2 border-b px-3">
                 <Braces className="size-4 text-muted-foreground" />
                 <span className="text-sm font-medium">
                   OpenSearch Query DSL
@@ -372,11 +440,19 @@ function ELFWorkbench() {
                 <Button
                   size="sm"
                   variant="ghost"
+                  className="max-md:min-h-11"
                   onClick={() => {
                     try {
                       setCode(JSON.stringify(JSON.parse(code), null, 2))
+                      setOutcome({
+                        tone: "ok",
+                        text: "Formatted query JSON.",
+                      })
                     } catch {
-                      setMessage("Search body is not valid JSON.")
+                      setOutcome({
+                        tone: "error",
+                        text: "Search body is not valid JSON.",
+                      })
                     }
                   }}
                 >
@@ -395,6 +471,7 @@ function ELFWorkbench() {
                       setProblems([])
                     }}
                     options={{
+                      ariaLabel: "OpenSearch query JSON",
                       automaticLayout: true,
                       fontSize: 13,
                       lineHeight: 21,
@@ -435,7 +512,11 @@ function ELFWorkbench() {
             />
           )}
           {problems.length ? (
-            <div className="space-y-2 border-t p-4">
+            <div
+              className="space-y-2 border-t p-4"
+              role="alert"
+              aria-live="assertive"
+            >
               {problems.map((problem) => (
                 <p
                   key={`${problem.path}-${problem.message}`}
@@ -451,8 +532,8 @@ function ELFWorkbench() {
           ) : null}
         </section>
         <Results run={run} mode={mode} />
-      </div>
-    </main>
+      </PageContainer>
+    </div>
   )
 }
 
@@ -464,13 +545,20 @@ function Results({
   mode: "explore" | "check"
 }) {
   const [filter, setFilter] = useState("")
-  const samples = useMemo(
+  const indexedSamples = useMemo(
     () =>
-      run?.samples.filter((item) =>
-        JSON.stringify(item).toLowerCase().includes(filter.toLowerCase())
-      ) ?? [],
-    [run, filter]
+      run?.samples.map((sample, index) => ({
+        sample,
+        index,
+        searchText: JSON.stringify(sample).toLowerCase(),
+      })) ?? [],
+    [run]
   )
+  const samples = useMemo(() => {
+    const needle = filter.trim().toLowerCase()
+    if (!needle) return indexedSamples
+    return indexedSamples.filter((item) => item.searchText.includes(needle))
+  }, [indexedSamples, filter])
   if (!run)
     return (
       <section className="grid min-h-[620px] place-items-center p-8 text-center">
@@ -495,14 +583,18 @@ function Results({
         <Metric
           label="hits.total.value"
           value={run.hitCount.toLocaleString()}
-          hint="The exact total number of matching OpenSearch documents. It is not limited by the number of sample logs displayed."
+          hint="Exact total matching OpenSearch documents — not limited by the sample logs shown below."
         />
         <Metric label="OpenSearch took" value={`${run.openSearchTookMs} ms`} />
         <Metric label="Round trip" value={`${run.roundTripMs} ms`} />
         <Metric label="Decision" value={run.decision} state={run.decision} />
       </div>
       {run.failureReason ? (
-        <div className="flex gap-2 border-b bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        <div
+          className="flex gap-2 border-b bg-destructive/5 px-4 py-3 text-sm text-destructive"
+          role="alert"
+          aria-live="assertive"
+        >
           <CircleAlert className="mt-0.5 size-4" />
           <div>
             <p className="font-medium">{run.failureCategory}</p>
@@ -512,24 +604,24 @@ function Results({
       ) : null}
       <Tabs defaultValue="logs" className="gap-0">
         <div className="overflow-x-auto border-b px-3">
-          <TabsList variant="line">
-            <TabsTrigger value="logs">
+          <TabsList variant="line" className="max-md:h-11">
+            <TabsTrigger value="logs" className="max-md:min-h-11">
               <TableProperties />
               Logs
             </TabsTrigger>
-            <TabsTrigger value="fields">
+            <TabsTrigger value="fields" className="max-md:min-h-11">
               <Layers3 />
               Fields
             </TabsTrigger>
-            <TabsTrigger value="aggregations">
+            <TabsTrigger value="aggregations" className="max-md:min-h-11">
               <Gauge />
               Aggregations
             </TabsTrigger>
-            <TabsTrigger value="raw">
+            <TabsTrigger value="raw" className="max-md:min-h-11">
               <FileJson2 />
               Raw
             </TabsTrigger>
-            <TabsTrigger value="debug">
+            <TabsTrigger value="debug" className="max-md:min-h-11">
               <Code2 />
               Debug
             </TabsTrigger>
@@ -537,10 +629,15 @@ function Results({
         </div>
         <TabsContent value="logs">
           <div className="border-b p-3">
+            <label htmlFor="elf-evidence-filter" className="sr-only">
+              Filter loaded evidence
+            </label>
             <div className="relative">
               <Filter className="absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                className="pl-9"
+                id="elf-evidence-filter"
+                aria-label="Filter loaded evidence"
+                className="pl-9 max-md:min-h-11"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter loaded evidence"
@@ -548,7 +645,7 @@ function Results({
             </div>
           </div>
           <div className="max-h-[560px] divide-y overflow-auto">
-            {samples.map((sample, index) => (
+            {samples.map(({ sample, index }) => (
               <LogRow key={String(sample._id ?? index)} sample={sample} />
             ))}
             {!samples.length ? (
@@ -626,7 +723,9 @@ function LogRow({ sample }: { sample: Record<string, JsonValue> }) {
   return (
     <article>
       <button
-        className="grid w-full gap-2 px-4 py-3 text-left hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset sm:grid-cols-[160px_72px_130px_minmax(0,1fr)]"
+        type="button"
+        aria-expanded={open}
+        className="grid w-full gap-2 px-4 py-3 text-left hover:bg-muted/35 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset max-md:min-h-11 sm:grid-cols-[160px_72px_130px_minmax(0,1fr)]"
         onClick={() => setOpen((value) => !value)}
       >
         <time className="truncate font-mono text-xs text-muted-foreground">
@@ -692,7 +791,12 @@ function DeploymentCheckPanel({
             </p>
           </div>
         </div>
-        <Button size="sm" variant="outline" onClick={onEditQuery}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="max-md:min-h-11"
+          onClick={onEditQuery}
+        >
           <Braces />
           Edit query in Explore Logs
         </Button>
@@ -716,7 +820,7 @@ function DeploymentCheckPanel({
         />
       </div>
       <details className="group border-t">
-        <summary className="cursor-pointer px-5 py-3 text-xs font-medium text-muted-foreground hover:bg-muted/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset">
+        <summary className="cursor-pointer px-5 py-3 text-xs font-medium text-muted-foreground hover:bg-muted/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset max-md:min-h-11 max-md:flex max-md:items-center">
           View query JSON
         </summary>
         <pre className="max-h-80 overflow-auto border-t bg-muted/20 p-4 text-xs leading-5">
@@ -738,7 +842,7 @@ function CheckContext({
 }) {
   return (
     <div className="min-w-0 px-4 py-3">
-      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p
         className={`mt-1 truncate text-sm font-medium ${mono ? "font-mono text-xs" : ""}`}
         title={value}
@@ -787,8 +891,13 @@ function RuleBuilder({
             hits.total.value
           </span>
         </div>
-        <div className="text-xs font-medium">
-          Comparison
+        <div>
+          <label
+            htmlFor="elf-pass-comparison"
+            className="text-xs font-medium"
+          >
+            Comparison
+          </label>
           <Select
             value={operator}
             onValueChange={(value) => {
@@ -803,8 +912,9 @@ function RuleBuilder({
             )}
           >
             <SelectTrigger
+              id="elf-pass-comparison"
               aria-label="Pass-condition comparison"
-              className="mt-1 w-full"
+              className="mt-1 w-full max-md:min-h-11"
             >
               <SelectValue />
             </SelectTrigger>
@@ -821,7 +931,7 @@ function RuleBuilder({
           Threshold
           <Input
             id="elf-hit-threshold"
-            className="mt-1"
+            className="mt-1 max-md:min-h-11"
             type="number"
             min={0}
             step={1}
@@ -839,18 +949,30 @@ function RuleBuilder({
         number of sample documents are displayed.
       </p>
       <div className="mt-4 border-t pt-3">
-        <p className="text-xs font-medium">Gate impact</p>
-        <div className="mt-2 flex flex-wrap gap-2">
+        <p id="elf-gate-impact-label" className="text-xs font-medium">
+          Gate impact
+        </p>
+        <div
+          className="mt-2 flex flex-wrap gap-2"
+          role="radiogroup"
+          aria-labelledby="elf-gate-impact-label"
+        >
           <Button
             size="sm"
+            className="max-md:min-h-11"
             variant={gateMode === "BLOCKING" ? "default" : "outline"}
+            role="radio"
+            aria-checked={gateMode === "BLOCKING"}
             onClick={() => setGateMode("BLOCKING")}
           >
             Blocking
           </Button>
           <Button
             size="sm"
+            className="max-md:min-h-11"
             variant={gateMode === "ADVISORY" ? "default" : "outline"}
+            role="radio"
+            aria-checked={gateMode === "ADVISORY"}
             onClick={() => setGateMode("ADVISORY")}
           >
             Advisory
@@ -886,73 +1008,49 @@ function WorkbenchModeNavigator({
   setMode: (mode: "explore" | "check") => void
 }) {
   return (
-    <nav
-      className="border-b bg-muted/10 px-4 py-4 md:px-6"
-      aria-label="ELF query workflow"
-    >
-      <div className="mx-auto max-w-[1480px]">
-        <div className="mb-3">
-          <h2 className="text-sm font-semibold">What do you want to do?</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Explore the matching logs first, then decide whether those matches
-            should pass or block a deployment.
-          </p>
-        </div>
-        <div className="grid gap-2 sm:grid-cols-2" role="group">
+    <nav className="border-b bg-muted/10 py-2" aria-label="ELF query workflow">
+      <PageContainer
+        padding="none"
+        className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4"
+      >
+        <div
+          className="inline-flex w-full rounded-lg border bg-background p-0.5 sm:w-auto"
+          role="group"
+          aria-label="Workbench mode"
+        >
           <button
             type="button"
             aria-pressed={mode === "explore"}
-            className={`flex min-h-20 items-start gap-3 rounded-lg border px-4 py-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:flex-none ${
               mode === "explore"
-                ? "border-primary bg-primary/7"
-                : "border-border bg-background hover:bg-muted/30"
+                ? "bg-primary/10 text-foreground"
+                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
             }`}
             onClick={() => setMode("explore")}
           >
-            <Search
-              className={`mt-0.5 size-5 shrink-0 ${mode === "explore" ? "text-primary" : "text-muted-foreground"}`}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2 text-sm font-semibold">
-                Explore logs
-                {mode === "explore" ? (
-                  <Badge variant="secondary">Current</Badge>
-                ) : null}
-              </span>
-              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                Run the OpenSearch query and inspect matching logs, fields, and
-                the raw response.
-              </span>
-            </span>
+            <Search className="size-4 shrink-0" />
+            Explore logs
           </button>
           <button
             type="button"
             aria-pressed={mode === "check"}
-            className={`flex min-h-20 items-start gap-3 rounded-lg border px-4 py-3 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ${
+            className={`inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 sm:flex-none ${
               mode === "check"
-                ? "border-primary bg-primary/7"
-                : "border-border bg-background hover:bg-muted/30"
+                ? "bg-primary/10 text-foreground"
+                : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
             }`}
             onClick={() => setMode("check")}
           >
-            <ShieldCheck
-              className={`mt-0.5 size-5 shrink-0 ${mode === "check" ? "text-primary" : "text-muted-foreground"}`}
-            />
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2 text-sm font-semibold">
-                Configure deployment check
-                {mode === "check" ? (
-                  <Badge variant="secondary">Current</Badge>
-                ) : null}
-              </span>
-              <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                Compare <code>hits.total.value</code> with a threshold and
-                choose whether failure blocks the release.
-              </span>
-            </span>
+            <ShieldCheck className="size-4 shrink-0" />
+            Deployment check
           </button>
         </div>
-      </div>
+        <p className="text-xs text-muted-foreground">
+          {mode === "explore"
+            ? "Inspect matching logs, then configure a deployment check."
+            : "Set the hit-count pass condition and whether failure blocks release."}
+        </p>
+      </PageContainer>
     </nav>
   )
 }
@@ -968,7 +1066,12 @@ function ExploreHints({ onConfigureCheck }: { onConfigureCheck: () => void }) {
           limits.
         </p>
       </div>
-      <Button size="sm" variant="outline" onClick={onConfigureCheck}>
+      <Button
+        size="sm"
+        variant="outline"
+        className="max-md:min-h-11"
+        onClick={onConfigureCheck}
+      >
         Configure deployment check
         <ArrowRight />
       </Button>
@@ -986,7 +1089,7 @@ function Context({
 }) {
   return (
     <div>
-      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p
         className={`mt-0.5 text-sm ${mono ? "font-mono text-xs" : "font-medium"}`}
       >
@@ -1008,14 +1111,15 @@ function Metric({
 }) {
   return (
     <div className="px-4 py-3">
-      <p className="text-[11px] text-muted-foreground" title={hint}>
-        {label}
-      </p>
+      <p className="text-xs text-muted-foreground">{label}</p>
       <p
         className={`mt-1 font-heading text-lg font-semibold ${state === "FAIL" ? "text-destructive" : state === "PASS" ? "text-success-foreground" : ""}`}
       >
         {value}
       </p>
+      {hint ? (
+        <p className="mt-1 text-xs leading-4 text-muted-foreground">{hint}</p>
+      ) : null}
     </div>
   )
 }
@@ -1034,9 +1138,11 @@ function JSONBlock({ value, empty }: { value: unknown; empty?: string }) {
 }
 function EditorLoading() {
   return (
-    <div className="grid h-[520px] place-items-center bg-[#1e1e1e] text-sm text-white/70">
-      <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-      Loading query editor…
+    <div className="grid h-[520px] place-items-center bg-muted text-sm text-muted-foreground">
+      <span className="inline-flex items-center gap-2">
+        <LoaderCircle className="size-4 animate-spin" />
+        Loading query editor…
+      </span>
     </div>
   )
 }

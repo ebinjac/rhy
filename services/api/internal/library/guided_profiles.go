@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 var environmentVariableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
@@ -168,6 +169,20 @@ func prepareTelemetryConfig(profileType string, config map[string]any) (map[stri
 	if len(defaultSelector) > 1000 {
 		return nil, "", errors.New("default metric selector is too long")
 	}
+	timeoutSeconds := 30
+	if value, ok := config["timeoutSeconds"]; ok {
+		switch typed := value.(type) {
+		case float64:
+			timeoutSeconds = int(typed)
+		case int:
+			timeoutSeconds = typed
+		case int64:
+			timeoutSeconds = int(typed)
+		}
+	}
+	if timeoutSeconds < 1 || timeoutSeconds > 30 {
+		return nil, "", errors.New("Dynatrace timeoutSeconds must be between 1 and 30")
+	}
 	return map[string]any{
 		"baseUrl":               baseURL,
 		"host":                  strings.ToLower(parsed.Hostname()),
@@ -175,6 +190,10 @@ func prepareTelemetryConfig(profileType string, config map[string]any) (map[stri
 		"defaultMetricSelector": defaultSelector,
 		"defaultWindow":         defaultProfileValue(firstString(config, "defaultWindow"), "10m"),
 		"defaultResolution":     defaultProfileValue(firstString(config, "defaultResolution"), "1m"),
+		"timeoutSeconds":        timeoutSeconds,
+		"tlsProfileId":          strings.TrimSpace(firstString(config, "tlsProfileId")),
+		"caProfileId":           strings.TrimSpace(firstString(config, "caProfileId")),
+		"proxyProfileId":        strings.TrimSpace(firstString(config, "proxyProfileId")),
 	}, provider, nil
 }
 
@@ -187,8 +206,8 @@ func requiredSecretRef(config map[string]any, key, label string) (string, error)
 		value = "secret://" + value
 	}
 	alias := strings.TrimSpace(strings.TrimPrefix(value, "secret://"))
-	if alias == "" || strings.ContainsAny(alias, " \t\r\n") {
-		return "", fmt.Errorf("%s must be a valid secret:// alias", label)
+	if alias == "" || strings.IndexFunc(alias, unicode.IsControl) >= 0 {
+		return "", fmt.Errorf("%s must refer to a valid secret name or ID", label)
 	}
 	return "secret://" + alias, nil
 }

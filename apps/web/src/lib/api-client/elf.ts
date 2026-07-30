@@ -192,6 +192,29 @@ export const listELFApplications = createServerFn({ method: "GET" }).handler(
       : []
   }
 )
+
+export const getELFApplication = createServerFn({ method: "GET" })
+  .validator(z.object({ applicationId: z.string().min(1) }))
+  .handler(async ({ data }): Promise<ELFApplicationContract | null> => {
+    const response = await fetch(
+      `${baseURL()}/api/v1/applications/${encodeURIComponent(data.applicationId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      }
+    )
+    if (response.status === 404) return null
+    if (!response.ok) {
+      const failure = (await response.json()) as ApiErrorResponse
+      throw new Error(
+        failure.error.message || `Rhythm API returned ${response.status}`
+      )
+    }
+    return normalizeApplication(
+      ((await response.json()) as ApiSuccess<NullableApplication>).data
+    )
+  })
+
 export const saveELFApplication = createServerFn({ method: "POST" })
   .validator(applicationSchema)
   .handler(async ({ data }) => {

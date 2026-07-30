@@ -74,3 +74,19 @@ func TestReceiverTokenRotationWindow(t *testing.T) {
 		t.Fatal("expired overlap token validated")
 	}
 }
+
+func TestNormalizeAlertIDsDeduplicatesSelection(t *testing.T) {
+	ids, err := normalizeAlertIDs([]string{" alert-1 ", "alert-2", "alert-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || ids[0] != "alert-1" || ids[1] != "alert-2" {
+		t.Fatalf("unexpected normalized IDs: %#v", ids)
+	}
+}
+
+func TestNormalizeAlertIDsRequiresSelection(t *testing.T) {
+	if _, err := normalizeAlertIDs(nil); err == nil {
+		t.Fatal("expected an empty alert selection to be rejected")
+	}
+}

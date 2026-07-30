@@ -11,6 +11,7 @@ import {
 } from "@/components/operational-status"
 import { listELFRuns } from "@/lib/api-client/elf"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/elf/runs")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -44,7 +45,7 @@ function RunsPage() {
     currentPage * pageSize
   )
   return (
-    <main className="mx-auto max-w-[1380px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <header>
         <h1 className="font-heading text-2xl font-semibold">ELF runs</h1>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -254,7 +255,7 @@ function RunsPage() {
           Showing {visibleRuns.length} of {runs.length} runs
         </p>
       ) : null}
-    </main>
+    </PageContainer>
   )
 }
 

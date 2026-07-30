@@ -59,15 +59,16 @@ func (r *RunRepository) Save(ctx context.Context, run runs.Run) error {
 		assertions, _ := json.Marshal(step.Assertions)
 		outputs, _ := json.Marshal(step.Outputs)
 		preRequestScript, _ := json.Marshal(step.PreRequestScript)
+		testScript, _ := json.Marshal(step.TestScript)
 		_, err := transaction.Exec(ctx, `
 			INSERT INTO monitor_step_runs (id, monitor_run_id, step_definition_id, step_order, step_name, step_type,
 				status, attempt_count, request_summary_json, response_summary_json, timing_json, tls_summary_json, proxy_summary_json, extractor_results_json,
 				assertion_results_json, output_metadata_json, failure_category, error_message,
-				started_at, ended_at, duration_ms, pre_request_script_json)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NULLIF($17,''),NULLIF($18,''),$19,$20,$21,$22)`,
+				started_at, ended_at, duration_ms, pre_request_script_json, test_script_json)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NULLIF($17,''),NULLIF($18,''),$19,$20,$21,$22,$23)`,
 			step.ID, run.ID, step.StepDefinitionID, step.StepOrder, step.StepName, step.StepType, step.Status,
 			max(step.AttemptCount, 1), requestSummary, responseSummary, timing, tlsSummary, proxySummary, extractors, assertions, outputs, step.FailureCategory,
-			step.ErrorMessage, step.StartedAt, step.EndedAt, step.DurationMS, preRequestScript)
+			step.ErrorMessage, step.StartedAt, step.EndedAt, step.DurationMS, preRequestScript, testScript)
 		if err != nil {
 			return fmt.Errorf("insert monitor step run: %w", err)
 		}
@@ -208,7 +209,49 @@ func (r *RunRepository) List(ctx context.Context, monitorID string, limit int) (
 		}
 		items = append(items, run)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := attachListAPIResponseTimes(ctx, r.pool, items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func attachListAPIResponseTimes(ctx context.Context, pool *pgxpool.Pool, items []runs.Run) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, len(items))
+	byID := make(map[string]int, len(items))
+	for index, item := range items {
+		ids[index] = item.ID
+		byID[item.ID] = index
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT monitor_run_id::text,
+			SUM(CASE WHEN timing_json ? 'apiResponseTimeMs' THEN (timing_json->>'apiResponseTimeMs')::bigint END)
+		FROM monitor_step_runs
+		WHERE monitor_run_id = ANY($1::uuid[])
+		GROUP BY monitor_run_id`, ids)
+	if err != nil {
+		return fmt.Errorf("list run api response times: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var runID string
+		var apiResponse pgtype.Int8
+		if err := rows.Scan(&runID, &apiResponse); err != nil {
+			return fmt.Errorf("scan run api response time: %w", err)
+		}
+		index, ok := byID[runID]
+		if !ok || !apiResponse.Valid {
+			continue
+		}
+		value := apiResponse.Int64
+		items[index].APIResponseTimeMS = &value
+	}
+	return rows.Err()
 }
 
 func (r *RunRepository) MetricPoints(ctx context.Context, monitorID string, since time.Time, limit int) ([]runs.HistoryMetricPoint, error) {
@@ -348,7 +391,7 @@ func (r *RunRepository) Get(ctx context.Context, runID string) (runs.Run, error)
 		SELECT id::text, step_definition_id, step_order, step_name, step_type, status, attempt_count,
 			request_summary_json, response_summary_json, timing_json, tls_summary_json, proxy_summary_json, extractor_results_json,
 			assertion_results_json, output_metadata_json, COALESCE(failure_category,''), COALESCE(error_message,''),
-			started_at, ended_at, duration_ms, pre_request_script_json
+			started_at, ended_at, duration_ms, pre_request_script_json, test_script_json
 		FROM monitor_step_runs WHERE monitor_run_id = $1 ORDER BY step_order`, runID)
 	if err != nil {
 		return runs.Run{}, fmt.Errorf("list step runs: %w", err)
@@ -356,11 +399,11 @@ func (r *RunRepository) Get(ctx context.Context, runID string) (runs.Run, error)
 	defer rows.Close()
 	for rows.Next() {
 		var step runs.StepRun
-		var requestJSON, responseJSON, timingJSON, tlsJSON, proxyJSON, extractorJSON, assertionJSON, outputJSON, preRequestScriptJSON []byte
+		var requestJSON, responseJSON, timingJSON, tlsJSON, proxyJSON, extractorJSON, assertionJSON, outputJSON, preRequestScriptJSON, testScriptJSON []byte
 		var startedAt, endedAt pgtype.Timestamptz
 		if err := rows.Scan(&step.ID, &step.StepDefinitionID, &step.StepOrder, &step.StepName, &step.StepType, &step.Status, &step.AttemptCount,
 			&requestJSON, &responseJSON, &timingJSON, &tlsJSON, &proxyJSON, &extractorJSON, &assertionJSON, &outputJSON,
-			&step.FailureCategory, &step.ErrorMessage, &startedAt, &endedAt, &step.DurationMS, &preRequestScriptJSON); err != nil {
+			&step.FailureCategory, &step.ErrorMessage, &startedAt, &endedAt, &step.DurationMS, &preRequestScriptJSON, &testScriptJSON); err != nil {
 			return runs.Run{}, fmt.Errorf("scan step run: %w", err)
 		}
 		step.RunID = runID
@@ -373,6 +416,7 @@ func (r *RunRepository) Get(ctx context.Context, runID string) (runs.Run, error)
 		decodeJSON(assertionJSON, &step.Assertions)
 		decodeJSON(outputJSON, &step.Outputs)
 		decodeJSON(preRequestScriptJSON, &step.PreRequestScript)
+		decodeJSON(testScriptJSON, &step.TestScript)
 		if startedAt.Valid {
 			value := startedAt.Time
 			step.StartedAt = &value

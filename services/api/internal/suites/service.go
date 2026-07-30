@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
+	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
@@ -22,17 +23,22 @@ import (
 var ErrNotFound = errors.New("validation suite not found")
 
 type Check struct {
-	ID                  string `json:"id"`
-	Kind                string `json:"kind"`
-	MonitorID           string `json:"monitorId,omitempty"`
-	QueryID             string `json:"queryId,omitempty"`
-	ReceiverID          string `json:"receiverId,omitempty"`
-	ExternalMonitorID   string `json:"externalMonitorId,omitempty"`
-	ExternalTriggerID   string `json:"externalTriggerId,omitempty"`
-	ExternalMonitorName string `json:"externalMonitorName,omitempty"`
-	ExternalTriggerName string `json:"externalTriggerName,omitempty"`
-	Name                string `json:"name,omitempty"`
-	Required            bool   `json:"required"`
+	ID                   string   `json:"id"`
+	Kind                 string   `json:"kind"`
+	MonitorID            string   `json:"monitorId,omitempty"`
+	QueryID              string   `json:"queryId,omitempty"`
+	ReceiverID           string   `json:"receiverId,omitempty"`
+	ExternalMonitorID    string   `json:"externalMonitorId,omitempty"`
+	ExternalTriggerID    string   `json:"externalTriggerId,omitempty"`
+	ExternalMonitorName  string   `json:"externalMonitorName,omitempty"`
+	ExternalTriggerName  string   `json:"externalTriggerName,omitempty"`
+	Name                 string   `json:"name,omitempty"`
+	Required             bool     `json:"required"`
+	ApplicationID        string   `json:"applicationId,omitempty"`
+	EnvironmentBindingID string   `json:"environmentBindingId,omitempty"`
+	ServiceIDs           []string `json:"serviceIds,omitempty"`
+	RuleIDs              []string `json:"ruleIds,omitempty"`
+	GateMode             string   `json:"gateMode,omitempty"`
 }
 
 type Stage struct {
@@ -103,6 +109,7 @@ type CheckResult struct {
 	FailureCategory     string     `json:"failureCategory,omitempty"`
 	FailureReason       string     `json:"failureReason,omitempty"`
 	DurationMS          int64      `json:"durationMs"`
+	DynatraceRunID      string     `json:"dynatraceRunId,omitempty"`
 }
 
 type SuiteRun struct {
@@ -151,6 +158,7 @@ type Service struct {
 	runs       *runs.Service
 	elf        *elf.Service
 	alerts     OpenSearchAlertSource
+	dynatrace  *dynatrace.Service
 	now        func() time.Time
 	mu         sync.Mutex
 	cancels    map[string]context.CancelFunc
@@ -159,8 +167,9 @@ type Service struct {
 func New(repository Repository, runService *runs.Service) *Service {
 	return &Service{repository: repository, runs: runService, now: func() time.Time { return time.Now().UTC() }, cancels: make(map[string]context.CancelFunc)}
 }
-func (s *Service) SetELF(service *elf.Service) { s.elf = service }
-func (s *Service) SetAlerts(source OpenSearchAlertSource) { s.alerts = source }
+func (s *Service) SetELF(service *elf.Service)             { s.elf = service }
+func (s *Service) SetAlerts(source OpenSearchAlertSource)  { s.alerts = source }
+func (s *Service) SetDynatrace(service *dynatrace.Service) { s.dynatrace = service }
 
 func (s *Service) List(ctx context.Context) ([]Suite, error) { return s.repository.List(ctx) }
 func (s *Service) Get(ctx context.Context, suiteID string) (Suite, error) {
@@ -245,8 +254,8 @@ func suiteFromInput(input Input, actor string, now time.Time) (Suite, error) {
 			if check.ID == "" {
 				check.ID = fmt.Sprintf("%s-check-%d", stage.ID, checkIndex+1)
 			}
-			if check.Kind != "MONITOR" && check.Kind != "ELF_QUERY" && check.Kind != "OPENSEARCH_ALERT" {
-				return Suite{}, errors.New("suite check kind must be MONITOR, ELF_QUERY, or OPENSEARCH_ALERT")
+			if check.Kind != "MONITOR" && check.Kind != "ELF_QUERY" && check.Kind != "OPENSEARCH_ALERT" && check.Kind != "DYNATRACE_INFRASTRUCTURE" {
+				return Suite{}, errors.New("suite check kind must be MONITOR, ELF_QUERY, OPENSEARCH_ALERT, or DYNATRACE_INFRASTRUCTURE")
 			}
 			if check.Kind == "MONITOR" && strings.TrimSpace(check.MonitorID) == "" {
 				return Suite{}, errors.New("monitor checks require monitorId")
@@ -265,6 +274,20 @@ func suiteFromInput(input Input, actor string, now time.Time) (Suite, error) {
 				}
 				if check.ExternalMonitorID == "" && check.ExternalMonitorName == "" && check.ExternalTriggerID == "" && check.ExternalTriggerName == "" {
 					return Suite{}, errors.New("OpenSearch alert checks require a monitor or trigger identity")
+				}
+			}
+			if check.Kind == "DYNATRACE_INFRASTRUCTURE" {
+				check.ApplicationID = strings.TrimSpace(check.ApplicationID)
+				check.EnvironmentBindingID = strings.TrimSpace(check.EnvironmentBindingID)
+				check.GateMode = strings.ToUpper(strings.TrimSpace(check.GateMode))
+				if check.ApplicationID == "" || check.EnvironmentBindingID == "" {
+					return Suite{}, errors.New("Dynatrace infrastructure checks require applicationId and environmentBindingId")
+				}
+				if check.GateMode == "" {
+					check.GateMode = "ADVISORY"
+				}
+				if check.GateMode != "ADVISORY" && check.GateMode != "BLOCKING" {
+					return Suite{}, errors.New("Dynatrace infrastructure gateMode must be ADVISORY or BLOCKING")
 				}
 			}
 			if seen[check.ID] {
@@ -381,6 +404,33 @@ func (s *Service) runStage(ctx context.Context, suite Suite, stage Stage, actor 
 					}
 				case "OPENSEARCH_ALERT":
 					result = s.evaluateOpenSearchAlertCheck(ctx, stage, check, deployment.DeploymentStart)
+				case "DYNATRACE_INFRASTRUCTURE":
+					result.ApplicationID = check.ApplicationID
+					result.GateMode = check.GateMode
+					result.Required = check.GateMode == "BLOCKING"
+					if s.dynatrace == nil {
+						result.FailureCategory, result.FailureReason = "DYNATRACE_UNAVAILABLE", "Dynatrace execution is unavailable."
+					} else {
+						to := s.now()
+						from := to.Add(-15 * time.Minute)
+						if deployment.DeploymentStart != nil {
+							from = *deployment.DeploymentStart
+						}
+						serviceID := ""
+						if len(check.ServiceIDs) > 0 {
+							serviceID = check.ServiceIDs[0]
+						}
+						dynatraceRun, queryErr := s.dynatrace.Query(ctx, check.ApplicationID, check.EnvironmentBindingID, dynatrace.QueryInput{ServiceID: serviceID, TimeFrom: from, TimeTo: to}, actor)
+						result.DynatraceRunID, result.Decision = dynatraceRun.ID, dynatraceRun.Decision
+						if queryErr == nil && dynatraceRun.Decision != "BLOCK" {
+							result.Status = "SUCCESS"
+							if dynatraceRun.Decision == "ALLOW_WITH_WARNINGS" {
+								result.Status = "WARNING"
+							}
+						} else {
+							result.FailureCategory, result.FailureReason = defaultString(dynatraceRun.FailureCategory, "DYNATRACE_CHECK_FAILED"), defaultString(dynatraceRun.FailureReason, safeError(queryErr))
+						}
+					}
 				default:
 					monitorRun, err := s.runs.Run(ctx, check.MonitorID, actor, "published")
 					if err != nil {

@@ -35,6 +35,8 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
+import { PageContainer } from "@/components/page-container"
+
 import {
   deriveELFOperationalStatus,
   OperationalStatusBadge,
@@ -178,7 +180,7 @@ function ELFQueriesPage() {
     })
   }
   return (
-    <main className="mx-auto max-w-[1380px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
@@ -208,6 +210,7 @@ function ELFQueriesPage() {
           <div className="grid gap-4 px-1 md:grid-cols-2">
             <Field label="Query name">
               <Input
+                aria-label="Query name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Payment errors after deployment"
@@ -229,7 +232,7 @@ function ELFQueriesPage() {
                   label: `${app.name}${app.carId ? ` · ${app.carId}` : ""} · ${app.environment || "Any environment"}`,
                 }))}
               >
-                <SelectTrigger className="h-9 w-full">
+                <SelectTrigger aria-label="Filter" className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -255,7 +258,7 @@ function ELFQueriesPage() {
                   })),
                 ]}
               >
-                <SelectTrigger className="h-9 w-full">
+                <SelectTrigger aria-label="Filter" className="h-9 w-full">
                   <SelectValue placeholder="All application services" />
                 </SelectTrigger>
                 <SelectContent>
@@ -270,6 +273,7 @@ function ELFQueriesPage() {
             </Field>
             <Field label="Description">
               <Textarea
+                aria-label="Description"
                 className="min-h-20"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -428,15 +432,18 @@ function ELFQueriesPage() {
                   {query.gateMode}
                 </Badge>
                 <Button
+                  aria-label="Open query"
                   nativeButton={false}
                   render={
                     <Link
                       aria-label={`Open ${query.name}`}
+                      title={`Open ${query.name}`}
                       to="/elf/$queryId"
                       params={{ queryId: query.id }}
                     />
                   }
                   size="icon-sm"
+                  title={`Open ${query.name}`}
                   variant="ghost"
                 >
                   <ArrowRight />
@@ -571,7 +578,7 @@ function ELFQueriesPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </main>
+    </PageContainer>
   )
 }
 

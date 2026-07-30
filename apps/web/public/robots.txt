@@ -1,3 +1,3 @@
-# https://www.robotstxt.org/robotstxt.html
+# Private operations app — do not index.
 User-agent: *
-Disallow:
+Disallow: /

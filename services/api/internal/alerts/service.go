@@ -24,6 +24,9 @@ import (
 var ErrNotFound = errors.New("alert not found")
 var ErrUnauthorized = errors.New("invalid receiver credential")
 var ErrExternalResolve = errors.New("OpenSearch alerts resolve when the upstream alert completes")
+var ErrServiceNotFound = errors.New("service was not found in this application")
+var ErrAlertScopeMismatch = errors.New("one or more alerts do not belong to this application's OpenSearch receivers")
+var ErrInvalidServiceAssignment = errors.New("invalid alert service assignment")
 
 const EnvelopeSchema = "rhythm.opensearch-alert.v1"
 
@@ -78,6 +81,17 @@ type AlertEvent struct {
 
 type Filter struct {
 	State, SourceType, ApplicationID, ServiceID, Severity string
+}
+
+type ServiceAssignmentInput struct {
+	AlertIDs  []string `json:"alertIds"`
+	ServiceID string   `json:"serviceId,omitempty"`
+}
+
+type ServiceAssignmentResult struct {
+	AssignedCount int    `json:"assignedCount"`
+	ServiceID     string `json:"serviceId,omitempty"`
+	ServiceName   string `json:"serviceName,omitempty"`
 }
 
 type Policy struct {
@@ -324,6 +338,152 @@ func (s *Service) Resolve(ctx context.Context, alertID, actor string) (Alert, er
 	}
 	_ = s.recordEvent(ctx, alertID, "RESOLVED", "", "Resolved in Rhythm", map[string]any{"actor": actor})
 	return s.Get(ctx, alertID)
+}
+
+func normalizeAlertIDs(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, errors.New("select at least one alert")
+	}
+	if len(values) > 200 {
+		return nil, errors.New("no more than 200 alerts can be assigned at once")
+	}
+	seen := make(map[string]struct{}, len(values))
+	ids := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, errors.New("alert IDs must not be empty")
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		ids = append(ids, value)
+	}
+	return ids, nil
+}
+
+func (s *Service) AssignOpenSearchAlertsToService(
+	ctx context.Context,
+	applicationID string,
+	input ServiceAssignmentInput,
+	actor string,
+) (ServiceAssignmentResult, error) {
+	applicationID = strings.TrimSpace(applicationID)
+	serviceID := strings.TrimSpace(input.ServiceID)
+	alertIDs, err := normalizeAlertIDs(input.AlertIDs)
+	if err != nil {
+		return ServiceAssignmentResult{}, fmt.Errorf("%w: %s", ErrInvalidServiceAssignment, err)
+	}
+	if applicationID == "" {
+		return ServiceAssignmentResult{}, fmt.Errorf("%w: applicationId is required", ErrInvalidServiceAssignment)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return ServiceAssignmentResult{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	serviceName := ""
+	if serviceID != "" {
+		err = tx.QueryRow(
+			ctx,
+			`SELECT name FROM application_services WHERE id::text=$1 AND application_id::text=$2`,
+			serviceID,
+			applicationID,
+		).Scan(&serviceName)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ServiceAssignmentResult{}, ErrServiceNotFound
+		}
+		if err != nil {
+			return ServiceAssignmentResult{}, err
+		}
+	}
+
+	rows, err := tx.Query(
+		ctx,
+		`SELECT id::text
+		   FROM alerts
+		  WHERE application_id::text=$1
+		    AND source_type='OPENSEARCH_ALERTING'
+		    AND id::text=ANY($2::text[])`,
+		applicationID,
+		alertIDs,
+	)
+	if err != nil {
+		return ServiceAssignmentResult{}, err
+	}
+	found := make(map[string]struct{}, len(alertIDs))
+	for rows.Next() {
+		var alertID string
+		if err := rows.Scan(&alertID); err != nil {
+			rows.Close()
+			return ServiceAssignmentResult{}, err
+		}
+		found[alertID] = struct{}{}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return ServiceAssignmentResult{}, err
+	}
+	if len(found) != len(alertIDs) {
+		return ServiceAssignmentResult{}, ErrAlertScopeMismatch
+	}
+
+	now := time.Now().UTC()
+	tag, err := tx.Exec(
+		ctx,
+		`UPDATE alerts
+		    SET service_id=NULLIF($2,'')::uuid,
+		        updated_at=$3
+		  WHERE application_id::text=$1
+		    AND source_type='OPENSEARCH_ALERTING'
+		    AND id::text=ANY($4::text[])`,
+		applicationID,
+		serviceID,
+		now,
+		alertIDs,
+	)
+	if err != nil {
+		return ServiceAssignmentResult{}, err
+	}
+
+	eventType := "SERVICE_ASSIGNED"
+	summary := "Assigned to service " + serviceName
+	if serviceID == "" {
+		eventType = "SERVICE_UNASSIGNED"
+		summary = "Service assignment cleared"
+	}
+	evidence, _ := json.Marshal(map[string]any{
+		"actor":       actor,
+		"serviceId":   serviceID,
+		"serviceName": serviceName,
+	})
+	for _, alertID := range alertIDs {
+		eventID, _ := id.NewUUID()
+		if _, err := tx.Exec(
+			ctx,
+			`INSERT INTO alert_events(id,alert_id,event_type,summary,evidence,occurred_at)
+			 VALUES($1,$2,$3,$4,$5,$6)`,
+			eventID,
+			alertID,
+			eventType,
+			summary,
+			evidence,
+			now,
+		); err != nil {
+			return ServiceAssignmentResult{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ServiceAssignmentResult{}, err
+	}
+	return ServiceAssignmentResult{
+		AssignedCount: int(tag.RowsAffected()),
+		ServiceID:     serviceID,
+		ServiceName:   serviceName,
+	}, nil
 }
 
 func (s *Service) SavePolicy(ctx context.Context, monitorID string, p Policy) (Policy, error) {

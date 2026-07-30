@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import { toast } from "@workspace/ui/components/sonner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   KeyRound,
@@ -16,10 +17,15 @@ import {
   Plus,
   ShieldCheck,
   Terminal,
+  Trash2,
 } from "lucide-react"
 
+import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
-import { createConfigurationProfile } from "@/lib/api-client/monitors"
+import {
+  createConfigurationProfile,
+  deleteConfigurationProfile,
+} from "@/lib/api-client/monitors"
 
 type SecretProvider = "LOCAL" | "ENV" | "VAULT"
 
@@ -31,10 +37,10 @@ const providerLabels: Record<SecretProvider, string> = {
 
 export function SecretsPanel({
   profiles,
-  onCreated,
+  onChanged,
 }: {
   profiles: ConfigurationProfileContract[]
-  onCreated: () => Promise<void>
+  onChanged: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
@@ -46,6 +52,9 @@ export function SecretsPanel({
   const [namespace, setNamespace] = useState("")
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   async function create() {
     const alias = name.trim()
@@ -98,11 +107,31 @@ export function SecretsPanel({
     setField("value")
     setNamespace("")
     setMessage("")
-    await onCreated()
+    await onChanged()
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    const result = await deleteConfigurationProfile({
+      data: { kind: "secrets", profileId: deleteTarget.id },
+    })
+    setDeleting(false)
+    if (!result.ok) {
+      toast.error(result.message)
+      setMessage(result.message)
+      return
+    }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
+    await onChanged()
   }
 
   return (
     <div className="mt-6 space-y-6">
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
       <section className="rounded-xl border bg-muted/15 px-5 py-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
@@ -156,7 +185,7 @@ export function SecretsPanel({
               label="Alias"
               help="Stable name used as secret://alias and pm.vault.get(alias)."
             >
-              <Input
+              <Input aria-label="Alias"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="api-token"
@@ -172,7 +201,7 @@ export function SecretsPanel({
                 }}
                 items={providerLabels}
               >
-                <SelectTrigger className="h-9 w-full">
+                <SelectTrigger aria-label="Provider" className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -185,7 +214,7 @@ export function SecretsPanel({
               </Select>
             </Field>
             <Field label="Description" wide>
-              <Input
+              <Input aria-label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Used by payments monitors for HMAC signing"
@@ -197,7 +226,7 @@ export function SecretsPanel({
                 help="Encrypted with AES-GCM before storage. Never shown again after create."
                 wide
               >
-                <Textarea
+                <Textarea aria-label="Secret value"
                   className="min-h-24 font-mono"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
@@ -212,7 +241,7 @@ export function SecretsPanel({
                 help="Must be set on the API process (or Docker compose environment)."
                 wide
               >
-                <Input
+                <Input aria-label="Environment variable"
                   className="font-mono"
                   value={externalPath}
                   onChange={(event) => setExternalPath(event.target.value)}
@@ -227,7 +256,7 @@ export function SecretsPanel({
                   help="KV v1 or v2 path relative to the Vault mount."
                   wide
                 >
-                  <Input
+                  <Input aria-label="Vault path"
                     className="font-mono"
                     value={externalPath}
                     onChange={(event) => setExternalPath(event.target.value)}
@@ -235,7 +264,7 @@ export function SecretsPanel({
                   />
                 </Field>
                 <Field label="Field">
-                  <Input
+                  <Input aria-label="Field"
                     className="font-mono"
                     value={field}
                     onChange={(event) => setField(event.target.value)}
@@ -243,7 +272,7 @@ export function SecretsPanel({
                   />
                 </Field>
                 <Field label="Namespace (optional)">
-                  <Input
+                  <Input aria-label="Namespace (optional)"
                     className="font-mono"
                     value={namespace}
                     onChange={(event) => setNamespace(event.target.value)}
@@ -254,7 +283,9 @@ export function SecretsPanel({
             ) : null}
           </div>
           {message ? (
-            <p className="mt-3 text-xs text-destructive">{message}</p>
+            <p className="mt-3 text-xs text-destructive" role="alert">
+              {message}
+            </p>
           ) : null}
           <div className="mt-4 flex justify-end">
             <Button disabled={pending} onClick={() => void create()}>
@@ -306,6 +337,15 @@ export function SecretsPanel({
                       </span>
                     ) : null}
                   </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDeleteTarget(profile)}
+                    >
+                      <Trash2 /> Delete
+                    </Button>
+                  </div>
                 </div>
               </div>
             </article>
@@ -327,6 +367,24 @@ export function SecretsPanel({
           </div>
         ) : null}
       </div>
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "secret"}”?`}
+        description={
+          <>
+            References to{" "}
+            <code className="font-mono">secret://{deleteTarget?.name}</code> in
+            monitors, scripts, and integrations will stop resolving. This cannot
+            be undone.
+          </>
+        }
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete secret"
+      />
     </div>
   )
 }

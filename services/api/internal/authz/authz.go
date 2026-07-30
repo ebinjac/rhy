@@ -79,7 +79,7 @@ func Can(principal Principal, method, path string) bool {
 		return strings.HasPrefix(path, "/api/v1/monitors") || strings.HasPrefix(path, "/api/v1/suites") || strings.HasPrefix(path, "/api/v1/suite-runs") || strings.HasPrefix(path, "/api/v1/deployment-runs") || strings.HasPrefix(path, "/api/v1/config/") || strings.HasPrefix(path, "/api/v1/applications") || strings.HasPrefix(path, "/api/v1/opensearch-alert-receivers") || (strings.HasPrefix(path, "/api/v1/elf/queries") && !strings.Contains(path, "/probe") && !strings.Contains(path, "/test"))
 	}
 	if HasRole(principal, RoleOperator) {
-		return method == http.MethodPost && (strings.Contains(path, "/runs") || strings.HasSuffix(path, "/cancel") || strings.HasSuffix(path, "/acknowledge") || strings.HasSuffix(path, "/resolve") || strings.HasSuffix(path, "/probe") || strings.HasSuffix(path, "/test") || strings.HasSuffix(path, "/validate") || strings.HasSuffix(path, "/reconcile"))
+		return method == http.MethodPost && (strings.Contains(path, "/runs") || strings.HasSuffix(path, "/cancel") || strings.HasSuffix(path, "/acknowledge") || strings.HasSuffix(path, "/resolve") || strings.HasSuffix(path, "/probe") || strings.HasSuffix(path, "/test") || strings.HasSuffix(path, "/validate") || strings.HasSuffix(path, "/reconcile") || strings.HasSuffix(path, "/query") || strings.HasSuffix(path, "/resources/preview") || strings.HasSuffix(path, "/resources/discover"))
 	}
 	return false
 }

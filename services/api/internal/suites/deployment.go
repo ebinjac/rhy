@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
@@ -27,24 +28,26 @@ type DeploymentRunInput struct {
 }
 
 type DeploymentDetails struct {
-	DeploymentID    string    `json:"deploymentId,omitempty"`
-	Version         string    `json:"version,omitempty"`
-	Commit          string    `json:"commit,omitempty"`
-	ApplicationID   string    `json:"applicationId,omitempty"`
-	Environment     string    `json:"environment,omitempty"`
-	Notes           string    `json:"notes,omitempty"`
-	DeploymentStart time.Time `json:"deploymentStart"`
+	DeploymentID          string    `json:"deploymentId,omitempty"`
+	Version               string    `json:"version,omitempty"`
+	Commit                string    `json:"commit,omitempty"`
+	ApplicationID         string    `json:"applicationId,omitempty"`
+	Environment           string    `json:"environment,omitempty"`
+	Notes                 string    `json:"notes,omitempty"`
+	DeploymentStart       time.Time `json:"deploymentStart"`
+	DeploymentCompletedAt time.Time `json:"deploymentCompletedAt,omitempty"`
 }
 
 type DeploymentConfiguration struct {
-	BaselineWindow        string            `json:"baselineWindow"`
-	SampleCount           int               `json:"sampleCount"`
-	SampleIntervalSeconds int               `json:"sampleIntervalSeconds"`
-	MinimumSamples        int               `json:"minimumSamples"`
-	RegressionPercent     float64           `json:"regressionPercent"`
-	RegressionMinimumMS   int64             `json:"regressionMinimumMs"`
-	MonitorRevisionIDs    map[string]string `json:"monitorRevisionIds"`
-	ELFRevisionIDs        map[string]string `json:"elfRevisionIds"`
+	BaselineWindow           string            `json:"baselineWindow"`
+	SampleCount              int               `json:"sampleCount"`
+	SampleIntervalSeconds    int               `json:"sampleIntervalSeconds"`
+	MinimumSamples           int               `json:"minimumSamples"`
+	RegressionPercent        float64           `json:"regressionPercent"`
+	RegressionMinimumMS      int64             `json:"regressionMinimumMs"`
+	MonitorRevisionIDs       map[string]string `json:"monitorRevisionIds"`
+	ELFRevisionIDs           map[string]string `json:"elfRevisionIds"`
+	DynatraceRevisionNumbers map[string]int    `json:"dynatraceRevisionNumbers"`
 }
 
 type DeploymentProgress struct {
@@ -118,25 +121,56 @@ type MonitorComparison struct {
 	Reasons        []string           `json:"reasons"`
 }
 
+type DynatraceComparison struct {
+	CheckID               string                          `json:"checkId"`
+	Name                  string                          `json:"name"`
+	ApplicationID         string                          `json:"applicationId"`
+	EnvironmentBindingID  string                          `json:"environmentBindingId"`
+	ServiceID             string                          `json:"serviceId,omitempty"`
+	Required              bool                            `json:"required"`
+	GateMode              string                          `json:"gateMode"`
+	BaselineRunID         string                          `json:"baselineRunId,omitempty"`
+	PostRunID             string                          `json:"postRunId,omitempty"`
+	Status                string                          `json:"status"`
+	Decision              string                          `json:"decision"`
+	BaselineSummary       map[string]dynatrace.Statistics `json:"baselineSummary"`
+	PostSummary           map[string]dynatrace.Statistics `json:"postSummary"`
+	BaselineResourceCount int                             `json:"baselineResourceCount"`
+	PostResourceCount     int                             `json:"postResourceCount"`
+	AddedResources        int                             `json:"addedResources"`
+	MissingResources      int                             `json:"missingResources"`
+	RuleResults           []dynatrace.RuleResult          `json:"ruleResults"`
+	RuleIDs               []string                        `json:"ruleIds,omitempty"`
+	BaselineFrom          time.Time                       `json:"baselineFrom"`
+	BaselineTo            time.Time                       `json:"baselineTo"`
+	PostFrom              *time.Time                      `json:"postFrom,omitempty"`
+	PostTo                *time.Time                      `json:"postTo,omitempty"`
+	StabilizationSeconds  int                             `json:"stabilizationSeconds"`
+	PostWindowSeconds     int                             `json:"postWindowSeconds"`
+	FailureCategory       string                          `json:"failureCategory,omitempty"`
+	FailureReason         string                          `json:"failureReason,omitempty"`
+}
+
 type DeploymentReport struct {
-	RunID          string                  `json:"runId"`
-	SuiteID        string                  `json:"suiteId"`
-	SuiteName      string                  `json:"suiteName"`
-	Status         string                  `json:"status"`
-	GateDecision   string                  `json:"gateDecision"`
-	Recommendation string                  `json:"recommendation"`
-	Deployment     DeploymentDetails       `json:"deployment"`
-	Configuration  DeploymentConfiguration `json:"configuration"`
-	BaselineFrom   time.Time               `json:"baselineFrom"`
-	BaselineTo     time.Time               `json:"baselineTo"`
-	PostFrom       *time.Time              `json:"postFrom,omitempty"`
-	PostTo         *time.Time              `json:"postTo,omitempty"`
-	Monitors       []MonitorComparison     `json:"monitors"`
-	ELFResults     []CheckResult           `json:"elfResults"`
-	AlertResults   []CheckResult           `json:"alertResults"`
-	Warnings       []string                `json:"warnings"`
-	Reasons        []string                `json:"reasons"`
-	GeneratedAt    time.Time               `json:"generatedAt"`
+	RunID            string                  `json:"runId"`
+	SuiteID          string                  `json:"suiteId"`
+	SuiteName        string                  `json:"suiteName"`
+	Status           string                  `json:"status"`
+	GateDecision     string                  `json:"gateDecision"`
+	Recommendation   string                  `json:"recommendation"`
+	Deployment       DeploymentDetails       `json:"deployment"`
+	Configuration    DeploymentConfiguration `json:"configuration"`
+	BaselineFrom     time.Time               `json:"baselineFrom"`
+	BaselineTo       time.Time               `json:"baselineTo"`
+	PostFrom         *time.Time              `json:"postFrom,omitempty"`
+	PostTo           *time.Time              `json:"postTo,omitempty"`
+	Monitors         []MonitorComparison     `json:"monitors"`
+	DynatraceResults []DynatraceComparison   `json:"dynatraceResults"`
+	ELFResults       []CheckResult           `json:"elfResults"`
+	AlertResults     []CheckResult           `json:"alertResults"`
+	Warnings         []string                `json:"warnings"`
+	Reasons          []string                `json:"reasons"`
+	GeneratedAt      time.Time               `json:"generatedAt"`
 }
 
 type DeploymentRun struct {
@@ -304,8 +338,16 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 		return DeploymentRun{}, err
 	}
 	now := s.now()
-	monitorCount, elfCount, alertCount := deploymentCheckCounts(suite)
-	configuration := DeploymentConfiguration{BaselineWindow: window, SampleCount: input.SampleCount, SampleIntervalSeconds: input.SampleInterval, MinimumSamples: 5, RegressionPercent: 25, RegressionMinimumMS: 100, MonitorRevisionIDs: map[string]string{}, ELFRevisionIDs: map[string]string{}}
+	monitorCount, elfCount, alertCount, dynatraceCount := deploymentCheckCounts(suite)
+	if dynatraceCount > 0 {
+		if input.Deployment.DeploymentCompletedAt.IsZero() {
+			return DeploymentRun{}, errors.New("deployment.deploymentCompletedAt is required for Dynatrace infrastructure validation")
+		}
+		if input.Deployment.DeploymentCompletedAt.Before(input.Deployment.DeploymentStart) {
+			return DeploymentRun{}, errors.New("deployment.deploymentCompletedAt must not be before deploymentStart")
+		}
+	}
+	configuration := DeploymentConfiguration{BaselineWindow: window, SampleCount: input.SampleCount, SampleIntervalSeconds: input.SampleInterval, MinimumSamples: 5, RegressionPercent: 25, RegressionMinimumMS: 100, MonitorRevisionIDs: map[string]string{}, ELFRevisionIDs: map[string]string{}, DynatraceRevisionNumbers: map[string]int{}}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
 			switch check.Kind {
@@ -325,6 +367,15 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 				if _, err := s.alerts.GetReceiver(ctx, check.ReceiverID); err != nil {
 					return DeploymentRun{}, fmt.Errorf("OpenSearch alert receiver %s was not found", check.ReceiverID)
 				}
+			case "DYNATRACE_INFRASTRUCTURE":
+				if s.dynatrace == nil {
+					return DeploymentRun{}, errors.New("suite contains Dynatrace checks but Dynatrace execution is unavailable")
+				}
+				config, configErr := s.dynatrace.GetConfiguration(ctx, check.ApplicationID, check.EnvironmentBindingID)
+				if configErr != nil {
+					return DeploymentRun{}, configErr
+				}
+				configuration.DynatraceRevisionNumbers[check.ApplicationID+"|"+check.EnvironmentBindingID] = config.RevisionNumber
 			default:
 				monitor, monitorErr := s.runs.Monitor(ctx, check.MonitorID)
 				if monitorErr != nil {
@@ -337,7 +388,7 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 			}
 		}
 	}
-	run := DeploymentRun{ID: runID, SuiteID: suiteID, Status: "QUEUED", Phase: "QUEUED", GateDecision: "PENDING", Progress: DeploymentProgress{Total: monitorCount*input.SampleCount + elfCount + alertCount, Message: "Waiting for a validation worker."}, Deployment: input.Deployment, Configuration: configuration, SuiteSnapshot: suite, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	run := DeploymentRun{ID: runID, SuiteID: suiteID, Status: "QUEUED", Phase: "QUEUED", GateDecision: "PENDING", Progress: DeploymentProgress{Total: monitorCount*input.SampleCount + elfCount + alertCount + dynatraceCount*2, Message: "Waiting for a validation worker."}, Deployment: input.Deployment, Configuration: configuration, SuiteSnapshot: suite, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
 	if err := repository.CreateDeploymentRun(ctx, run); err != nil {
 		return DeploymentRun{}, err
 	}
@@ -352,8 +403,8 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 	return run, nil
 }
 
-func deploymentCheckCounts(suite Suite) (int, int, int) {
-	monitors, queries, alertKeys := map[string]bool{}, map[string]bool{}, map[string]bool{}
+func deploymentCheckCounts(suite Suite) (int, int, int, int) {
+	monitors, queries, alertKeys, dynatraceKeys := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
 			switch check.Kind {
@@ -361,12 +412,20 @@ func deploymentCheckCounts(suite Suite) (int, int, int) {
 				queries[check.QueryID] = true
 			case "OPENSEARCH_ALERT":
 				alertKeys[strings.Join([]string{check.ReceiverID, check.ExternalMonitorID, check.ExternalTriggerID, check.ExternalMonitorName, check.ExternalTriggerName}, "|")] = true
+			case "DYNATRACE_INFRASTRUCTURE":
+				services := check.ServiceIDs
+				if len(services) == 0 {
+					services = []string{""}
+				}
+				for _, serviceID := range services {
+					dynatraceKeys[check.ApplicationID+"|"+check.EnvironmentBindingID+"|"+serviceID] = true
+				}
 			default:
 				monitors[check.MonitorID] = true
 			}
 		}
 	}
-	return len(monitors), len(queries), len(alertKeys)
+	return len(monitors), len(queries), len(alertKeys), len(dynatraceKeys)
 }
 
 func (s *Service) GetDeploymentRun(ctx context.Context, id string) (DeploymentRun, error) {
@@ -465,9 +524,29 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 			comparisons[index].Reasons = append(comparisons[index].Reasons, "Fewer than five successful baseline samples were recorded.")
 		}
 	}
+	dynatraceComparisons := s.deploymentDynatraceComparisons(ctx, run, baselineFrom, baselineTo)
+	for index := range dynatraceComparisons {
+		comparison := &dynatraceComparisons[index]
+		if comparison.FailureCategory == "DYNATRACE_REVISION_CHANGED" || comparison.FailureCategory == "DYNATRACE_CONFIGURATION_UNAVAILABLE" {
+			run.Progress.Completed++
+			continue
+		}
+		baselineRun, queryErr := s.dynatrace.Query(ctx, comparison.ApplicationID, comparison.EnvironmentBindingID, dynatrace.QueryInput{
+			ServiceID: comparison.ServiceID, TimeFrom: baselineFrom, TimeTo: baselineTo, DeploymentRunID: run.ID,
+		}, run.CreatedBy)
+		comparison.BaselineRunID = baselineRun.ID
+		comparison.BaselineSummary = baselineRun.Summary
+		comparison.BaselineResourceCount = baselineRun.ResourceCount
+		if queryErr != nil {
+			comparison.Status = baselineRun.Status
+			comparison.FailureCategory = defaultString(baselineRun.FailureCategory, "DYNATRACE_BASELINE_FAILED")
+			comparison.FailureReason = defaultString(baselineRun.FailureReason, safeError(queryErr))
+		}
+		run.Progress.Completed++
+	}
 	baselineEnded := s.now()
 	run.BaselineEndedAt = &baselineEnded
-	run.Report = DeploymentReport{RunID: run.ID, SuiteID: run.SuiteID, SuiteName: run.SuiteSnapshot.Name, Status: run.Status, GateDecision: "PENDING", Deployment: run.Deployment, Configuration: run.Configuration, BaselineFrom: baselineFrom, BaselineTo: baselineTo, Monitors: comparisons}
+	run.Report = DeploymentReport{RunID: run.ID, SuiteID: run.SuiteID, SuiteName: run.SuiteSnapshot.Name, Status: run.Status, GateDecision: "PENDING", Deployment: run.Deployment, Configuration: run.Configuration, BaselineFrom: baselineFrom, BaselineTo: baselineTo, Monitors: comparisons, DynatraceResults: dynatraceComparisons}
 	_ = s.saveDeployment(ctx, run)
 	if ctx.Err() != nil {
 		s.finishCancelled(run)
@@ -559,6 +638,73 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 	run.SamplingEndedAt = &samplingEnded
 	run.Report.PostTo = &samplingEnded
 	run.Report.Monitors = comparisons
+	if len(run.Report.DynatraceResults) > 0 {
+		run.Phase = "WAITING_FOR_STABILIZATION"
+		run.Progress.Message = "Waiting for the deployment stabilization and infrastructure observation window."
+		waitUntil := run.Deployment.DeploymentCompletedAt
+		for _, comparison := range run.Report.DynatraceResults {
+			candidate := run.Deployment.DeploymentCompletedAt.Add(time.Duration(comparison.StabilizationSeconds+comparison.PostWindowSeconds) * time.Second)
+			if candidate.After(waitUntil) {
+				waitUntil = candidate
+			}
+		}
+		_ = s.saveDeployment(ctx, run)
+		if delay := waitUntil.Sub(s.now()); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				s.finishCancelled(run)
+				return
+			case <-timer.C:
+			}
+		}
+		run.Phase = "RUNNING_DYNATRACE"
+		run.Progress.Message = "Comparing post-deployment Dynatrace infrastructure metrics."
+		_ = s.saveDeployment(ctx, run)
+		for index := range run.Report.DynatraceResults {
+			comparison := &run.Report.DynatraceResults[index]
+			if comparison.FailureCategory == "DYNATRACE_REVISION_CHANGED" || comparison.FailureCategory == "DYNATRACE_CONFIGURATION_UNAVAILABLE" {
+				run.Progress.Completed++
+				continue
+			}
+			postFrom := run.Deployment.DeploymentCompletedAt.Add(time.Duration(comparison.StabilizationSeconds) * time.Second)
+			postTo := postFrom.Add(time.Duration(comparison.PostWindowSeconds) * time.Second)
+			comparison.PostFrom, comparison.PostTo = &postFrom, &postTo
+			postRun, queryErr := s.dynatrace.Query(ctx, comparison.ApplicationID, comparison.EnvironmentBindingID, dynatrace.QueryInput{
+				ServiceID: comparison.ServiceID, TimeFrom: postFrom, TimeTo: postTo, DeploymentRunID: run.ID,
+			}, run.CreatedBy)
+			comparison.PostRunID = postRun.ID
+			comparison.PostSummary = postRun.Summary
+			comparison.PostResourceCount = postRun.ResourceCount
+			comparison.AddedResources = max(0, comparison.PostResourceCount-comparison.BaselineResourceCount)
+			comparison.MissingResources = max(0, comparison.BaselineResourceCount-comparison.PostResourceCount)
+			if queryErr != nil {
+				comparison.Status = postRun.Status
+				comparison.Decision = postRun.Decision
+				comparison.FailureCategory = defaultString(postRun.FailureCategory, "DYNATRACE_POST_QUERY_FAILED")
+				comparison.FailureReason = defaultString(postRun.FailureReason, safeError(queryErr))
+			} else {
+				results, decision, compareErr := s.dynatrace.CompareRuns(ctx, comparison.ApplicationID, comparison.EnvironmentBindingID, comparison.ServiceID, dynatrace.Run{Summary: comparison.BaselineSummary, CoveragePercent: 100}, postRun, comparison.RuleIDs)
+				if compareErr != nil {
+					comparison.Status, comparison.Decision = "ERROR", "ALLOW_WITH_WARNINGS"
+					comparison.FailureCategory, comparison.FailureReason = "DYNATRACE_COMPARISON_FAILED", safeError(compareErr)
+				} else {
+					comparison.RuleResults, comparison.Decision = results, decision
+					switch decision {
+					case "BLOCK":
+						comparison.Status = "FAIL"
+					case "ALLOW_WITH_WARNINGS":
+						comparison.Status = "WARNING"
+					default:
+						comparison.Status = "PASS"
+					}
+				}
+			}
+			run.Progress.Completed++
+			_ = s.saveDeployment(ctx, run)
+		}
+	}
 	run.Phase = "RUNNING_ELF"
 	run.Progress.Message = "Checking deployment logs in ELF."
 	_ = s.saveDeployment(ctx, run)
@@ -600,7 +746,7 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 	run.Phase = "ANALYZING"
 	run.Progress.Message = "Calculating the deployment decision."
 	_ = s.saveDeployment(ctx, run)
-	decision, warnings, reasons := deploymentDecision(comparisons, run.Report.ELFResults, run.Report.AlertResults)
+	decision, warnings, reasons := deploymentDecisionWithDynatrace(comparisons, run.Report.DynatraceResults, run.Report.ELFResults, run.Report.AlertResults)
 	now := s.now()
 	run.Status = "COMPLETED"
 	run.Phase = "COMPLETED"
@@ -641,7 +787,7 @@ func deploymentMonitorComparisons(suite Suite) []MonitorComparison {
 	out := []MonitorComparison{}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
-			if check.Kind == "ELF_QUERY" || check.Kind == "OPENSEARCH_ALERT" {
+			if check.Kind == "ELF_QUERY" || check.Kind == "OPENSEARCH_ALERT" || check.Kind == "DYNATRACE_INFRASTRUCTURE" {
 				continue
 			}
 			if index, ok := byID[check.MonitorID]; ok {
@@ -650,6 +796,66 @@ func deploymentMonitorComparisons(suite Suite) []MonitorComparison {
 			}
 			byID[check.MonitorID] = len(out)
 			out = append(out, MonitorComparison{CheckID: check.ID, MonitorID: check.MonitorID, MonitorName: check.Name, Required: check.Required, Baseline: emptyDistribution(), Post: emptyDistribution(), Steps: []StepComparison{}, Samples: []DeploymentSample{}, Reasons: []string{}})
+		}
+	}
+	return out
+}
+
+func (s *Service) deploymentDynatraceComparisons(ctx context.Context, run DeploymentRun, baselineFrom, baselineTo time.Time) []DynatraceComparison {
+	out := []DynatraceComparison{}
+	for _, stage := range run.SuiteSnapshot.Stages {
+		for _, check := range stage.Checks {
+			if check.Kind != "DYNATRACE_INFRASTRUCTURE" {
+				continue
+			}
+			config, err := s.dynatrace.GetConfiguration(ctx, check.ApplicationID, check.EnvironmentBindingID)
+			if err != nil {
+				out = append(out, DynatraceComparison{
+					CheckID: check.ID, Name: check.Name, ApplicationID: check.ApplicationID,
+					EnvironmentBindingID: check.EnvironmentBindingID, GateMode: check.GateMode,
+					Status: "ERROR", Decision: "ALLOW_WITH_WARNINGS", BaselineFrom: baselineFrom, BaselineTo: baselineTo,
+					FailureCategory: "DYNATRACE_CONFIGURATION_UNAVAILABLE", FailureReason: safeError(err),
+				})
+				continue
+			}
+			expectedRevision := run.Configuration.DynatraceRevisionNumbers[check.ApplicationID+"|"+check.EnvironmentBindingID]
+			services := check.ServiceIDs
+			if len(services) == 0 {
+				services = []string{""}
+			}
+			hasExplicitRules := false
+			for _, rule := range config.Rules {
+				if !rule.Enabled {
+					continue
+				}
+				if len(check.RuleIDs) == 0 {
+					hasExplicitRules = true
+					break
+				}
+				for _, ruleID := range check.RuleIDs {
+					if rule.ID == ruleID {
+						hasExplicitRules = true
+						break
+					}
+				}
+			}
+			for _, serviceID := range services {
+				item := DynatraceComparison{
+					CheckID: check.ID, Name: defaultString(check.Name, "Dynatrace infrastructure"),
+					ApplicationID: check.ApplicationID, EnvironmentBindingID: check.EnvironmentBindingID,
+					ServiceID: serviceID, Required: check.GateMode == "BLOCKING" && hasExplicitRules,
+					GateMode: check.GateMode, Status: "PENDING", Decision: "PENDING", RuleIDs: check.RuleIDs,
+					BaselineSummary: map[string]dynatrace.Statistics{}, PostSummary: map[string]dynatrace.Statistics{},
+					RuleResults: []dynatrace.RuleResult{}, BaselineFrom: baselineFrom, BaselineTo: baselineTo,
+					StabilizationSeconds: config.StabilizationSeconds, PostWindowSeconds: config.PostWindowSeconds,
+				}
+				if expectedRevision != config.RevisionNumber {
+					item.Status, item.Decision = "ERROR", "ALLOW_WITH_WARNINGS"
+					item.FailureCategory = "DYNATRACE_REVISION_CHANGED"
+					item.FailureReason = "The Dynatrace configuration changed after this deployment validation was queued."
+				}
+				out = append(out, item)
+			}
 		}
 	}
 	return out
@@ -703,6 +909,9 @@ func normalizeDistribution(distribution *Distribution) {
 func normalizeDeploymentReport(report *DeploymentReport) {
 	if report.Monitors == nil {
 		report.Monitors = []MonitorComparison{}
+	}
+	if report.DynatraceResults == nil {
+		report.DynatraceResults = []DynatraceComparison{}
 	}
 	if report.ELFResults == nil {
 		report.ELFResults = []CheckResult{}
@@ -891,6 +1100,10 @@ func classify(base, post Distribution, config DeploymentConfiguration) (string, 
 	return "NORMAL", delta, change
 }
 func deploymentDecision(monitors []MonitorComparison, elfResults []CheckResult, alertResults ...[]CheckResult) (string, []string, []string) {
+	return deploymentDecisionWithDynatrace(monitors, nil, elfResults, alertResults...)
+}
+
+func deploymentDecisionWithDynatrace(monitors []MonitorComparison, dynatraceResults []DynatraceComparison, elfResults []CheckResult, alertResults ...[]CheckResult) (string, []string, []string) {
 	block, warn := false, false
 	warnings, reasons := []string{}, []string{}
 	for _, monitor := range monitors {
@@ -913,6 +1126,19 @@ func deploymentDecision(monitors []MonitorComparison, elfResults []CheckResult, 
 				warn = true
 				warnings = append(warnings, message)
 			}
+		}
+	}
+	for _, result := range dynatraceResults {
+		if result.Status == "PASS" {
+			continue
+		}
+		message := defaultString(result.Name, "Dynatrace infrastructure") + " returned " + defaultString(result.Status, "incomplete evidence") + "."
+		if result.Decision == "BLOCK" || result.Required && (result.Status == "ERROR" || result.Status == "NO_DATA" || result.Status == "FAIL") {
+			block = true
+			reasons = append(reasons, message)
+		} else {
+			warn = true
+			warnings = append(warnings, message)
 		}
 	}
 	appendCheckFailures := func(results []CheckResult, label string) {
@@ -997,6 +1223,12 @@ func renderDeploymentPDF(report DeploymentReport) []byte {
 		lines = append(lines, "", "ELF log checks")
 		for _, result := range report.ELFResults {
 			lines = append(lines, fmt.Sprintf("%s — %s — %d hits", defaultString(result.Name, result.QueryID), result.Status, result.HitCount))
+		}
+	}
+	if len(report.DynatraceResults) > 0 {
+		lines = append(lines, "", "Dynatrace infrastructure checks")
+		for _, result := range report.DynatraceResults {
+			lines = append(lines, fmt.Sprintf("%s — %s — %s", defaultString(result.Name, "Dynatrace infrastructure"), result.Status, result.Decision))
 		}
 	}
 	if len(report.AlertResults) > 0 {

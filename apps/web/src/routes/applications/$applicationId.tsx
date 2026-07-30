@@ -1,40 +1,79 @@
-import { useState } from "react"
-import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
+import { useEffect, useRef, useState } from "react"
+import {
+  createFileRoute,
+  Link,
+  notFound,
+  useRouter,
+} from "@tanstack/react-router"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@workspace/ui/components/alert-dialog"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { toast } from "@workspace/ui/components/sonner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   Activity,
   AppWindow,
+  ArrowLeft,
   BellRing,
   Braces,
   ChevronRight,
+  CloudCog,
   FilePenLine,
+  Layers3,
   LoaderCircle,
   Plus,
-  Layers3,
   RadioTower,
   Save,
   Server,
   Trash2,
+  TriangleAlert,
 } from "lucide-react"
 import { z } from "zod"
 
+import { PageContainer } from "@/components/page-container"
 import { OperationalStatusBadge } from "@/components/operational-status"
+import { environmentChoices } from "@/features/applications/environment"
+import { EditField } from "@/features/applications/form-field"
+import { OpenSearchReceivers } from "@/features/applications/opensearch-receivers"
+import { DynatraceWorkspace } from "@/features/applications/dynatrace-workspace"
 import type {
   ELFApplicationContract,
   ELFServiceContract,
 } from "@/lib/api-client/contracts"
 import {
+  getDynatraceConfiguration,
+  listApplicationEnvironments,
+  listDynatraceRuns,
+} from "@/lib/api-client/dynatrace"
+import {
   deleteELFService,
-  listELFApplications,
+  getELFApplication,
   listELFQueries,
   saveELFApplication,
   saveELFService,
 } from "@/lib/api-client/elf"
-import { listMonitors } from "@/lib/api-client/monitors"
+import {
+  listConfigurationProfiles,
+  listMonitors,
+} from "@/lib/api-client/monitors"
 import {
   listOpenSearchAlertReceivers,
   listUnifiedAlerts,
@@ -42,32 +81,42 @@ import {
 import { listDeploymentValidations } from "@/lib/api-client/suites"
 import { formatDateTime } from "@/lib/format-date"
 
-const sectionSchema = z.object({
-  section: z
-    .enum([
-      "overview",
-      "services",
-      "monitors",
-      "queries",
-      "alerts",
-      "receivers",
-    ])
-    .optional()
-    .catch("overview"),
-})
+const sectionValues = [
+  "overview",
+  "services",
+  "monitors",
+  "queries",
+  "alerts",
+  "receivers",
+  "dynatrace",
+] as const
 
 export const Route = createFileRoute("/applications/$applicationId")({
-  validateSearch: sectionSchema,
+  validateSearch: (search: Record<string, unknown>) => {
+    const section = z.enum(sectionValues).safeParse(search.section)
+    const edit =
+      search.edit === true || search.edit === "true" || search.edit === "1"
+    return {
+      ...(section.success ? { section: section.data } : {}),
+      ...(edit ? { edit: true as const } : {}),
+    }
+  },
   loader: async ({ params }) => {
+    const application = await getELFApplication({
+      data: { applicationId: params.applicationId },
+    })
+    if (!application) throw notFound()
+
     const [
-      applications,
       monitorResult,
       queries,
       alerts,
       receivers,
       deployments,
+      dynatraceBindings,
+      telemetryProfiles,
+      dynatraceRuns,
     ] = await Promise.all([
-      listELFApplications(),
       listMonitors(),
       listELFQueries(),
       listUnifiedAlerts({
@@ -83,11 +132,32 @@ export const Route = createFileRoute("/applications/$applicationId")({
         data: { applicationId: params.applicationId },
       }),
       listDeploymentValidations(),
+      listApplicationEnvironments({
+        data: { applicationId: params.applicationId },
+      }).catch(() => []),
+      listConfigurationProfiles({ data: { kind: "telemetry" } }),
+      listDynatraceRuns({
+        data: {
+          applicationId: params.applicationId,
+          environmentBindingId: "",
+        },
+      }).catch(() => []),
     ])
-    const application = applications.find(
-      (item) => item.id === params.applicationId
+
+    const dynatraceConfigurations = Object.fromEntries(
+      await Promise.all(
+        dynatraceBindings.map(async (binding) => [
+          binding.id,
+          await getDynatraceConfiguration({
+            data: {
+              applicationId: params.applicationId,
+              environmentBindingId: binding.id,
+            },
+          }).catch(() => null),
+        ])
+      )
     )
-    if (!application) throw new Error("Application not found")
+
     return {
       application,
       monitors: monitorResult.monitors.filter((monitor) =>
@@ -101,9 +171,14 @@ export const Route = createFileRoute("/applications/$applicationId")({
       deployments: deployments.filter(
         (run) => run.deployment.applicationId === application.id
       ),
+      dynatraceBindings,
+      dynatraceConfigurations,
+      dynatraceRuns,
+      telemetryProfiles,
     }
   },
   component: ApplicationWorkspace,
+  notFoundComponent: ApplicationNotFound,
 })
 
 const tabs = [
@@ -113,13 +188,52 @@ const tabs = [
   { value: "queries", label: "Log queries", icon: Braces },
   { value: "alerts", label: "Alerts", icon: BellRing },
   { value: "receivers", label: "Receivers", icon: RadioTower },
+  { value: "dynatrace", label: "Dynatrace", icon: CloudCog },
 ] as const
 
+function ApplicationNotFound() {
+  return (
+    <div className="mx-auto max-w-2xl px-4 py-16 md:px-6">
+      <p className="text-sm font-medium text-primary">404</p>
+      <h1 className="mt-2 text-2xl font-semibold">Application not found</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        This application may have been deleted, or the link is incorrect.
+      </p>
+      <Button
+        className="mt-6"
+        nativeButton={false}
+        render={<Link aria-label="Back to applications" to="/applications" />}
+      >
+        <ArrowLeft data-icon="inline-start" />
+        Back to applications
+      </Button>
+    </div>
+  )
+}
+
 function ApplicationWorkspace() {
-  const { application, monitors, queries, alerts, receivers, deployments } =
-    Route.useLoaderData()
-  const { section = "overview" } = Route.useSearch()
-  const [editingApplication, setEditingApplication] = useState(false)
+  const {
+    application,
+    monitors,
+    queries,
+    alerts,
+    receivers,
+    deployments,
+    dynatraceBindings,
+    dynatraceConfigurations,
+    dynatraceRuns,
+    telemetryProfiles,
+  } = Route.useLoaderData()
+  const search = Route.useSearch()
+  const navigate = Route.useNavigate()
+  const router = useRouter()
+  const activeSection = search.section ?? "overview"
+  const [editingApplication, setEditingApplication] = useState(
+    Boolean(search.edit)
+  )
+  const tabRefs = useRef<
+    Partial<Record<(typeof tabs)[number]["value"], HTMLAnchorElement | null>>
+  >({})
   const activeAlerts = alerts.filter((alert) =>
     ["OPEN", "ACKNOWLEDGED", "ERROR"].includes(alert.state)
   )
@@ -135,23 +249,51 @@ function ApplicationWorkspace() {
           ? "UNMONITORED"
           : "HEALTHY"
 
+  useEffect(() => {
+    if (!search.edit) return
+    setEditingApplication(true)
+    void navigate({
+      search: search.section ? { section: search.section } : {},
+      replace: true,
+    })
+  }, [search.edit, search.section, navigate])
+
+  useEffect(() => {
+    const node = tabRefs.current[activeSection]
+    if (!node) return
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+    node.scrollIntoView({
+      inline: "center",
+      block: "nearest",
+      behavior: reduceMotion ? "auto" : "smooth",
+    })
+  }, [activeSection])
+
   return (
     <div>
       <div className="border-b bg-muted/15">
-        <div className="mx-auto max-w-[1380px] px-4 pt-4 md:px-6">
+        <PageContainer padding="tabs">
           <nav
             aria-label="Breadcrumb"
             className="flex items-center gap-2 text-xs text-muted-foreground"
           >
-            <Link className="hover:text-foreground" to="/applications">
+            <Link
+              activeOptions={{ exact: true }}
+              className="hover:text-foreground"
+              to="/applications"
+            >
               Applications
             </Link>
             <span aria-hidden="true">/</span>
-            <span className="truncate text-foreground">{application.name}</span>
+            <span aria-current="page" className="truncate text-foreground">
+              {application.name}
+            </span>
           </nav>
           <div className="mt-3 flex items-center justify-between gap-4">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h1 className="mr-1 truncate text-xl font-semibold">
+              <h1 className="mr-1 truncate text-xl font-semibold text-balance">
                 {application.name}
               </h1>
               <OperationalStatusBadge status={status} />
@@ -176,38 +318,47 @@ function ApplicationWorkspace() {
             aria-label={`${application.name} sections`}
             className="mt-3 flex min-w-0 gap-1 overflow-x-auto"
           >
-            {tabs.map((tab) => (
-              <Link
-                activeOptions={{ exact: true }}
-                className={`flex h-11 shrink-0 items-center gap-2 border-b-2 px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
-                  section === tab.value
-                    ? "border-primary text-foreground"
-                    : "border-transparent text-muted-foreground hover:text-foreground"
-                }`}
-                key={tab.value}
-                params={{ applicationId: application.id }}
-                search={{ section: tab.value }}
-                to="/applications/$applicationId"
-              >
-                <tab.icon aria-hidden="true" className="size-4" />
-                {tab.label}
-                {tab.value === "alerts" && activeAlerts.length ? (
-                  <Badge variant="secondary">{activeAlerts.length}</Badge>
-                ) : null}
-              </Link>
-            ))}
+            {tabs.map((tab) => {
+              const isActive = activeSection === tab.value
+              return (
+                <Link
+                  activeOptions={{ exact: true, includeSearch: true }}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`flex h-11 shrink-0 items-center gap-2 border-b-2 px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
+                    isActive
+                      ? "border-primary font-medium text-foreground"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                  key={tab.value}
+                  params={{ applicationId: application.id }}
+                  ref={(node) => {
+                    tabRefs.current[tab.value] = node
+                  }}
+                  search={
+                    tab.value === "overview" ? {} : { section: tab.value }
+                  }
+                  to="/applications/$applicationId"
+                >
+                  <tab.icon aria-hidden="true" className="size-4" />
+                  {tab.label}
+                  {tab.value === "alerts" && activeAlerts.length ? (
+                    <Badge variant="secondary">{activeAlerts.length}</Badge>
+                  ) : null}
+                </Link>
+              )
+            })}
           </nav>
-        </div>
+        </PageContainer>
       </div>
 
-      <main className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+      <PageContainer>
         {editingApplication ? (
           <ApplicationSettings
             application={application}
             onClose={() => setEditingApplication(false)}
           />
         ) : null}
-        {section === "overview" ? (
+        {activeSection === "overview" ? (
           <Overview
             activeAlerts={activeAlerts.length}
             application={application}
@@ -217,13 +368,23 @@ function ApplicationWorkspace() {
             receivers={receivers}
           />
         ) : null}
-        {section === "services" ? (
+        {activeSection === "services" ? (
           <ApplicationServices application={application} />
         ) : null}
-        {section === "monitors" ? (
+        {activeSection === "monitors" ? (
           <CollectionSection
             description="Synthetic monitors explicitly tagged to this application."
-            empty="No monitors are linked to this application."
+            emptyAction={
+              <Button
+                nativeButton={false}
+                render={<Link aria-label="Create monitor" to="/monitors/new" />}
+                size="sm"
+              >
+                <Plus data-icon="inline-start" /> Create monitor
+              </Button>
+            }
+            emptyDescription="Link a monitor from the monitor editor, or create one and tag this application so coverage appears here."
+            emptyTitle="No monitors linked"
             title="Linked monitors"
           >
             {monitors.map((monitor) => (
@@ -240,15 +401,26 @@ function ApplicationWorkspace() {
                     reliability
                   </p>
                 </div>
-                <ChevronRight className="size-4" />
+                <ChevronRight aria-hidden="true" className="size-4" />
               </Link>
             ))}
           </CollectionSection>
         ) : null}
-        {section === "queries" ? (
+        {activeSection === "queries" ? (
           <CollectionSection
             description="Governed OpenSearch queries tagged to this application."
-            empty="No ELF queries are linked to this application."
+            emptyAction={
+              <Button
+                nativeButton={false}
+                render={<Link aria-label="Open ELF library" to="/elf" />}
+                size="sm"
+                variant="outline"
+              >
+                <Plus data-icon="inline-start" /> Open ELF library
+              </Button>
+            }
+            emptyDescription="Create or tag an ELF query with this application to track log-based coverage."
+            emptyTitle="No log queries linked"
             title="Log queries"
           >
             {queries.map((query) => (
@@ -265,21 +437,41 @@ function ApplicationWorkspace() {
                     {query.gateMode.toLowerCase()}
                   </p>
                 </div>
-                <ChevronRight className="size-4" />
+                <ChevronRight aria-hidden="true" className="size-4" />
               </Link>
             ))}
           </CollectionSection>
         ) : null}
-        {section === "alerts" ? (
+        {activeSection === "alerts" ? (
           <CollectionSection
             description="Rhythm and OpenSearch alerts owned by this application."
-            empty="No alerts have been recorded for this application."
+            emptyAction={
+              <Button
+                nativeButton={false}
+                render={
+                  <Link
+                    aria-label="Configure receivers"
+                    params={{ applicationId: application.id }}
+                    search={{ section: "receivers" }}
+                    to="/applications/$applicationId"
+                  />
+                }
+                size="sm"
+                variant="outline"
+              >
+                <RadioTower data-icon="inline-start" /> Configure receivers
+              </Button>
+            }
+            emptyDescription="When monitors fail or OpenSearch deliveries arrive, they will appear here. Configure a receiver to ingest OpenSearch alerts."
+            emptyTitle="No alerts recorded"
             title="Application alerts"
           >
             {alerts.map((alert) => (
-              <div
-                className="flex items-start justify-between gap-4 py-4"
+              <Link
+                className="flex items-start justify-between gap-4 py-4 hover:text-primary"
+                hash={`alert-${alert.id}`}
                 key={alert.id}
+                to="/alerts"
               >
                 <div>
                   <p className="font-medium">{alert.title}</p>
@@ -295,45 +487,28 @@ function ApplicationWorkspace() {
                 >
                   {alert.state.toLowerCase()}
                 </Badge>
-              </div>
+              </Link>
             ))}
           </CollectionSection>
         ) : null}
-        {section === "receivers" ? (
-          <CollectionSection
-            description="Application-bound endpoints for OpenSearch Alerting webhook delivery."
-            empty="No OpenSearch alert receiver is configured."
-            title="Alert receivers"
-          >
-            {receivers.map((receiver) => (
-              <div
-                className="flex items-start justify-between gap-4 py-4"
-                key={receiver.id}
-              >
-                <div>
-                  <p className="font-medium">{receiver.name}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {receiver.serviceName || "All services"} · last delivery{" "}
-                    {receiver.lastDeliveryAt
-                      ? formatDateTime(receiver.lastDeliveryAt)
-                      : "not received"}
-                  </p>
-                </div>
-                <Badge
-                  className={
-                    receiver.lastReconciliationStatus === "FAILED"
-                      ? "bg-destructive/10 text-destructive"
-                      : ""
-                  }
-                  variant="secondary"
-                >
-                  {receiver.enabled ? "Enabled" : "Paused"}
-                </Badge>
-              </div>
-            ))}
-          </CollectionSection>
+        {activeSection === "receivers" ? (
+          <OpenSearchReceivers
+            alerts={alerts}
+            application={application}
+            receivers={receivers}
+            refresh={() => router.invalidate()}
+          />
         ) : null}
-      </main>
+        {activeSection === "dynatrace" ? (
+          <DynatraceWorkspace
+            application={application}
+            bindings={dynatraceBindings}
+            configurations={dynatraceConfigurations}
+            telemetryProfiles={telemetryProfiles}
+            runs={dynatraceRuns}
+          />
+        ) : null}
+      </PageContainer>
     </div>
   )
 }
@@ -349,7 +524,9 @@ function ApplicationSettings({
   const [name, setName] = useState(application.name)
   const [carId, setCarId] = useState(application.carId ?? "")
   const [owner, setOwner] = useState(application.owner ?? "")
-  const [environment, setEnvironment] = useState(application.environment ?? "")
+  const [environment, setEnvironment] = useState(
+    application.environment || "production"
+  )
   const [indexPattern, setIndexPattern] = useState(
     application.defaultIndexPattern ?? ""
   )
@@ -362,6 +539,7 @@ function ApplicationSettings({
   )
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const envChoices = environmentChoices(environment, application.environment)
 
   async function save() {
     setPending(true)
@@ -420,12 +598,14 @@ function ApplicationSettings({
       <div className="mt-5 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <EditField label="Application name">
           <Input
+            aria-label="Application name"
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
         </EditField>
         <EditField label="CAR ID">
           <Input
+            aria-label="CAR ID"
             className="font-mono"
             value={carId}
             onChange={(event) => setCarId(event.target.value)}
@@ -433,18 +613,33 @@ function ApplicationSettings({
         </EditField>
         <EditField label="Owner">
           <Input
+            aria-label="Owner"
             value={owner}
             onChange={(event) => setOwner(event.target.value)}
           />
         </EditField>
         <EditField label="Environment">
-          <Input
+          <Select
             value={environment}
-            onChange={(event) => setEnvironment(event.target.value)}
-          />
+            onValueChange={(value) => {
+              if (value != null) setEnvironment(value)
+            }}
+          >
+            <SelectTrigger aria-label="Environment" className="w-full">
+              <SelectValue placeholder="Select environment" />
+            </SelectTrigger>
+            <SelectContent>
+              {envChoices.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </EditField>
         <EditField label="Default index pattern">
           <Input
+            aria-label="Default index pattern"
             className="font-mono"
             value={indexPattern}
             onChange={(event) => setIndexPattern(event.target.value)}
@@ -452,6 +647,7 @@ function ApplicationSettings({
         </EditField>
         <EditField label="Default time field">
           <Input
+            aria-label="Default time field"
             className="font-mono"
             value={timeField}
             onChange={(event) => setTimeField(event.target.value)}
@@ -462,6 +658,7 @@ function ApplicationSettings({
           help="One sensitive field path or pattern per line."
         >
           <Textarea
+            aria-label="Masking rules"
             className="min-h-28 font-mono text-xs"
             value={maskingRules}
             onChange={(event) => setMaskingRules(event.target.value)}
@@ -472,6 +669,7 @@ function ApplicationSettings({
           help="Comma or line separated."
         >
           <Textarea
+            aria-label="Alert destination emails"
             className="min-h-28"
             value={alertEmails}
             onChange={(event) => setAlertEmails(event.target.value)}
@@ -508,6 +706,10 @@ function ApplicationServices({
   const [timeField, setTimeField] = useState("")
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] = useState<ELFServiceContract | null>(
+    null
+  )
+  const [deleting, setDeleting] = useState(false)
 
   function reset() {
     setEditingId("")
@@ -539,24 +741,21 @@ function ApplicationServices({
     await router.invalidate()
   }
 
-  async function remove(serviceId: string, serviceName: string) {
-    if (
-      !window.confirm(
-        `Delete ${serviceName}? Queries assigned to this service must be reassigned first.`
-      )
-    )
-      return
-    setPending(true)
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    setMessage("")
     const result = await deleteELFService({
-      data: { applicationId: application.id, serviceId },
+      data: { applicationId: application.id, serviceId: deleteTarget.id },
     })
-    setPending(false)
+    setDeleting(false)
     if (!result.ok) {
       setMessage(result.message)
       return
     }
     toast.success("Service deleted.")
-    if (editingId === serviceId) reset()
+    if (editingId === deleteTarget.id) reset()
+    setDeleteTarget(null)
     await router.invalidate()
   }
 
@@ -589,12 +788,14 @@ function ApplicationServices({
         <div className="mt-5 grid gap-4 border-y bg-muted/15 py-5 md:grid-cols-3">
           <EditField label="Service name">
             <Input
+              aria-label="Service name"
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
           </EditField>
           <EditField label="Index pattern">
             <Input
+              aria-label="Index pattern"
               className="font-mono"
               value={indexPattern}
               onChange={(event) => setIndexPattern(event.target.value)}
@@ -603,6 +804,7 @@ function ApplicationServices({
           </EditField>
           <EditField label="Time field">
             <Input
+              aria-label="Time field"
               className="font-mono"
               value={timeField}
               onChange={(event) => setTimeField(event.target.value)}
@@ -659,8 +861,8 @@ function ApplicationServices({
               </Button>
               <Button
                 aria-label={`Delete ${service.name}`}
-                disabled={pending}
-                onClick={() => void remove(service.id, service.name)}
+                disabled={pending || deleting}
+                onClick={() => setDeleteTarget(service)}
                 size="icon-sm"
                 variant="ghost"
               >
@@ -670,34 +872,68 @@ function ApplicationServices({
           </div>
         ))}
         {!application.services.length ? (
-          <p className="py-12 text-center text-sm text-muted-foreground">
-            No services are registered for this application.
-          </p>
+          <div className="py-12 text-center">
+            <Server
+              aria-hidden="true"
+              className="mx-auto size-7 text-muted-foreground"
+            />
+            <h3 className="mt-3 font-medium">No services registered</h3>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+              Add the first deployable service so ELF queries and receivers can
+              target it.
+            </p>
+            <Button
+              className="mt-4"
+              size="sm"
+              onClick={() => {
+                reset()
+                setName("New service")
+              }}
+            >
+              <Plus /> Add service
+            </Button>
+          </div>
         ) : null}
       </div>
-    </section>
-  )
-}
 
-function EditField({
-  label,
-  help,
-  children,
-}: {
-  label: string
-  help?: string
-  children: React.ReactNode
-}) {
-  return (
-    <label className="text-sm font-medium">
-      {label}
-      <span className="mt-2 block">{children}</span>
-      {help ? (
-        <span className="mt-1 block text-xs font-normal text-muted-foreground">
-          {help}
-        </span>
-      ) : null}
-    </label>
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => {
+          if (!deleting && !open) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia className="bg-destructive/10 text-destructive">
+              <TriangleAlert />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete service?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Queries assigned to <strong>{deleteTarget?.name}</strong> must be
+              reassigned first. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void confirmDelete()}
+            >
+              {deleting ? (
+                <LoaderCircle
+                  className="animate-spin"
+                  data-icon="inline-start"
+                />
+              ) : (
+                <Trash2 data-icon="inline-start" />
+              )}
+              {deleting ? "Deleting…" : "Delete service"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </section>
   )
 }
 
@@ -719,13 +955,18 @@ function Overview({
   return (
     <>
       <header>
-        <h2 className="text-2xl font-semibold">Application overview</h2>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+        <h2 className="text-2xl font-semibold text-balance">
+          Application overview
+        </h2>
+        <p className="mt-1 max-w-2xl text-sm text-pretty text-muted-foreground">
           Ownership, monitoring coverage, log checks, alerts, and recent release
           evidence in one operational context.
         </p>
       </header>
-      <section className="mt-7 grid divide-y rounded-lg border sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
+      <section
+        aria-label="Key metrics"
+        className="mt-6 flex flex-wrap gap-x-10 gap-y-4 border-b pb-5"
+      >
         <Metric label="Linked monitors" value={String(monitors.length)} />
         <Metric label="Log queries" value={String(queries.length)} />
         <Metric label="Active alerts" value={String(activeAlerts)} />
@@ -764,25 +1005,55 @@ function Overview({
           <div className="mt-3 border-y py-4">
             {monitors.length || queries.length ? (
               <div className="flex items-start gap-3">
-                <Layers3 className="mt-0.5 size-5 text-primary" />
+                <Layers3
+                  aria-hidden="true"
+                  className="mt-0.5 size-5 text-primary"
+                />
                 <div>
                   <p className="font-medium">Operational signals configured</p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {monitors.length} synthetic monitor
-                    {monitors.length === 1 ? "" : "s"} and {queries.length} log
-                    quer{queries.length === 1 ? "y" : "ies"} are linked.
+                    {countLabel(
+                      monitors.length,
+                      "synthetic monitor",
+                      "synthetic monitors"
+                    )}{" "}
+                    and {countLabel(queries.length, "log query", "log queries")}{" "}
+                    are linked.
                   </p>
                 </div>
               </div>
             ) : (
               <div className="flex items-start gap-3">
-                <BellRing className="mt-0.5 size-5 text-muted-foreground" />
+                <BellRing
+                  aria-hidden="true"
+                  className="mt-0.5 size-5 text-muted-foreground"
+                />
                 <div>
                   <p className="font-medium">No monitoring signal</p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Link a monitor or ELF query before treating this application
                     as healthy.
                   </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button
+                      nativeButton={false}
+                      render={
+                        <Link aria-label="Create monitor" to="/monitors/new" />
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      <Plus data-icon="inline-start" /> Create monitor
+                    </Button>
+                    <Button
+                      nativeButton={false}
+                      render={<Link aria-label="Open ELF library" to="/elf" />}
+                      size="sm"
+                      variant="ghost"
+                    >
+                      Open ELF library
+                    </Button>
+                  </div>
                 </div>
               </div>
             )}
@@ -796,12 +1067,16 @@ function Overview({
 function CollectionSection({
   title,
   description,
-  empty,
+  emptyTitle,
+  emptyDescription,
+  emptyAction,
   children,
 }: {
   title: string
   description: string
-  empty: string
+  emptyTitle: string
+  emptyDescription: string
+  emptyAction?: React.ReactNode
   children: React.ReactNode
 }) {
   const hasChildren = Array.isArray(children)
@@ -809,15 +1084,23 @@ function CollectionSection({
     : Boolean(children)
   return (
     <section>
-      <h2 className="text-2xl font-semibold">{title}</h2>
-      <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+      <h2 className="text-2xl font-semibold text-balance">{title}</h2>
+      <p className="mt-1 text-sm text-pretty text-muted-foreground">
+        {description}
+      </p>
       <div className="mt-6 divide-y border-y">
         {hasChildren ? (
           children
         ) : (
-          <p className="py-12 text-center text-sm text-muted-foreground">
-            {empty}
-          </p>
+          <div className="py-12 text-center">
+            <h3 className="font-medium">{emptyTitle}</h3>
+            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
+              {emptyDescription}
+            </p>
+            {emptyAction ? (
+              <div className="mt-4 flex justify-center">{emptyAction}</div>
+            ) : null}
+          </div>
         )}
       </div>
     </section>
@@ -826,9 +1109,11 @@ function CollectionSection({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="p-4">
+    <div className="min-w-[7rem]">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 text-lg font-semibold capitalize">{value}</p>
+      <p className="mt-0.5 text-sm font-medium capitalize tabular-nums">
+        {value}
+      </p>
     </div>
   )
 }
@@ -840,4 +1125,8 @@ function Definition({ label, value }: { label: string; value: string }) {
       <dd className="text-right font-medium">{value}</dd>
     </div>
   )
+}
+
+function countLabel(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`
 }

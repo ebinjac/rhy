@@ -1,6 +1,8 @@
 import { createFileRoute, Link, Outlet } from "@tanstack/react-router"
 import { Braces, ScrollText, Settings2 } from "lucide-react"
 
+import { PageContainer } from "@/components/page-container"
+
 export const Route = createFileRoute("/elf")({ component: ELFLayout })
 
 const tabs: Array<{
@@ -18,7 +20,10 @@ function ELFLayout() {
   return (
     <div>
       <div className="border-b bg-muted/20">
-        <div className="mx-auto flex w-full max-w-[1480px] min-w-0 items-center gap-1 overflow-x-auto px-4 md:px-6">
+        <PageContainer
+          padding="none"
+          className="flex min-w-0 items-center gap-1 overflow-x-auto"
+        >
           {tabs.map((tab) => (
             <Link
               key={tab.to}
@@ -31,7 +36,7 @@ function ELFLayout() {
               {tab.label}
             </Link>
           ))}
-        </div>
+        </PageContainer>
       </div>
       <Outlet />
     </div>

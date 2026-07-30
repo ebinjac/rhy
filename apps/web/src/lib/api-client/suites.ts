@@ -13,7 +13,12 @@ import type {
 const checkSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["MONITOR", "ELF_QUERY", "OPENSEARCH_ALERT"]),
+    kind: z.enum([
+      "MONITOR",
+      "ELF_QUERY",
+      "OPENSEARCH_ALERT",
+      "DYNATRACE_INFRASTRUCTURE",
+    ]),
     monitorId: z.string(),
     queryId: z.string(),
     receiverId: z.string().default(""),
@@ -23,11 +28,19 @@ const checkSchema = z
     externalTriggerName: z.string().default(""),
     name: z.string(),
     required: z.boolean(),
+    applicationId: z.string().default(""),
+    environmentBindingId: z.string().default(""),
+    serviceIds: z.array(z.string()).default([]),
+    ruleIds: z.array(z.string()).default([]),
+    gateMode: z.enum(["ADVISORY", "BLOCKING"]).default("ADVISORY"),
   })
   .refine(
     (value) => {
       if (value.kind === "MONITOR") return !!value.monitorId
       if (value.kind === "ELF_QUERY") return !!value.queryId
+      if (value.kind === "DYNATRACE_INFRASTRUCTURE") {
+        return !!value.applicationId && !!value.environmentBindingId
+      }
       return (
         !!value.receiverId &&
         (!!value.externalMonitorId ||
@@ -280,6 +293,7 @@ const deploymentInputSchema = z.object({
   environment: z.string(),
   notes: z.string(),
   deploymentStart: z.string().min(1),
+  deploymentCompletedAt: z.string().optional(),
   baselineWindow: z.enum(["24h", "7d", "30d"]),
   sampleCount: z.number().int().min(3).max(50),
   sampleIntervalSeconds: z.number().int().min(1).max(300),
@@ -309,6 +323,9 @@ export const startDeploymentValidation = createServerFn({ method: "POST" })
               environment: data.environment,
               notes: data.notes,
               deploymentStart: data.deploymentStart,
+              ...(data.deploymentCompletedAt
+                ? { deploymentCompletedAt: data.deploymentCompletedAt }
+                : {}),
             },
           }),
           signal: AbortSignal.timeout(10000),

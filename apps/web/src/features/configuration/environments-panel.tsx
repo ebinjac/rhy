@@ -6,6 +6,7 @@ import { FilePenLine, Globe2, Plus, Trash2, X } from "lucide-react"
 
 import {
   ConfigurationIntro,
+  DeleteProfileDialog,
   EmptyProfiles,
   FormField,
   GuidedForm,
@@ -23,6 +24,7 @@ import {
   deleteConfigurationProfile,
   saveConfigurationProfile,
 } from "@/lib/api-client/monitors"
+import { toast } from "@workspace/ui/components/sonner"
 
 type VariableDraft = {
   id: string
@@ -61,6 +63,9 @@ export function EnvironmentsPanel({
   const [variables, setVariables] = useState<VariableDraft[]>([])
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   function reset() {
     setEditing(null)
@@ -150,25 +155,28 @@ export function EnvironmentsPanel({
     await onChanged()
   }
 
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Monitors using this environment may stop working.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind: "environments", profileId: profile.id },
+      data: { kind: "environments", profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
     await onChanged()
   }
 
   return (
     <>
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
       <ConfigurationIntro
         icon={<Globe2 className="size-5" />}
         title="Environment profiles"
@@ -197,7 +205,7 @@ export function EnvironmentsPanel({
             setDescription={setDescription}
           />
           <FormField label="Environment stage" required>
-            <select
+            <select aria-label="Environment stage"
               className="h-9 w-full rounded-md border bg-background px-3 text-sm"
               value={stage}
               onChange={(event) => setStage(event.target.value)}
@@ -212,7 +220,7 @@ export function EnvironmentsPanel({
             required
             help="Used as the default target root. Credentials are not allowed in this URL."
           >
-            <Input
+            <Input aria-label="Base URL"
               className="font-mono"
               value={baseUrl}
               onChange={(event) => setBaseUrl(event.target.value)}
@@ -223,7 +231,7 @@ export function EnvironmentsPanel({
             label="Region"
             help="Optional operational label; for example eu-west-1."
           >
-            <Input
+            <Input aria-label="Region"
               value={region}
               onChange={(event) => setRegion(event.target.value)}
               placeholder="eu-west-1"
@@ -254,7 +262,7 @@ export function EnvironmentsPanel({
                   ])
                 }
               >
-                <Plus /> Add variable
+                <Plus data-icon="inline-start" /> Add variable
               </Button>
             </div>
             <div className="mt-3 space-y-3">
@@ -264,7 +272,7 @@ export function EnvironmentsPanel({
                   className="grid gap-3 rounded-xl border p-3 md:grid-cols-[1fr_140px_1fr_auto] md:items-end"
                 >
                   <FormField label="Name">
-                    <Input
+                    <Input aria-label="Name"
                       className="font-mono"
                       value={variable.key}
                       onChange={(event) =>
@@ -280,7 +288,7 @@ export function EnvironmentsPanel({
                     />
                   </FormField>
                   <FormField label="Source">
-                    <select
+                    <select aria-label="Source"
                       className="h-9 w-full rounded-md border bg-background px-3 text-sm"
                       value={variable.source}
                       onChange={(event) =>
@@ -323,6 +331,7 @@ export function EnvironmentsPanel({
                       />
                     ) : (
                       <Input
+                        aria-label="Environment variable value"
                         value={variable.value}
                         onChange={(event) =>
                           setVariables((current) =>
@@ -407,12 +416,12 @@ export function EnvironmentsPanel({
                   size="sm"
                   onClick={() => beginEdit(profile)}
                 >
-                  <FilePenLine /> Edit
+                  <FilePenLine data-icon="inline-start" /> Edit
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => void remove(profile)}
+                  onClick={() => setDeleteTarget(profile)}
                 >
                   <Trash2 /> Delete
                 </Button>
@@ -427,6 +436,17 @@ export function EnvironmentsPanel({
           onCreate={beginCreate}
         />
       ) : null}
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "environment"}”?`}
+        description="Monitors using this environment may stop working. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete environment"
+      />
     </>
   )
 }

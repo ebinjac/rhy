@@ -60,6 +60,11 @@ export function DeploymentWorkflow({
       .toISOString()
       .slice(0, 16)
   )
+  const [deploymentCompletedAt, setDeploymentCompletedAt] = useState(
+    new Date(Date.now() - new Date().getTimezoneOffset() * 60_000)
+      .toISOString()
+      .slice(0, 16)
+  )
   const [baselineWindow, setBaselineWindow] = useState<"24h" | "7d" | "30d">(
     "24h"
   )
@@ -101,6 +106,18 @@ export function DeploymentWorkflow({
           total +
           stage.checks.filter((check) => check.kind === "OPENSEARCH_ALERT")
             .length,
+        0
+      ) ?? 0,
+    [suite]
+  )
+  const dynatraceCount = useMemo(
+    () =>
+      suite?.stages.reduce(
+        (total, stage) =>
+          total +
+          stage.checks.filter(
+            (check) => check.kind === "DYNATRACE_INFRASTRUCTURE"
+          ).length,
         0
       ) ?? 0,
     [suite]
@@ -168,6 +185,9 @@ export function DeploymentWorkflow({
         environment,
         notes,
         deploymentStart: new Date(deploymentStart).toISOString(),
+        deploymentCompletedAt: deploymentCompletedAt
+          ? new Date(deploymentCompletedAt).toISOString()
+          : undefined,
         baselineWindow,
         sampleCount,
         sampleIntervalSeconds,
@@ -188,7 +208,7 @@ export function DeploymentWorkflow({
     <>
       {open ? (
         <section
-          className="mt-5 border-y bg-muted/15 py-5"
+          className="mt-5 border-y bg-muted/15 px-0 py-4 sm:py-5"
           aria-labelledby="deployment-wizard-title"
         >
           <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
@@ -221,10 +241,12 @@ export function DeploymentWorkflow({
               (label, index) => (
                 <li
                   key={label}
+                  aria-current={step === index + 1 ? "step" : undefined}
                   className={`flex items-center gap-2 border-b pb-2 text-sm ${step === index + 1 ? "border-primary font-medium text-foreground" : "text-muted-foreground"}`}
                 >
                   <span
                     className={`grid size-6 place-items-center rounded-full text-xs ${step > index + 1 ? "bg-success-soft text-success-foreground" : step === index + 1 ? "bg-primary text-primary-foreground" : "bg-muted"}`}
+                    aria-hidden
                   >
                     {step > index + 1 ? (
                       <Check className="size-3.5" />
@@ -237,9 +259,20 @@ export function DeploymentWorkflow({
               )
             )}
           </ol>
-          <div className="mt-5 min-h-52">
+          <form
+            className="mt-5"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (step < 4) {
+                if (suiteId && deploymentStart) setStep((current) => current + 1)
+                return
+              }
+              if (!pending && suiteId) void start()
+            }}
+          >
+          <div className="min-h-52">
             {step === 1 ? (
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <Field label="Suite template">
                   <Select
                     value={suiteId || null}
@@ -249,7 +282,7 @@ export function DeploymentWorkflow({
                       label: item.name,
                     }))}
                   >
-                    <SelectTrigger className="h-9 w-full">
+                    <SelectTrigger aria-label="Suite template" className="h-9 w-full">
                       <SelectValue placeholder="Select suite" />
                     </SelectTrigger>
                     <SelectContent>
@@ -273,7 +306,7 @@ export function DeploymentWorkflow({
                       })),
                     ]}
                   >
-                    <SelectTrigger className="h-9 w-full">
+                    <SelectTrigger aria-label="Application" className="h-9 w-full">
                       <SelectValue placeholder="No application filter" />
                     </SelectTrigger>
                     <SelectContent>
@@ -287,27 +320,27 @@ export function DeploymentWorkflow({
                   </Select>
                 </Field>
                 <Field label="Environment">
-                  <Input
+                  <Input aria-label="Environment"
                     value={environment}
                     onChange={(event) => setEnvironment(event.target.value)}
                   />
                 </Field>
                 <Field label="Deployment ID" hint="Optional">
-                  <Input
+                  <Input aria-label="Deployment ID"
                     value={deploymentId}
                     onChange={(event) => setDeploymentId(event.target.value)}
                     placeholder="deploy-2026-07-22-143"
                   />
                 </Field>
                 <Field label="Version" hint="Optional">
-                  <Input
+                  <Input aria-label="Version"
                     value={version}
                     onChange={(event) => setVersion(event.target.value)}
                     placeholder="v2.18.0"
                   />
                 </Field>
                 <Field label="Commit" hint="Optional">
-                  <Input
+                  <Input aria-label="Commit"
                     className="font-mono"
                     value={commit}
                     onChange={(event) => setCommit(event.target.value)}
@@ -315,14 +348,29 @@ export function DeploymentWorkflow({
                   />
                 </Field>
                 <Field label="Deployment start">
-                  <Input
+                  <Input aria-label="Deployment start"
                     type="datetime-local"
                     value={deploymentStart}
                     onChange={(event) => setDeploymentStart(event.target.value)}
                   />
                 </Field>
+                {dynatraceCount ? (
+                  <Field
+                    label="Deployment completed"
+                    hint="Required for Dynatrace stabilization"
+                  >
+                    <Input
+                      aria-label="Deployment completed"
+                      type="datetime-local"
+                      value={deploymentCompletedAt}
+                      onChange={(event) =>
+                        setDeploymentCompletedAt(event.target.value)
+                      }
+                    />
+                  </Field>
+                ) : null}
                 <Field label="Release notes" hint="Optional" wide>
-                  <Textarea
+                  <Textarea aria-label="Release notes"
                     value={notes}
                     onChange={(event) => setNotes(event.target.value)}
                     placeholder="What changed in this deployment?"
@@ -346,7 +394,7 @@ export function DeploymentWorkflow({
                         { value: "30d", label: "Previous 30 days" },
                       ]}
                     >
-                      <SelectTrigger className="h-9 w-full">
+                      <SelectTrigger aria-label="Historical baseline window" className="h-9 w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -433,7 +481,7 @@ export function DeploymentWorkflow({
             {step === 3 ? (
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Samples per monitor">
-                  <Input
+                  <Input aria-label="Samples per monitor"
                     type="number"
                     min={3}
                     max={50}
@@ -444,7 +492,7 @@ export function DeploymentWorkflow({
                   />
                 </Field>
                 <Field label="Interval between samples (seconds)">
-                  <Input
+                  <Input aria-label="Interval between samples (seconds)"
                     type="number"
                     min={1}
                     max={300}
@@ -466,6 +514,9 @@ export function DeploymentWorkflow({
                   </span>
                   <span>
                     <strong>{alertCount}</strong> OpenSearch alerts
+                  </span>
+                  <span>
+                    <strong>{dynatraceCount}</strong> Dynatrace checks
                   </span>
                   <span>
                     <strong>
@@ -513,13 +564,15 @@ export function DeploymentWorkflow({
             <p
               className="mt-4 inline-flex items-center gap-2 text-sm text-destructive"
               role="alert"
+              aria-live="assertive"
             >
-              <CircleAlert className="size-4" />
+              <CircleAlert className="size-4" aria-hidden />
               {message}
             </p>
           ) : null}
           <div className="mt-5 flex justify-between border-t pt-4">
             <Button
+              type="button"
               variant="outline"
               disabled={step === 1 || pending}
               onClick={() => setStep((current) => current - 1)}
@@ -527,19 +580,17 @@ export function DeploymentWorkflow({
               Back
             </Button>
             {step < 4 ? (
-              <Button
-                disabled={!suiteId || !deploymentStart}
-                onClick={() => setStep((current) => current + 1)}
-              >
+              <Button type="submit" disabled={!suiteId || !deploymentStart}>
                 Continue <ArrowRight />
               </Button>
             ) : (
-              <Button disabled={pending || !suiteId} onClick={start}>
+              <Button type="submit" disabled={pending || !suiteId}>
                 {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
                 Start validation
               </Button>
             )}
           </div>
+          </form>
         </section>
       ) : null}
 
@@ -601,13 +652,20 @@ function DeploymentRunRow({ run }: { run: DeploymentValidationRunContract }) {
         run.status !== "FAILED" &&
         run.status !== "CANCELLED" ? (
           <div className="mt-2 max-w-lg">
-            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+            <div
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-label={run.progress.message || "Deployment validation progress"}
+              className="h-1.5 overflow-hidden rounded-full bg-muted"
+            >
               <div
-                className="h-full bg-primary transition-[width] duration-200"
+                className="h-full bg-primary transition-[width] duration-200 motion-reduce:transition-none"
                 style={{ width: `${percent}%` }}
               />
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-xs text-muted-foreground" role="status">
               {run.progress.message} {percent}%
             </p>
           </div>

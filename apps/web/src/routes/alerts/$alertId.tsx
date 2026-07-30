@@ -15,6 +15,7 @@ import {
   listAlertEvents,
 } from "@/lib/api-client/opensearch-alerts"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/alerts/$alertId")({
   loader: async ({ params }) => {
@@ -31,13 +32,13 @@ function AlertDetail() {
   const { alert, events } = Route.useLoaderData()
   const external = alert.sourceType === "OPENSEARCH_ALERTING"
   return (
-    <main className="mx-auto max-w-[1180px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <Button
         nativeButton={false}
-        render={<Link to="/alerts" />}
+        render={<Link aria-label="Alert inbox" to="/alerts" />}
         variant="ghost"
       >
-        <ArrowLeft />
+        <ArrowLeft data-icon="inline-start" />
         Alert inbox
       </Button>
       <header className="mt-4 flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
@@ -67,6 +68,7 @@ function AlertDetail() {
               nativeButton={false}
               render={
                 <Link
+                  aria-label="View application"
                   params={{ applicationId: alert.applicationId }}
                   search={{ section: "alerts" }}
                   to="/applications/$applicationId"
@@ -74,7 +76,7 @@ function AlertDetail() {
               }
               variant="outline"
             >
-              <AppWindow />
+              <AppWindow data-icon="inline-start" />
               View application
             </Button>
           ) : null}
@@ -203,7 +205,7 @@ function AlertDetail() {
           ) : null}
         </section>
       </div>
-    </main>
+    </PageContainer>
   )
 }
 

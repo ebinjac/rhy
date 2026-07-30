@@ -18,6 +18,7 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/audit"
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
 	"github.com/rhythm-monitoring/rhythm/internal/config"
+	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/library"
 	"github.com/rhythm-monitoring/rhythm/internal/monitors"
@@ -100,6 +101,7 @@ func main() {
 	var auditService *audit.Service
 	var notificationService *notifications.Service
 	var elfService *elf.Service
+	var dynatraceService *dynatrace.Service
 	if postgresPool != nil && redisClient != nil {
 		schedulerService = scheduler.New(postgresPool, redisClient, monitorService, runService, logger)
 	}
@@ -107,6 +109,11 @@ func main() {
 		auditService = audit.New(postgresPool)
 		notificationService = notifications.New(postgresPool, libraryService, logger)
 		elfService = elf.New(postgresPool, libraryService, cfg.AllowPrivateTargets)
+		dynatraceService = dynatrace.New(
+			postgresPool,
+			libraryService,
+			dynatrace.NewEnvironmentV2Provider(cfg.DynatraceAllowedHosts, cfg.AllowPrivateTargets),
+		)
 		alertService = alerts.New(postgresPool, elfService)
 		if cfg.ELFBootstrapURL != "" {
 			if err := elfService.EnsureDevelopmentSeed(context.Background(), cfg.ELFBootstrapURL, cfg.DevelopmentActorID); err != nil {
@@ -130,6 +137,7 @@ func main() {
 	}
 	suiteService.SetELF(elfService)
 	suiteService.SetAlerts(alertService)
+	suiteService.SetDynatrace(dynatraceService)
 	authenticator := authz.NewDevelopmentAuthenticator(cfg.DevelopmentActorID)
 
 	handler := api.NewServer(api.Dependencies{
@@ -145,6 +153,7 @@ func main() {
 		Notifications:       notificationService,
 		Scripts:             scriptClient,
 		ELF:                 elfService,
+		Dynatrace:           dynatraceService,
 		Authenticator:       authenticator,
 		AllowedOrigin:       cfg.AllowedOrigin,
 		AllowPrivateTargets: cfg.AllowPrivateTargets,

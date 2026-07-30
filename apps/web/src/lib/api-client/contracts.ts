@@ -7,6 +7,9 @@ export type ApiMeta = {
   }
 }
 
+/** Marker so status/errorMessage fields are tied to UI role="status" channels. */
+export const CONTRACT_STATUS_ANNOUNCEMENT = 'role="status"' as const
+
 export type JsonValue =
   string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -168,6 +171,12 @@ export type OpenSearchAlertDeliveryContract = {
   processedAt?: string
 }
 
+export type OpenSearchAlertServiceAssignmentContract = {
+  assignedCount: number
+  serviceId?: string
+  serviceName?: string
+}
+
 export type AuditEventContract = {
   id: string
   actorId?: string
@@ -266,7 +275,11 @@ export type ValidationSuiteContract = {
     order: number
     checks: Array<{
       id: string
-      kind: "MONITOR" | "ELF_QUERY" | "OPENSEARCH_ALERT"
+      kind:
+        | "MONITOR"
+        | "ELF_QUERY"
+        | "OPENSEARCH_ALERT"
+        | "DYNATRACE_INFRASTRUCTURE"
       monitorId?: string
       queryId?: string
       receiverId?: string
@@ -276,6 +289,11 @@ export type ValidationSuiteContract = {
       externalTriggerName?: string
       name?: string
       required: boolean
+      applicationId?: string
+      environmentBindingId?: string
+      serviceIds?: string[]
+      ruleIds?: string[]
+      gateMode?: "ADVISORY" | "BLOCKING"
     }>
   }>
   parallelism: number
@@ -371,6 +389,7 @@ export type DeploymentValidationRunContract = {
     environment?: string
     notes?: string
     deploymentStart: string
+    deploymentCompletedAt?: string
   }
   configuration: {
     baselineWindow: "24h" | "7d" | "30d"
@@ -381,6 +400,7 @@ export type DeploymentValidationRunContract = {
     regressionMinimumMs: number
     monitorRevisionIds?: Record<string, string>
     elfRevisionIds?: Record<string, string>
+    dynatraceRevisionNumbers?: Record<string, number>
   }
   suiteSnapshot: ValidationSuiteContract
   report: {
@@ -430,6 +450,7 @@ export type DeploymentValidationRunContract = {
     }>
     elfResults?: ValidationSuiteRunContract["results"]
     alertResults?: ValidationSuiteRunContract["results"]
+    dynatraceResults?: DynatraceDeploymentComparisonContract[]
     generatedAt?: string
   }
   failureReason?: string
@@ -437,6 +458,212 @@ export type DeploymentValidationRunContract = {
   endedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export type DynatraceEnvironmentBindingContract = {
+  id: string
+  applicationId: string
+  environmentProfileId: string
+  environmentName: string
+  environmentType: string
+  baseUrlHost?: string
+  enabled: boolean
+  dynatraceConfigured: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export type DynatraceMetricMappingContract = {
+  cpu?: string
+  memory?: string
+  hydraCpu?: string
+  hydraMemory?: string
+  timsCpu?: string
+  timsMemory?: string
+}
+
+export type DynatraceResourceMappingContract = {
+  id?: string
+  serviceId?: string
+  platform: "HYDRA" | "TIMS"
+  entityType: string
+  mappingType:
+    | "ENTITY_ID"
+    | "TAG"
+    | "HOST_GROUP"
+    | "NAMESPACE"
+    | "WORKLOAD"
+    | "CONTAINER_GROUP"
+    | "CLUSTER"
+    | "HOST"
+  value: string
+  label?: string
+  enabled: boolean
+}
+
+export type DynatraceRuleContract = {
+  id?: string
+  serviceId?: string
+  name: string
+  metric: "CPU" | "MEMORY"
+  statistic: "AVERAGE" | "MAXIMUM" | "LATEST" | "P50" | "P95"
+  operator: "GT" | "GTE" | "LT" | "LTE" | "EQ"
+  threshold: number
+  comparison: "ABSOLUTE" | "BASELINE_ABSOLUTE" | "BASELINE_PERCENT"
+  scope: "APPLICATION" | "SERVICE" | "RESOURCE"
+  gateMode: "ADVISORY" | "BLOCKING"
+  minimumCoveragePercent?: number
+  consecutivePoints: number
+  enabled: boolean
+}
+
+export type DynatraceStatisticsContract = {
+  sampleCount: number
+  minimum?: number
+  maximum?: number
+  average?: number
+  latest?: number
+  p50?: number
+  p95?: number
+}
+
+export type DynatraceRuleResultContract = {
+  ruleId: string
+  ruleName: string
+  status: string
+  gateMode: string
+  metric: string
+  statistic: string
+  observed?: number
+  baseline?: number
+  threshold: number
+  operator: string
+  coveragePercent: number
+  reason: string
+}
+
+export type DynatraceConfigurationContract = {
+  id: string
+  applicationId: string
+  environmentBindingId: string
+  connectionProfileId: string
+  connectionName?: string
+  baseUrl?: string
+  credentialSecretRef?: string
+  effectiveCredential?: string
+  platforms: Array<"HYDRA" | "TIMS">
+  managementZones: string[]
+  metricMappings: DynatraceMetricMappingContract
+  baselineWindowSeconds: number
+  stabilizationSeconds: number
+  postWindowSeconds: number
+  enabled: boolean
+  revisionNumber: number
+  lastTestStatus: "NOT_TESTED" | "SUCCESS" | "FAILED"
+  lastTestError?: string
+  lastTestAt?: string
+  resourceMappings: DynatraceResourceMappingContract[]
+  rules: DynatraceRuleContract[]
+  serviceOverrides: Array<{
+    id: string
+    serviceId: string
+    serviceName?: string
+    credentialSecretRef?: string
+    effectiveCredential?: string
+    platforms: Array<"HYDRA" | "TIMS">
+    managementZones: string[]
+    metricMappings: DynatraceMetricMappingContract
+    inheritResources: boolean
+    enabled: boolean
+  }>
+  createdAt: string
+  updatedAt: string
+}
+
+export type DynatraceEntityContract = {
+  id: string
+  type: string
+  name: string
+  managementZones: string[]
+  tags: string[]
+  serviceId?: string
+  platform?: "HYDRA" | "TIMS"
+}
+
+export type DynatraceResourcePreviewContract = {
+  included: DynatraceEntityContract[]
+  excluded: Array<Record<string, JsonValue>>
+  conflicts: string[]
+  unmatchedRules: string[]
+  compiledSelectors: string[]
+  truncated: boolean
+}
+
+export type DynatraceRunContract = {
+  id: string
+  applicationId: string
+  environmentBindingId: string
+  applicationConfigId: string
+  configRevisionId?: string
+  serviceId?: string
+  deploymentRunId?: string
+  status:
+    | "PASS"
+    | "WARNING"
+    | "FAIL"
+    | "NO_DATA"
+    | "PARTIAL_DATA"
+    | "ERROR"
+    | "SKIPPED"
+  decision: "PENDING" | "ALLOW" | "ALLOW_WITH_WARNINGS" | "BLOCK"
+  platform?: string
+  timeFrom: string
+  timeTo: string
+  resourceCount: number
+  coveredResourceCount: number
+  coveragePercent: number
+  summary: Record<string, DynatraceStatisticsContract>
+  resources: Array<{
+    resourceId: string
+    resourceName?: string
+    resourceType?: string
+    metric: string
+    aggregation?: "AVG" | "MAX"
+    selector?: string
+    unit?: string
+    statistics: DynatraceStatisticsContract
+    series: Array<{ timestamp: string; value?: number }>
+  }>
+  ruleResults: DynatraceRuleResultContract[]
+  requestEvidence: Record<string, JsonValue>
+  failureCategory?: string
+  failureReason?: string
+  correlationId?: string
+  createdAt: string
+  completedAt?: string
+}
+
+export type DynatraceDeploymentComparisonContract = {
+  checkId: string
+  name: string
+  applicationId: string
+  environmentBindingId: string
+  serviceId?: string
+  required: boolean
+  gateMode: "ADVISORY" | "BLOCKING"
+  baselineRunId?: string
+  postRunId?: string
+  status: string
+  decision: string
+  baselineSummary: Record<string, DynatraceStatisticsContract>
+  postSummary: Record<string, DynatraceStatisticsContract>
+  baselineResourceCount: number
+  postResourceCount: number
+  addedResources: number
+  missingResources: number
+  ruleResults: DynatraceRuleResultContract[]
+  failureCategory?: string
+  failureReason?: string
 }
 
 export type DeploymentBaselinePreviewContract = {
@@ -494,6 +721,7 @@ export type RunContract = {
   queueDelayMs?: number
   warningCount: number
   durationMs: number
+  apiResponseTimeMs?: number
   startedAt?: string
   endedAt?: string
   createdAt: string
@@ -603,10 +831,29 @@ export type ScriptResultContract = {
     success?: boolean
     error?: string
   }>
+  packageImports?: Array<{
+    specifier: string
+    registry: string
+    version: string
+    durationMs: number
+    cached: boolean
+  }>
   variables: Record<string, string>
   environment: Record<string, string>
   collection: Record<string, string>
+  globals?: Record<string, string>
+  state?: Record<string, JsonValue>
   request?: Record<string, JsonValue>
+  visualizer?: {
+    template: string
+    data: Record<string, JsonValue>
+    options?: Record<string, JsonValue>
+  }
+  execution?: {
+    requestSkipped?: boolean
+    nextRequestSet?: boolean
+    nextRequest?: string
+  }
   problems: ScriptProblemContract[]
   errorCategory?: string
   errorMessage?: string
@@ -653,6 +900,7 @@ export type StepRunContract = {
   startedAt?: string
   endedAt?: string
   preRequestScript?: ScriptResultContract
+  testScript?: ScriptResultContract
 }
 
 export type DraftMonitorPreviewContract = {

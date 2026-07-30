@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
+import { toast } from "@workspace/ui/components/sonner"
 import {
   BellRing,
   LoaderCircle,
@@ -16,20 +17,22 @@ import {
   Plus,
   Send,
   ShieldCheck,
+  Trash2,
   Webhook,
 } from "lucide-react"
 
+import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import {
   SecretCredentialField,
   SecretPicker,
   secretAliasFromRef,
-  toSecretRef
-  
+  toSecretRef,
 } from "@/features/configuration/secret-credential-field"
-import type {SecretInputMode} from "@/features/configuration/secret-credential-field";
+import type { SecretInputMode } from "@/features/configuration/secret-credential-field"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 import {
   createConfigurationProfile,
+  deleteConfigurationProfile,
   sendNotificationTestEmail,
 } from "@/lib/api-client/monitors"
 
@@ -51,11 +54,11 @@ const authModeLabels: Record<AuthMode, string> = {
 export function NotificationsPanel({
   profiles,
   secrets,
-  onCreated,
+  onChanged,
 }: {
   profiles: ConfigurationProfileContract[]
   secrets: ConfigurationProfileContract[]
-  onCreated: () => Promise<void>
+  onChanged: () => Promise<void>
 }) {
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
@@ -78,6 +81,9 @@ export function NotificationsPanel({
   const [testTo, setTestTo] = useState("")
   const [testingId, setTestingId] = useState<string | null>(null)
   const [testMessage, setTestMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const emailProfiles = profiles.filter(
     (profile) => profile.profileType.toUpperCase() === "EMAIL"
@@ -177,7 +183,24 @@ export function NotificationsPanel({
     }
     setOpen(false)
     resetForm()
-    await onCreated()
+    await onChanged()
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    const result = await deleteConfigurationProfile({
+      data: { kind: "notifications", profileId: deleteTarget.id },
+    })
+    setDeleting(false)
+    if (!result.ok) {
+      toast.error(result.message)
+      setMessage(result.message)
+      return
+    }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
+    await onChanged()
   }
 
   async function sendTest(profileId: string) {
@@ -201,6 +224,9 @@ export function NotificationsPanel({
 
   return (
     <div className="mt-6 space-y-6">
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
       <section className="rounded-xl border bg-muted/15 px-5 py-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
@@ -259,7 +285,7 @@ export function NotificationsPanel({
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="Name">
-              <Input
+              <Input aria-label="Name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Local SMTP"
@@ -274,7 +300,7 @@ export function NotificationsPanel({
                 }}
                 items={channelLabels}
               >
-                <SelectTrigger className="h-9 w-full">
+                <SelectTrigger aria-label="Channel type" className="h-9 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -285,7 +311,7 @@ export function NotificationsPanel({
               </Select>
             </Field>
             <Field label="Description" wide>
-              <Input
+              <Input aria-label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Primary alert email path for local development"
@@ -297,7 +323,7 @@ export function NotificationsPanel({
                   label="SMTP host"
                   help="Use mailpit for local Docker. Use your provider hostname in production."
                 >
-                  <Input
+                  <Input aria-label="SMTP host"
                     className="font-mono"
                     value={smtpHost}
                     onChange={(event) => setSmtpHost(event.target.value)}
@@ -305,7 +331,7 @@ export function NotificationsPanel({
                   />
                 </Field>
                 <Field label="SMTP port">
-                  <Input
+                  <Input aria-label="SMTP port"
                     className="font-mono"
                     value={smtpPort}
                     onChange={(event) => setSmtpPort(event.target.value)}
@@ -313,7 +339,7 @@ export function NotificationsPanel({
                   />
                 </Field>
                 <Field label="From address">
-                  <Input
+                  <Input aria-label="From address"
                     className="font-mono"
                     value={from}
                     onChange={(event) => setFrom(event.target.value)}
@@ -324,7 +350,7 @@ export function NotificationsPanel({
                   label="Fallback recipients (optional)"
                   help="Comma-separated. Used when an alert has no application destination emails."
                 >
-                  <Input
+                  <Input aria-label="Fallback recipients (optional)"
                     value={fallbackTo}
                     onChange={(event) => setFallbackTo(event.target.value)}
                     placeholder="oncall@example.com"
@@ -343,7 +369,7 @@ export function NotificationsPanel({
                     }}
                     items={authModeLabels}
                   >
-                    <SelectTrigger className="h-9 w-full">
+                    <SelectTrigger aria-label="SMTP authentication" className="h-9 w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -363,7 +389,7 @@ export function NotificationsPanel({
                       label="Username"
                       help="Stored encrypted on this channel. Leave empty if the provider only needs a password."
                     >
-                      <Input
+                      <Input aria-label="Username"
                         className="font-mono"
                         value={username}
                         onChange={(event) => setUsername(event.target.value)}
@@ -375,7 +401,7 @@ export function NotificationsPanel({
                       label="Password"
                       help="Encrypted at rest. Never returned after save."
                     >
-                      <Input
+                      <Input aria-label="Password"
                         className="font-mono"
                         type="password"
                         value={password}
@@ -441,7 +467,9 @@ export function NotificationsPanel({
             </p>
           ) : null}
           {message ? (
-            <p className="mt-3 text-xs text-destructive">{message}</p>
+            <p className="mt-3 text-xs text-destructive" role="alert">
+              {message}
+            </p>
           ) : null}
           <div className="mt-4 flex justify-end">
             <Button disabled={pending} onClick={() => void create()}>
@@ -473,6 +501,7 @@ export function NotificationsPanel({
             </div>
             <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
               <Input
+                aria-label="Test email destination"
                 value={testTo}
                 onChange={(event) => setTestTo(event.target.value)}
                 placeholder="you@example.com"
@@ -589,6 +618,15 @@ export function NotificationsPanel({
                   )}
                 </div>
               </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setDeleteTarget(profile)}
+                >
+                  <Trash2 /> Delete
+                </Button>
+              </div>
             </article>
           )
         })}
@@ -608,6 +646,17 @@ export function NotificationsPanel({
           </div>
         ) : null}
       </div>
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "channel"}”?`}
+        description="Alert delivery through this notification channel will stop. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete channel"
+      />
     </div>
   )
 }

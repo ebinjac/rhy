@@ -51,6 +51,7 @@ import type {
 } from "@/lib/api-client/contracts"
 import { cancelRun, getRunDiagnostics } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/monitors/$monitorId/runs/$runId")({
   loader: ({ params }) => getRunDiagnostics({ data: { runId: params.runId } }),
@@ -208,11 +209,13 @@ function RunDiagnosticsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1500px] px-4 py-5 md:px-6 md:py-7">
+    <PageContainer padding="compact">
+      <div aria-live="polite" className="sr-only" role="status" />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Button
           render={
             <Link
+              aria-label="Back to runs"
               params={{ monitorId: diagnostics.run.monitorId }}
               to="/monitors/$monitorId/runs"
             />
@@ -266,7 +269,7 @@ function RunDiagnosticsPage() {
           )}
         </div>
       </section>
-    </div>
+    </PageContainer>
   )
 }
 
@@ -704,7 +707,10 @@ function StepPanel({
         </div>
       </header>
       {step.errorMessage ? (
-        <div className="border-b bg-destructive/5 px-5 py-3 text-sm text-destructive">
+        <div
+          role="alert"
+          className="border-b bg-destructive/5 px-5 py-3 text-sm text-destructive"
+        >
           <strong>{step.failureCategory?.replaceAll("_", " ")}</strong> ·{" "}
           {step.errorMessage}
         </div>
@@ -772,7 +778,7 @@ function PreRequestEvidence({
             Executed once in the Pre-request workflow before the first HTTP
             step.
           </p>
-          <ScriptEvidence result={run.setupScript} />
+          <ScriptEvidence result={run.setupScript} phase="Pre-request" />
         </section>
       ) : null}
       <section>
@@ -781,7 +787,7 @@ function PreRequestEvidence({
           Step pre-request script
         </h3>
         {step.preRequestScript ? (
-          <ScriptEvidence result={step.preRequestScript} />
+          <ScriptEvidence result={step.preRequestScript} phase="Pre-request" />
         ) : (
           <EmptyEvidence text="No JavaScript pre-request evidence was recorded for this step." />
         )}
@@ -790,7 +796,13 @@ function PreRequestEvidence({
   )
 }
 
-function ScriptEvidence({ result }: { result: ScriptResultContract }) {
+function ScriptEvidence({
+  result,
+  phase,
+}: {
+  result: ScriptResultContract
+  phase: "Pre-request" | "Tests"
+}) {
   const auxTotal = result.auxiliaryRequests.reduce(
     (sum, item) => sum + (item.durationMs || 0),
     0
@@ -812,6 +824,9 @@ function ScriptEvidence({ result }: { result: ScriptResultContract }) {
             {result.auxiliaryRequests.length
               ? ` · ${formatDuration(auxTotal)} HTTP`
               : ""}
+            {result.packageImports?.length
+              ? ` · ${result.packageImports.length} package${result.packageImports.length === 1 ? "" : "s"}`
+              : ""}
           </p>
         </div>
         {result.errorCategory ? (
@@ -821,7 +836,7 @@ function ScriptEvidence({ result }: { result: ScriptResultContract }) {
         ) : null}
       </header>
       {result.errorMessage ? (
-        <div className="border-b bg-destructive/5 px-4 py-3">
+        <div className="border-b bg-destructive/5 px-4 py-3" role="alert">
           <p className="text-sm text-destructive">{result.errorMessage}</p>
           {result.errorLine ? (
             <p className="mt-1 font-mono text-xs text-muted-foreground">
@@ -834,7 +849,7 @@ function ScriptEvidence({ result }: { result: ScriptResultContract }) {
         <section className="border-b p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h4 className="text-xs font-semibold text-muted-foreground">
-              Pre-request · pm.sendRequest
+              {phase} · pm.sendRequest
             </h4>
             <span className="font-mono text-xs text-muted-foreground">
               {result.auxiliaryRequests.length} call
@@ -843,6 +858,30 @@ function ScriptEvidence({ result }: { result: ScriptResultContract }) {
             </span>
           </div>
           <AuxiliaryRequestList requests={result.auxiliaryRequests} />
+        </section>
+      ) : null}
+      {result.packageImports?.length ? (
+        <section className="border-b p-4">
+          <h4 className="text-xs font-semibold text-muted-foreground">
+            External package imports
+          </h4>
+          <div className="mt-3 space-y-2">
+            {result.packageImports.map((item, index) => (
+              <div
+                className="flex flex-wrap items-center gap-2 text-xs"
+                key={`${item.specifier}-${index}`}
+              >
+                <Badge variant="outline">{item.registry.toUpperCase()}</Badge>
+                <code className="min-w-0 flex-1 truncate">
+                  {item.specifier}
+                </code>
+                <span className="text-muted-foreground">
+                  {item.cached ? "cache" : "registry"} ·{" "}
+                  {formatDuration(item.durationMs)}
+                </span>
+              </div>
+            ))}
+          </div>
         </section>
       ) : null}
       <div className="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0">
@@ -907,6 +946,21 @@ function ScriptEvidence({ result }: { result: ScriptResultContract }) {
           </div>
         </section>
       </div>
+      {result.visualizer ? (
+        <section className="border-t p-4">
+          <h4 className="text-xs font-semibold text-muted-foreground">
+            Visualizer evidence
+          </h4>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Template markup is retained as sanitized evidence and is not
+            executed in run diagnostics.
+          </p>
+          <SafeObject
+            value={result.visualizer}
+            empty="No visualizer data."
+          />
+        </section>
+      ) : null}
     </div>
   )
 }
@@ -1048,35 +1102,46 @@ function OverviewTab({
 
 function ChecksTab({ step }: { step: StepRunContract }) {
   return (
-    <div className="grid gap-7 xl:grid-cols-2">
-      <CheckList
-        title="Assertions"
-        icon={Check}
-        empty="No assertions configured."
-        items={step.assertions.map((item) => ({
-          label: item.type,
-          detail: item.expression || "Response check",
-          expected: item.expected,
-          observed: printable(item.observed),
-          passed: item.passed,
-          error: item.error,
-        }))}
-      />
-      <CheckList
-        title="Extractors"
-        icon={FileSearch}
-        empty="No extractors configured."
-        items={step.extractors.map((item) => ({
-          label: item.variable || item.source,
-          detail: item.source,
-          expected: "Value extracted",
-          observed: item.sensitive
-            ? "Masked sensitive value"
-            : printable(item.value),
-          passed: item.success,
-          error: item.error,
-        }))}
-      />
+    <div className="space-y-7">
+      {step.testScript ? (
+        <section>
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
+            <Code2 className="size-4" />
+            JavaScript Tests
+          </h3>
+          <ScriptEvidence result={step.testScript} phase="Tests" />
+        </section>
+      ) : null}
+      <div className="grid gap-7 xl:grid-cols-2">
+        <CheckList
+          title="Guided assertions"
+          icon={Check}
+          empty="No guided assertions configured."
+          items={step.assertions.map((item) => ({
+            label: item.type,
+            detail: item.expression || "Response check",
+            expected: item.expected,
+            observed: printable(item.observed),
+            passed: item.passed,
+            error: item.error,
+          }))}
+        />
+        <CheckList
+          title="Extractors"
+          icon={FileSearch}
+          empty="No extractors configured."
+          items={step.extractors.map((item) => ({
+            label: item.variable || item.source,
+            detail: item.source,
+            expected: "Value extracted",
+            observed: item.sensitive
+              ? "Masked sensitive value"
+              : printable(item.value),
+            passed: item.success,
+            error: item.error,
+          }))}
+        />
+      </div>
     </div>
   )
 }
@@ -1104,7 +1169,10 @@ function AttemptsTab({ step }: { step: StepRunContract }) {
             </span>
           </header>
           {attempt.errorMessage ? (
-            <p className="border-b bg-destructive/5 px-4 py-3 text-sm text-destructive">
+            <p
+              className="border-b bg-destructive/5 px-4 py-3 text-sm text-destructive"
+              role="alert"
+            >
               {attempt.errorMessage}
             </p>
           ) : null}

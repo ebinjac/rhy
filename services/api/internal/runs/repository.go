@@ -114,7 +114,7 @@ func (r *MemoryRepository) List(_ context.Context, monitorID string, limit int) 
 	items := make([]Run, 0)
 	for _, run := range r.runs {
 		if run.MonitorID == monitorID {
-			items = append(items, run)
+			items = append(items, withListAPIResponseTime(run))
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
@@ -122,6 +122,28 @@ func (r *MemoryRepository) List(_ context.Context, monitorID string, limit int) 
 		items = items[:limit]
 	}
 	return items, nil
+}
+
+func withListAPIResponseTime(run Run) Run {
+	if run.APIResponseTimeMS != nil {
+		return run
+	}
+	var sum int64
+	recorded := false
+	for _, step := range run.Steps {
+		if step.Timing == nil {
+			continue
+		}
+		if _, ok := step.Timing["apiResponseTimeMs"]; !ok {
+			continue
+		}
+		sum += timingMilliseconds(step.Timing, "apiResponseTimeMs")
+		recorded = true
+	}
+	if recorded {
+		run.APIResponseTimeMS = &sum
+	}
+	return run
 }
 
 func (r *MemoryRepository) Get(_ context.Context, runID string) (Run, error) {

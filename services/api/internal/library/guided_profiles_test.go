@@ -50,3 +50,27 @@ func TestPrepareTelemetryConfigNormalizesURLAndToken(t *testing.T) {
 		t.Fatalf("unexpected telemetry config: %#v", config)
 	}
 }
+
+func TestPrepareTelemetryConfigAcceptsSelectedSecretDisplayName(t *testing.T) {
+	config, kind, err := prepareTelemetryConfig("DYNATRACE", map[string]any{
+		"baseUrl":        "https://tenant.live.dynatrace.com/",
+		"tokenSecretRef": "secret://Dynatrace API Token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != "DYNATRACE" || config["tokenSecretRef"] != "secret://Dynatrace API Token" {
+		t.Fatalf("unexpected telemetry config: %#v", config)
+	}
+}
+
+func TestRequiredSecretRefRejectsControlCharacters(t *testing.T) {
+	_, err := requiredSecretRef(
+		map[string]any{"tokenSecretRef": "secret://Dynatrace\nToken"},
+		"tokenSecretRef",
+		"Dynatrace API token",
+	)
+	if err == nil {
+		t.Fatal("expected a secret name containing a control character to be rejected")
+	}
+}

@@ -32,17 +32,18 @@ type Run struct {
 	FailureCategory  string          `json:"failureCategory,omitempty"`
 	FailureReason    string          `json:"failureReason,omitempty"`
 	FailedStepID     string          `json:"failedStepId,omitempty"`
-	QueueDelayMS     int64           `json:"queueDelayMs,omitempty"`
-	WarningCount     int             `json:"warningCount"`
-	DurationMS       int64           `json:"durationMs"`
-	StartedAt        *time.Time      `json:"startedAt,omitempty"`
-	EndedAt          *time.Time      `json:"endedAt,omitempty"`
-	CreatedAt        time.Time       `json:"createdAt"`
-	ExecutionContext map[string]any  `json:"executionContext,omitempty"`
-	AlertImpact      map[string]any  `json:"alertImpact,omitempty"`
-	Events           []RunEvent      `json:"events,omitempty"`
-	Steps            []StepRun       `json:"steps,omitempty"`
-	SetupScript      *scripts.Result `json:"setupScript,omitempty"`
+	QueueDelayMS      int64           `json:"queueDelayMs,omitempty"`
+	WarningCount      int             `json:"warningCount"`
+	DurationMS        int64           `json:"durationMs"`
+	APIResponseTimeMS *int64          `json:"apiResponseTimeMs,omitempty"`
+	StartedAt         *time.Time      `json:"startedAt,omitempty"`
+	EndedAt           *time.Time      `json:"endedAt,omitempty"`
+	CreatedAt         time.Time       `json:"createdAt"`
+	ExecutionContext  map[string]any  `json:"executionContext,omitempty"`
+	AlertImpact       map[string]any  `json:"alertImpact,omitempty"`
+	Events            []RunEvent      `json:"events,omitempty"`
+	Steps             []StepRun       `json:"steps,omitempty"`
+	SetupScript       *scripts.Result `json:"setupScript,omitempty"`
 }
 
 type RunEvent struct {
@@ -87,6 +88,7 @@ type StepRun struct {
 	StartedAt        *time.Time        `json:"startedAt,omitempty"`
 	EndedAt          *time.Time        `json:"endedAt,omitempty"`
 	PreRequestScript *scripts.Result   `json:"preRequestScript,omitempty"`
+	TestScript       *scripts.Result   `json:"testScript,omitempty"`
 }
 
 type AttemptRun struct {
@@ -188,6 +190,7 @@ type RequestConfig struct {
 	Body             BodyConfig        `json:"body"`
 	PreRequest       []ActionConfig    `json:"preRequest"`
 	PreRequestScript scripts.Script    `json:"preRequestScript,omitempty"`
+	TestScript       scripts.Script    `json:"testScript,omitempty"`
 	Extractors       []ExtractorConfig `json:"extractors"`
 	Assertions       []AssertionConfig `json:"assertions"`
 	Settings         SettingsConfig    `json:"settings"`

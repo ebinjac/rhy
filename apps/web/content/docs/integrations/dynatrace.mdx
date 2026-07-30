@@ -1,0 +1,117 @@
+---
+title: Dynatrace infrastructure integration
+description: Connect application environments to Dynatrace for Hydra and TIMS metrics and deployment validation.
+audience:
+  - platform-administrator
+  - sre-operator
+  - release-engineer
+status: preview
+since: 0.0.1
+lastReviewed: 2026-07-29
+owners:
+  - Rhythm Platform
+keywords:
+  - Dynatrace
+  - Hydra
+  - TIMS
+  - infrastructure
+  - deployment validation
+---
+
+Rhythm uses the Dynatrace Environment API v2 to collect governed CPU and
+memory evidence for application-owned Hydra workloads and TIMS hosts.
+
+## Prerequisites
+
+- A read-only Dynatrace API token with `metrics.read` and `entities.read`.
+- A Rhythm Secret profile containing that token.
+- An approved Dynatrace telemetry connection. The default Amex production
+  endpoint is `https://amex-prod.live.dynatrace.com`.
+- An Application with at least one service.
+
+## Configure an application
+
+1. Open **Applications** and select the application.
+2. Open **Dynatrace**.
+3. Select the approved telemetry connection and optional credential override.
+4. Select Hydra, TIMS, or both.
+5. Select the application management zones.
+6. Choose the services and, for TIMS, any explicitly governed hosts.
+7. Review the platform query profiles.
+8. Save the configuration.
+9. Open **Resources**, add governed mappings, and run **Preview resources**.
+10. Run the connection test and a bounded metrics query.
+
+Rhythm intersects resource mappings with the configured management zones.
+Authored payloads cannot expand the application’s trusted ownership scope.
+
+## Production metric query shapes
+
+Rhythm compiles one bounded Metrics API v2 request per selected platform. It
+uses the selected management zones through `mzSelector` and requests four
+series together so average and peak evidence cover the same time window.
+
+For **Hydra**, Rhythm requests:
+
+```text
+builtin:containers.cpu.usagePercent:splitBy("Container"):avg:names
+builtin:containers.cpu.usagePercent:splitBy("Container"):max:names
+builtin:containers.memory.usagePercent:splitBy("Container"):avg:names
+builtin:containers.memory.usagePercent:splitBy("Container"):max:names
+```
+
+For **TIMS**, Rhythm requests:
+
+```text
+builtin:host.cpu.usage:splitBy("dt.entity.host"):avg:names
+builtin:host.cpu.usage:splitBy("dt.entity.host"):max:names
+builtin:host.mem.usage:splitBy("dt.entity.host"):avg:names
+builtin:host.mem.usage:splitBy("dt.entity.host"):max:names
+```
+
+The Metrics workspace shows the resolved platform, management-zone selector,
+resource dimension, observation window, and resolution before execution. Raw
+tokens are never shown in this preview.
+
+## Resource mappings
+
+Hydra mappings support namespaces, workloads, container groups, clusters,
+tags, and explicit entity IDs. TIMS mappings support hosts, host groups, tags,
+and explicit entity IDs.
+
+Resource preview shows the included entities, conflicts, unmatched mappings,
+management zones, and whether the 500-resource safety limit truncated the
+result.
+
+## Deployment rules
+
+Rules can evaluate CPU or memory using average, maximum, latest, p50, or p95.
+Conditions can use an absolute threshold or an absolute/percentage increase
+from the immutable pre-deployment baseline.
+
+Dynatrace evidence is advisory until an explicit rule is saved. For blocking
+rules, no data and query errors block validation. Partial data warns unless a
+minimum-coverage rule fails.
+
+## Before and after collection
+
+Deployment validation captures:
+
+- Baseline: the selected historical window ending exactly at deployment start.
+- Post-deployment: the configured observation window beginning after
+  deployment completion and stabilization.
+- Added and missing resources, without treating missing measurements as zero.
+- Application, service, and individual resource evidence.
+
+The report combines Dynatrace outcomes with synthetic monitor samples, ELF
+queries, and OpenSearch alert checks.
+
+## Security
+
+Tokens are resolved only during execution and sent in the `Api-Token`
+authorization header. Resolved tokens, raw Dynatrace responses, unrestricted
+entity properties, and proxy credentials are never persisted in evidence or
+reports.
+
+If a connection fails, verify the endpoint allowlist, token scopes, TLS
+profile, proxy route, management-zone access, and metric descriptor.

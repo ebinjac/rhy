@@ -267,7 +267,13 @@ export function AlertsInbox() {
 
         <div className="border-t px-2 py-2">
           <Button
-            render={<Link to="/alerts" onClick={() => setOpen(false)} />}
+            render={
+              <Link
+                aria-label="View all alerts"
+                to="/alerts"
+                onClick={() => setOpen(false)}
+              />
+            }
             className="w-full justify-center"
             nativeButton={false}
             size="sm"

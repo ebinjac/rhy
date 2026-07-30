@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,25 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/scripts"
 	"github.com/rhythm-monitoring/rhythm/internal/suites"
 )
+
+func TestCancelMonitorPreviewCancelsRegisteredExecution(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &server{previewCancels: map[string]context.CancelFunc{"preview-1": cancel}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/monitors/preview/preview-1/cancel", nil)
+	request.SetPathValue("previewId", "preview-1")
+	response := httptest.NewRecorder()
+
+	s.cancelMonitorPreview(response, request)
+
+	if response.Code != http.StatusOK || !bytes.Contains(response.Body.Bytes(), []byte(`"cancelled":true`)) {
+		t.Fatalf("expected cancellation response, got %d: %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("expected the registered preview context to be cancelled")
+	}
+}
 
 func TestListMonitorsReturnsEnvelopeAndRequestID(t *testing.T) {
 	handler := testServer()
@@ -158,6 +178,40 @@ func TestCreateMonitorCreatesDraftRevision(t *testing.T) {
 	}
 	if !bytes.Contains(revisionsResponse.Body.Bytes(), []byte(`"https://example.com/health"`)) {
 		t.Fatalf("expected request definition in revision, got %s", revisionsResponse.Body.String())
+	}
+}
+
+func TestCreateMonitorReplaysIdempotentCreation(t *testing.T) {
+	handler := testServer()
+	body := `{"name":"Idempotent monitor","slug":"idempotent-monitor","definition":{"schemaVersion":2,"steps":[]}}`
+	firstRequest := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(body))
+	firstRequest.Header.Set("Content-Type", "application/json")
+	firstRequest.Header.Set("Idempotency-Key", "creation-123")
+	firstResponse := httptest.NewRecorder()
+	handler.ServeHTTP(firstResponse, firstRequest)
+	if firstResponse.Code != http.StatusCreated {
+		t.Fatalf("expected initial creation, got %d: %s", firstResponse.Code, firstResponse.Body.String())
+	}
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(body))
+	secondRequest.Header.Set("Content-Type", "application/json")
+	secondRequest.Header.Set("Idempotency-Key", "creation-123")
+	secondResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondResponse, secondRequest)
+	if secondResponse.Code != http.StatusOK || secondResponse.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("expected replayed creation, got %d: %s", secondResponse.Code, secondResponse.Body.String())
+	}
+	if firstResponse.Header().Get("Location") != secondResponse.Header().Get("Location") {
+		t.Fatalf("expected the same monitor location, got %q and %q", firstResponse.Header().Get("Location"), secondResponse.Header().Get("Location"))
+	}
+
+	changedRequest := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(`{"name":"Changed monitor","slug":"changed-monitor","definition":{"schemaVersion":2,"steps":[]}}`))
+	changedRequest.Header.Set("Content-Type", "application/json")
+	changedRequest.Header.Set("Idempotency-Key", "creation-123")
+	changedResponse := httptest.NewRecorder()
+	handler.ServeHTTP(changedResponse, changedRequest)
+	if changedResponse.Code != http.StatusConflict || !bytes.Contains(changedResponse.Body.Bytes(), []byte("IDEMPOTENCY_KEY_REUSED")) {
+		t.Fatalf("expected idempotency conflict, got %d: %s", changedResponse.Code, changedResponse.Body.String())
 	}
 }
 

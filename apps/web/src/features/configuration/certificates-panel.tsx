@@ -1,12 +1,12 @@
 import { useId, useRef, useState } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { CopyButton } from "@workspace/ui/components/copy-button"
 import { Input } from "@workspace/ui/components/input"
 import {
   CalendarClock,
   Check,
   ChevronDown,
-  Copy,
   FileArchive,
   FileKey2,
   Fingerprint,
@@ -24,6 +24,8 @@ import {
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 import { uploadCertificateProfile } from "@/lib/api-client/certificates"
 import { deleteConfigurationProfile } from "@/lib/api-client/monitors"
+import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
+import { toast } from "@workspace/ui/components/sonner"
 
 type Purpose = "CLIENT_IDENTITY" | "TRUST_BUNDLE" | "COMBINED"
 type EncodedFile = { name: string; type: string; contentBase64: string }
@@ -79,6 +81,9 @@ export function CertificatesPanel({
   const [alias, setAlias] = useState("")
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const isContainer =
     source != null && /\.(p12|pfx|jks|keystore)$/i.test(source.name)
@@ -176,20 +181,20 @@ export function CertificatesPanel({
     await onChanged()
   }
 
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Monitors using this TLS profile may fail.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind: "certificates", profileId: profile.id },
+      data: { kind: "certificates", profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
     await onChanged()
   }
 
@@ -223,7 +228,7 @@ export function CertificatesPanel({
             </div>
           </div>
           <Button onClick={open ? () => setOpen(false) : beginCreate}>
-            {open ? <X /> : <Plus />}
+            {open ? <X data-icon="inline-start" /> : <Plus />}
             {open ? "Close" : "Import certificate"}
           </Button>
         </div>
@@ -285,14 +290,14 @@ export function CertificatesPanel({
 
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="Profile name" required>
-                <Input
+                <Input aria-label="Profile name"
                   value={name}
                   onChange={(event) => setName(event.target.value)}
                   placeholder="Payments production mTLS"
                 />
               </Field>
               <Field label="Description">
-                <Input
+                <Input aria-label="Description"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                   placeholder="Identity used by checkout API monitors"
@@ -336,7 +341,7 @@ export function CertificatesPanel({
                 </p>
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                   <Field label="Keystore password">
-                    <Input
+                    <Input aria-label="Keystore password"
                       type="password"
                       autoComplete="new-password"
                       value={password}
@@ -347,7 +352,7 @@ export function CertificatesPanel({
                     label="Private-key password"
                     help="Optional. Defaults to the keystore password."
                   >
-                    <Input
+                    <Input aria-label="Private-key password"
                       type="password"
                       autoComplete="new-password"
                       value={keyPassword}
@@ -359,7 +364,7 @@ export function CertificatesPanel({
                       label="JKS alias"
                       help="Optional. Rhythm chooses the first private-key entry when empty."
                     >
-                      <Input
+                      <Input aria-label="JKS alias"
                         value={alias}
                         onChange={(event) => setAlias(event.target.value)}
                         placeholder="client-cert"
@@ -427,7 +432,7 @@ export function CertificatesPanel({
               {pending ? (
                 <LoaderCircle className="animate-spin" />
               ) : editing ? (
-                <RefreshCw />
+                <RefreshCw data-icon="inline-start" />
               ) : (
                 <Upload />
               )}
@@ -459,7 +464,7 @@ export function CertificatesPanel({
               key={profile.id}
               profile={profile}
               onEdit={() => beginEdit(profile)}
-              onDelete={() => void remove(profile)}
+              onDelete={() => setDeleteTarget(profile)}
             />
           ))}
           {!profiles.length ? (
@@ -471,12 +476,23 @@ export function CertificatesPanel({
                 monitor’s TLS settings.
               </p>
               <Button className="mt-5" onClick={beginCreate}>
-                <Upload /> Import certificate
+                <Upload data-icon="inline-start" /> Import certificate
               </Button>
             </div>
           ) : null}
         </div>
       </section>
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "certificate"}”?`}
+        description="Monitors using this TLS profile may fail. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete certificate"
+      />
     </div>
   )
 }
@@ -575,10 +591,10 @@ function CertificateRow({
         </div>
         <div className="flex flex-wrap gap-2 lg:justify-end">
           <Button variant="outline" size="sm" onClick={onEdit}>
-            <RefreshCw /> Edit or replace
+            <RefreshCw data-icon="inline-start" /> Edit or replace
           </Button>
           <Button variant="ghost" size="sm" onClick={onDelete}>
-            <Trash2 /> Delete
+            <Trash2 data-icon="inline-start" /> Delete
           </Button>
         </div>
       </div>
@@ -645,7 +661,7 @@ function FileDrop({
               if (inputRef.current) inputRef.current.value = ""
             }}
           >
-            <X /> Remove
+            <X data-icon="inline-start" /> Remove
           </Button>
         </div>
       ) : (
@@ -710,14 +726,14 @@ function Detail({
       <dd className="mt-1 flex items-center gap-1.5">
         <span className="truncate">{value}</span>
         {copyValue ? (
-          <button
-            type="button"
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            aria-label={`Copy ${label}`}
-            onClick={() => void navigator.clipboard.writeText(copyValue)}
-          >
-            <Copy className="size-3" />
-          </button>
+          <CopyButton
+            className="text-muted-foreground"
+            iconClassName="size-3"
+            label={`Copy ${label}`}
+            size="icon-xs"
+            value={copyValue}
+            variant="ghost"
+          />
         ) : null}
       </dd>
     </div>

@@ -31,14 +31,18 @@ import {
 import {
   Activity,
   AppWindow,
+  BookOpen,
   Boxes,
   CircleAlert,
+  Info,
+  TriangleAlert,
   Gauge,
   FileSearch,
   Settings2,
   ScrollText,
   Check,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react"
 
 import { AlertsInbox } from "@/components/app-shell/alerts-inbox"
@@ -101,7 +105,7 @@ function AppSidebar() {
               {navigation.map((item) => (
                 <SidebarMenuItem key={item.label}>
                   <SidebarMenuButton
-                    render={<Link to={item.to} />}
+                    render={<Link aria-label={item.label} to={item.to} />}
                     isActive={isNavActive(pathname, item.to)}
                     tooltip={item.label}
                     className="h-9 rounded-lg text-muted-foreground data-active:text-sidebar-accent-foreground"
@@ -118,6 +122,36 @@ function AppSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<Link aria-label="Rhythm" to="/rhythm" />}
+              tooltip="Rhythm"
+              className="h-9 rounded-lg text-muted-foreground"
+              onClick={() => setOpenMobile(false)}
+            >
+              <Sparkles aria-hidden="true" />
+              <span>Rhythm</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={
+                <Link
+                  aria-label="Documentation"
+                  to="/docs/$"
+                  params={{ _splat: "" }}
+                />
+              }
+              tooltip="Documentation"
+              className="h-9 rounded-lg text-muted-foreground"
+              onClick={() => setOpenMobile(false)}
+            >
+              <BookOpen aria-hidden="true" />
+              <span>Documentation</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
         <WorkspacePreferences />
       </SidebarFooter>
       <SidebarRail />
@@ -229,6 +263,8 @@ export function SystemNotice({
 }: {
   alertCount?: number
   alert?: {
+    id?: string
+    severity?: "INFO" | "LOW" | "WARNING" | "HIGH" | "CRITICAL"
     sourceType?: "RHYTHM_MONITOR" | "OPENSEARCH_ALERTING"
     monitorName?: string
     title: string
@@ -236,21 +272,45 @@ export function SystemNotice({
   }
 }) {
   if (!alert) return null
+  const critical =
+    alert.severity === "CRITICAL" || alert.severity === "HIGH"
+  const surface = critical
+    ? "border-b bg-destructive/8 text-destructive"
+    : alert.severity === "WARNING"
+      ? "border-b bg-warning-soft text-warning-foreground"
+      : "border-b bg-primary/8 text-foreground"
+  const NoticeIcon = critical
+    ? CircleAlert
+    : alert.severity === "WARNING"
+      ? TriangleAlert
+      : Info
+  const label =
+    alert.sourceType === "OPENSEARCH_ALERTING"
+      ? alert.title
+      : alert.monitorName || alert.title
+  const detail =
+    alert.sourceType === "OPENSEARCH_ALERTING"
+      ? "was received from OpenSearch."
+      : `has failed ${alert.consecutiveFailures} consecutive runs.`
   return (
-    <div className="flex items-start gap-3 border-b bg-warning-soft px-4 py-2.5 text-sm text-warning-foreground md:px-6">
-      <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-      <p>
+    <div
+      role="status"
+      aria-live="polite"
+      className={`flex items-start gap-3 px-4 py-2.5 text-sm md:px-6 ${surface}`}
+    >
+      <NoticeIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+      <p className="min-w-0 flex-1">
         {alertCount === 1
           ? "One alert needs attention."
           : `${alertCount} alerts need attention.`}{" "}
-        <span className="font-medium">
-          {alert.sourceType === "OPENSEARCH_ALERTING"
-            ? alert.title
-            : alert.monitorName || alert.title}
-        </span>{" "}
-        {alert.sourceType === "OPENSEARCH_ALERTING"
-          ? "was received from OpenSearch."
-          : `has failed ${alert.consecutiveFailures} consecutive runs.`}
+        <span className="font-medium">{label}</span> {detail}{" "}
+        <Link
+          to="/alerts"
+          hash={alert.id ? `alert-${alert.id}` : undefined}
+          className="font-medium underline underline-offset-2 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {alertCount === 1 ? "Review alert" : "Review alerts"}
+        </Link>
       </p>
     </div>
   )

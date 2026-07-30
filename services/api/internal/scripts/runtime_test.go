@@ -25,7 +25,7 @@ pm.test("token exists", () => pm.expect(pm.variables.get("token")).to.equal("gen
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != "SUCCESS" || result.Variables["token"] != "generated" {
+	if result.Status != "SUCCESS" || result.Variables["token"] != "MASKED" || result.InternalVariables["token"] != "generated" {
 		t.Fatalf("unexpected result: %#v", result)
 	}
 	if result.Request == nil || len(result.Request.Headers) != 1 || result.Request.Headers[0].Key != "X-Trace" {
@@ -339,5 +339,275 @@ pm.test("HMAC generated", () => pm.expect(signature).to.equal(%q));`, target.URL
 	}
 	if result.Request.Headers[0].Value != "MASKED" || result.InternalRequest.Headers[0].Value != expected {
 		t.Fatalf("HMAC evidence masking failed: %#v", result)
+	}
+}
+
+func TestRuntimeResponseTestsPackagesStateAndVisualizer(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{Enabled: true, RuntimeVersion: RuntimeVersion, Code: `
+const _ = pm.require("lodash");
+const Ajv = require("ajv");
+const uuid = pm.require("uuid");
+const payload = pm.response.json();
+const validate = new Ajv().compile({
+  type: "object",
+  required: ["data"],
+  properties: { data: { type: "object", required: ["id"] } },
+});
+await pm.state.set("responseId", _.get(payload, "data.id"));
+const count = await pm.state.increment("checks");
+pm.visualizer.set("<h1>{{id}}</h1>", { id: _.get(payload, "data.id") });
+pm.test("status", () => pm.response.to.have.status(200));
+pm.test("header", () => pm.response.to.have.header("Content-Type", "application/json"));
+pm.test("schema", () => pm.expect(validate(payload)).to.equal(true));
+pm.test("uuid package", () => pm.expect(uuid.validate(_.get(payload, "data.id"))).to.equal(true));
+pm.test("state increment", () => pm.expect(count).to.equal(1));
+`},
+		Scope:       "test",
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		Response: &Response{
+			Code:           http.StatusOK,
+			Status:         "200 OK",
+			Headers:        map[string]string{"Content-Type": "application/json"},
+			Body:           `{"data":{"id":"4d025591-54d9-4c59-85a8-f6456827b250"}}`,
+			ResponseTimeMS: 42,
+			ResponseSize:   58,
+		},
+		TimeoutMS: 1000,
+		Info:      Info{EventName: "test", RuntimeVersion: RuntimeVersion},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || len(result.Tests) != 5 {
+		t.Fatalf("response Tests APIs failed: %#v", result)
+	}
+	if result.Visualizer == nil || result.Visualizer.Data["id"] != "4d025591-54d9-4c59-85a8-f6456827b250" {
+		t.Fatalf("visualizer evidence missing: %#v", result.Visualizer)
+	}
+	if result.InternalState["responseId"] != "4d025591-54d9-4c59-85a8-f6456827b250" {
+		t.Fatalf("run-local state missing: %#v", result.InternalState)
+	}
+}
+
+func TestConvertESModuleBundle(t *testing.T) {
+	source, err := convertESModuleBundle(`var value={ok:true};var other=42;export{value as default,other as answer};`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(source, `return {"default":value,"answer":other};`) {
+		t.Fatalf("unexpected converted bundle: %s", source)
+	}
+}
+
+func TestExternalPackageSpecifierRequiresExactVersion(t *testing.T) {
+	_, _, err := NewRuntime().resolveExternalPackage(context.Background(), "npm:lodash@latest")
+	if err == nil || !strings.Contains(err.Error(), "exact") {
+		t.Fatalf("expected unversioned package to be rejected, got %v", err)
+	}
+}
+
+func TestRuntimeContextSpecificAPIsFailClearly(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{Enabled: true, RuntimeVersion: RuntimeVersion, Code: `
+pm.test("response absent", () => pm.expect(pm.response).to.equal(undefined));
+try {
+  pm.visualizer.set("<p>not available</p>", {});
+} catch (error) {
+  pm.variables.set("visualizerError", error.code);
+}
+try {
+  void pm.message;
+} catch (error) {
+  pm.variables.set("messageError", error.code);
+}
+`},
+		Scope:       "request",
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		TimeoutMS:   1000,
+		Info:        Info{EventName: "prerequest", RuntimeVersion: RuntimeVersion},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["visualizerError"] != "SCRIPT_CONTEXT_UNAVAILABLE" || result.InternalVariables["messageError"] != "SCRIPT_CONTEXT_UNAVAILABLE" {
+		t.Fatalf("expected stable context errors, got %#v", result)
+	}
+}
+
+func TestRuntimePostmanGlobalsAndCoreModules(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{Enabled: true, RuntimeVersion: RuntimeVersion, Code: `
+const path = require("path");
+const { Buffer, isAscii, isUtf8, transcode, resolveObjectURL } = require("buffer");
+const querystring = require("querystring");
+const cloned = structuredClone({ok:true});
+const controller = new AbortController();
+const file = new File(["hello"], "hello.txt", {type:"text/plain"});
+const copied = Buffer.copyBytesFrom(new Uint16Array([0x1234, 0x5678]), 1, 1);
+const latin = transcode(Buffer.from("Rhythm"), "utf8", "latin1");
+const objectURL = URL.createObjectURL(file);
+const encoded = Buffer.from("hello").toString("base64");
+const parsed = querystring.parse("ready=true&id=42");
+pm.test("core modules", () => {
+  pm.expect(path.join("api", "v1", "health")).to.equal("api/v1/health");
+  pm.expect(encoded).to.equal("aGVsbG8=");
+  pm.expect(parsed.id).to.equal("42");
+  pm.expect(cloned.ok).to.equal(true);
+  pm.expect(file.name).to.equal("hello.txt");
+  pm.expect(controller.signal.aborted).to.equal(false);
+  pm.expect(copied.length).to.equal(2);
+  pm.expect(isAscii(Buffer.from("Rhythm"))).to.equal(true);
+  pm.expect(isUtf8(Buffer.from("✓"))).to.equal(true);
+  pm.expect(isUtf8(Uint8Array.from([0xc3, 0x28]))).to.equal(false);
+  pm.expect(latin.toString("latin1")).to.equal("Rhythm");
+  pm.expect(resolveObjectURL(objectURL)).to.equal(file);
+  URL.revokeObjectURL(objectURL);
+});
+`},
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		TimeoutMS:   1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || len(result.Tests) != 1 || !result.Tests[0].Passed {
+		t.Fatalf("global and core compatibility failed: %#v", result)
+	}
+}
+
+func TestRuntimeAcceptsLegacyRuntimeVersion(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script:      Script{Enabled: true, RuntimeVersion: LegacyRuntimeVersion, Code: `pm.variables.set("legacy","ok");`},
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		TimeoutMS:   1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["legacy"] != "ok" || result.RuntimeVersion != RuntimeVersion {
+		t.Fatalf("legacy scripts should execute on the compatible current runtime: %#v", result)
+	}
+}
+
+func TestRuntimeLoadsRevisionScopedTeamPackage(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{
+			Enabled:        true,
+			RuntimeVersion: RuntimeVersion,
+			Packages: []TeamPackage{{
+				Name: "@rhythm/signing",
+				Code: `module.exports = { sign(value) { return "signed:" + value; } };`,
+			}},
+			Code: `const signing = pm.require("@rhythm/signing"); pm.variables.set("signature", signing.sign("payload"));`,
+		},
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		TimeoutMS:   1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["signature"] != "signed:payload" || len(result.PackageImports) != 1 || result.PackageImports[0].Registry != "team" {
+		t.Fatalf("team package did not execute: %#v", result)
+	}
+}
+
+func TestRuntimeExecutionControls(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{
+			Enabled:        true,
+			RuntimeVersion: RuntimeVersion,
+			Code: `
+pm.execution.skipRequest();
+pm.execution.setNextRequest("step-3");
+pm.test("execution location", () => {
+  pm.expect(pm.execution.location.current).to.equal("Login");
+  pm.expect(pm.execution.location[0]).to.equal("monitor-1");
+});
+try {
+  await pm.execution.runRequest("postman-request-id");
+} catch (error) {
+  pm.variables.set("runRequestError", error.code);
+}
+`,
+		},
+		Scope:       "request",
+		Variables:   map[string]string{},
+		Environment: map[string]string{},
+		Collection:  map[string]string{},
+		Globals:     map[string]string{},
+		TimeoutMS:   1000,
+		Info:        Info{MonitorID: "monitor-1", RequestName: "Login"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || !result.Execution.RequestSkipped || !result.Execution.NextRequestSet || result.Execution.NextRequest != "step-3" || result.InternalVariables["runRequestError"] != "SCRIPT_CONTEXT_UNAVAILABLE" {
+		t.Fatalf("execution controls missing: %#v", result.Execution)
+	}
+}
+
+func TestRuntimeStateAndCurrentIterationDataset(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{
+			Enabled:        true,
+			RuntimeVersion: RuntimeVersion,
+			Code: `
+await pm.state.set("counter", 1);
+await pm.state.increment("counter", 2);
+await pm.state.push("events", {type:"created"});
+await pm.state.push("events", [{type:"updated"}]);
+const firstRole = await pm.state.addToSet("roles", "admin");
+const duplicateRole = await pm.state.addToSet("roles", "admin");
+const removed = await pm.state.delete("counter");
+const dataset = pm.datasets("current-iteration");
+const all = await dataset.executeView("all");
+const selected = await dataset.executeQuery(
+  "SELECT * FROM current_iteration WHERE region = ?",
+  ["eu"],
+);
+pm.test("state methods", async () => {
+  pm.expect(firstRole).to.equal(true);
+  pm.expect(duplicateRole).to.equal(false);
+  pm.expect(removed).to.equal(true);
+  pm.expect(await pm.state.has("counter")).to.equal(false);
+  pm.expect((await pm.state.get("events")).length).to.equal(2);
+});
+pm.test("dataset handle", () => {
+  pm.expect(all.rows.length).to.equal(1);
+  pm.expect(selected.rows.length).to.equal(1);
+  pm.expect(selected.rows[0].region).to.equal("eu");
+});
+`,
+		},
+		Scope:         "test",
+		Variables:     map[string]string{},
+		Environment:   map[string]string{},
+		Collection:    map[string]string{},
+		Globals:       map[string]string{},
+		IterationData: map[string]string{"region": "eu", "build": "42"},
+		TimeoutMS:     1000,
+		Info:          Info{EventName: "test", RuntimeVersion: RuntimeVersion},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || len(result.Tests) != 2 || len(result.InternalState["events"].([]any)) != 2 {
+		t.Fatalf("state and dataset APIs failed: %#v", result)
 	}
 }

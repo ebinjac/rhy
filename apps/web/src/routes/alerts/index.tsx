@@ -44,6 +44,7 @@ import {
   listUnifiedAlerts,
 } from "@/lib/api-client/opensearch-alerts"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/alerts/")({
   validateSearch: (
@@ -148,7 +149,7 @@ function AlertsPage() {
       alert.state === "ERROR"
   )
   return (
-    <main className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer as="main">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">
@@ -328,7 +329,7 @@ function AlertsPage() {
           </div>
         ) : null}
       </section>
-    </main>
+    </PageContainer>
   )
 }
 

@@ -7,6 +7,7 @@ import { FilePenLine, KeyRound, ShieldCheck, Trash2 } from "lucide-react"
 
 import {
   ConfigurationIntro,
+  DeleteProfileDialog,
   EmptyProfiles,
   FormField,
   GuidedForm,
@@ -24,6 +25,7 @@ import {
   deleteConfigurationProfile,
   saveConfigurationProfile,
 } from "@/lib/api-client/monitors"
+import { toast } from "@workspace/ui/components/sonner"
 
 const types = [
   ["BEARER", "Bearer token"],
@@ -53,6 +55,9 @@ export function AuthPanel({
   const [fields, setFields] = useState<Record<string, string>>({})
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
+  const [deleteTarget, setDeleteTarget] =
+    useState<ConfigurationProfileContract | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   function reset() {
     setEditing(null)
@@ -119,25 +124,28 @@ export function AuthPanel({
     await onChanged()
   }
 
-  async function remove(profile: ConfigurationProfileContract) {
-    if (
-      !window.confirm(
-        `Delete ${profile.name}? Requests using this authentication profile may fail.`
-      )
-    )
-      return
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
     const result = await deleteConfigurationProfile({
-      data: { kind: "auth", profileId: profile.id },
+      data: { kind: "auth", profileId: deleteTarget.id },
     })
+    setDeleting(false)
     if (!result.ok) {
+      toast.error(result.message)
       setMessage(result.message)
       return
     }
+    toast.success(`Deleted “${deleteTarget.name}”.`)
+    setDeleteTarget(null)
     await onChanged()
   }
 
   return (
     <>
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
       <ConfigurationIntro
         icon={<KeyRound className="size-5" />}
         title="Authentication profiles"
@@ -260,14 +268,14 @@ export function AuthPanel({
                   size="sm"
                   onClick={() => beginEdit(profile)}
                 >
-                  <FilePenLine /> Edit
+                  <FilePenLine data-icon="inline-start" /> Edit
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => void remove(profile)}
+                  onClick={() => setDeleteTarget(profile)}
                 >
-                  <Trash2 /> Delete
+                  <Trash2 data-icon="inline-start" /> Delete
                 </Button>
               </div>
             </article>
@@ -280,6 +288,17 @@ export function AuthPanel({
           onCreate={beginCreate}
         />
       ) : null}
+      <DeleteProfileDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+        title={`Delete “${deleteTarget?.name ?? "profile"}”?`}
+        description="Requests using this authentication profile may fail. This cannot be undone."
+        confirming={deleting}
+        onConfirm={() => void confirmDelete()}
+        confirmLabel="Delete profile"
+      />
     </>
   )
 }
@@ -327,6 +346,7 @@ function AuthFields({
       <>
         <FormField label="Key name" required>
           <Input
+            aria-label="Key name"
             value={field("name")}
             onChange={(e) => setField("name", e.target.value)}
             placeholder="X-API-Key"
@@ -334,6 +354,7 @@ function AuthFields({
         </FormField>
         <FormField label="Send in" required>
           <select
+            aria-label="Send in"
             className="h-9 w-full rounded-md border bg-background px-3 text-sm"
             value={field("location") || "header"}
             onChange={(e) => setField("location", e.target.value)}
@@ -350,6 +371,7 @@ function AuthFields({
       <>
         <FormField label="Token URL" required>
           <Input
+            aria-label="Token URL"
             className="font-mono"
             value={field("tokenUrl")}
             onChange={(e) => setField("tokenUrl", e.target.value)}
@@ -357,14 +379,14 @@ function AuthFields({
           />
         </FormField>
         <FormField label="Client ID" required>
-          <Input
+          <Input aria-label="Client ID"
             value={field("clientId")}
             onChange={(e) => setField("clientId", e.target.value)}
           />
         </FormField>
         {secret("Client secret", "clientSecretRef")}
         <FormField label="Scope">
-          <Input
+          <Input aria-label="Scope"
             value={field("scope")}
             onChange={(e) => setField("scope", e.target.value)}
             placeholder="api.read"
@@ -376,20 +398,20 @@ function AuthFields({
     return (
       <>
         <FormField label="Issuer" required>
-          <Input
+          <Input aria-label="Issuer"
             value={field("issuer")}
             onChange={(e) => setField("issuer", e.target.value)}
           />
         </FormField>
         <FormField label="Audience" required>
-          <Input
+          <Input aria-label="Audience"
             value={field("audience")}
             onChange={(e) => setField("audience", e.target.value)}
           />
         </FormField>
         {secret("Signing key secret", "keySecretRef")}
         <FormField label="Algorithm" required>
-          <select
+          <select aria-label="Algorithm"
             className="h-9 w-full rounded-md border bg-background px-3 text-sm"
             value={field("algorithm") || "RS256"}
             onChange={(e) => setField("algorithm", e.target.value)}
@@ -404,7 +426,7 @@ function AuthFields({
     <>
       {secret("HMAC secret", "secretRef")}
       <FormField label="Algorithm" required>
-        <select
+        <select aria-label="Algorithm"
           className="h-9 w-full rounded-md border bg-background px-3 text-sm"
           value={field("algorithm") || "SHA-256"}
           onChange={(e) => setField("algorithm", e.target.value)}
@@ -414,7 +436,7 @@ function AuthFields({
         </select>
       </FormField>
       <FormField label="Signature header" required>
-        <Input
+        <Input aria-label="Signature header"
           value={field("outputHeader")}
           onChange={(e) => setField("outputHeader", e.target.value)}
           placeholder="X-Signature"
@@ -425,7 +447,7 @@ function AuthFields({
         wide
         help="Optional template used to build the signed message."
       >
-        <Textarea
+        <Textarea aria-label="Canonical string template"
           className="min-h-24 font-mono"
           value={field("canonicalTemplate")}
           onChange={(e) => setField("canonicalTemplate", e.target.value)}

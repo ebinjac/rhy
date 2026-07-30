@@ -9,6 +9,7 @@ import {
 
 import { cn } from "@workspace/ui/lib/utils"
 
+import { PageContainer } from "@/components/page-container"
 import { listMonitors } from "@/lib/api-client/monitors"
 
 export const Route = createFileRoute("/monitors/$monitorId")({
@@ -56,7 +57,7 @@ function MonitorWorkspace() {
   return (
     <div>
       <div className="border-b bg-muted/15">
-        <div className="mx-auto max-w-[1480px] px-4 pt-4 md:px-6">
+        <PageContainer padding="tabs">
           <nav
             aria-label="Breadcrumb"
             className="flex items-center gap-2 text-xs text-muted-foreground"
@@ -109,7 +110,7 @@ function MonitorWorkspace() {
               )
             })}
           </nav>
-        </div>
+        </PageContainer>
       </div>
       <Outlet />
     </div>

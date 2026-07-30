@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -423,13 +424,33 @@ func scheduleSummary(scheduleType, expression string, intervalSeconds int) strin
 	case "CRON":
 		return expression
 	case "INTERVAL":
-		duration := time.Duration(intervalSeconds) * time.Second
-		return "Every " + duration.String()
+		return "Every " + formatIntervalDuration(intervalSeconds)
 	case "MANUAL":
 		return "Manual only"
 	default:
 		return ""
 	}
+}
+
+// formatIntervalDuration renders compact cadence labels like "5m" instead of Go's "5m0s".
+func formatIntervalDuration(intervalSeconds int) string {
+	if intervalSeconds <= 0 {
+		return "0s"
+	}
+	hours := intervalSeconds / 3600
+	minutes := (intervalSeconds % 3600) / 60
+	seconds := intervalSeconds % 60
+	var parts []string
+	if hours > 0 {
+		parts = append(parts, fmt.Sprintf("%dh", hours))
+	}
+	if minutes > 0 {
+		parts = append(parts, fmt.Sprintf("%dm", minutes))
+	}
+	if seconds > 0 || len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%ds", seconds))
+	}
+	return strings.Join(parts, "")
 }
 
 func isUniqueViolation(err error) bool {

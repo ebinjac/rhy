@@ -5,13 +5,22 @@ import (
 	"time"
 )
 
-const RuntimeVersion = "rhythm-js-1"
+const (
+	RuntimeVersion       = "rhythm-js-2"
+	LegacyRuntimeVersion = "rhythm-js-1"
+)
 
 type Script struct {
-	Enabled        bool   `json:"enabled"`
-	Language       string `json:"language"`
-	Code           string `json:"code"`
-	RuntimeVersion string `json:"runtimeVersion"`
+	Enabled        bool          `json:"enabled"`
+	Language       string        `json:"language"`
+	Code           string        `json:"code"`
+	RuntimeVersion string        `json:"runtimeVersion"`
+	Packages       []TeamPackage `json:"packages,omitempty"`
+}
+
+type TeamPackage struct {
+	Name string `json:"name"`
+	Code string `json:"code"`
 }
 
 type Entry struct {
@@ -29,6 +38,17 @@ type Request struct {
 	Auth    map[string]any `json:"auth"`
 }
 
+type Response struct {
+	Code           int               `json:"code"`
+	Status         string            `json:"status"`
+	Headers        map[string]string `json:"headers"`
+	Body           string            `json:"body"`
+	ResponseTimeMS int64             `json:"responseTimeMs"`
+	ResponseSize   int               `json:"responseSize"`
+	ContentType    string            `json:"contentType,omitempty"`
+	Truncated      bool              `json:"truncated,omitempty"`
+}
+
 type Info struct {
 	MonitorID      string `json:"monitorId"`
 	RunID          string `json:"runId"`
@@ -36,6 +56,8 @@ type Info struct {
 	StepID         string `json:"stepId"`
 	RequestName    string `json:"requestName"`
 	EventName      string `json:"eventName"`
+	Iteration      int    `json:"iteration"`
+	IterationCount int    `json:"iterationCount"`
 	RuntimeVersion string `json:"runtimeVersion"`
 }
 
@@ -51,6 +73,9 @@ type Input struct {
 	Secrets             map[string]string `json:"secrets"`
 	Cookies             map[string]string `json:"cookies"`
 	Request             *Request          `json:"request,omitempty"`
+	Response            *Response         `json:"response,omitempty"`
+	IterationData       map[string]string `json:"iterationData,omitempty"`
+	State               map[string]any    `json:"state,omitempty"`
 	Info                Info              `json:"info"`
 	TimeoutMS           int               `json:"timeoutMs"`
 }
@@ -90,6 +115,14 @@ type AuxiliaryRequest struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type PackageImport struct {
+	Specifier  string `json:"specifier"`
+	Registry   string `json:"registry"`
+	Version    string `json:"version"`
+	DurationMS int64  `json:"durationMs"`
+	Cached     bool   `json:"cached"`
+}
+
 type Problem struct {
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
@@ -107,22 +140,41 @@ type Result struct {
 	VariableChanges     []Change           `json:"variableChanges"`
 	RequestChanges      []Change           `json:"requestChanges"`
 	AuxiliaryRequests   []AuxiliaryRequest `json:"auxiliaryRequests"`
+	PackageImports      []PackageImport    `json:"packageImports"`
 	Variables           map[string]string  `json:"variables"`
 	Environment         map[string]string  `json:"environment"`
 	Collection          map[string]string  `json:"collection"`
+	Globals             map[string]string  `json:"globals"`
 	Cookies             map[string]string  `json:"cookies"`
 	InternalVariables   map[string]string  `json:"internalVariables,omitempty"`
 	InternalEnvironment map[string]string  `json:"internalEnvironment,omitempty"`
 	InternalCollection  map[string]string  `json:"internalCollection,omitempty"`
+	InternalGlobals     map[string]string  `json:"internalGlobals,omitempty"`
 	InternalCookies     map[string]string  `json:"internalCookies,omitempty"`
+	InternalState       map[string]any     `json:"internalState,omitempty"`
 	InternalRequest     *Request           `json:"internalRequest,omitempty"`
 	Request             *Request           `json:"request,omitempty"`
+	State               map[string]any     `json:"state,omitempty"`
+	Visualizer          *Visualizer        `json:"visualizer,omitempty"`
+	Execution           Execution          `json:"execution"`
 	Problems            []Problem          `json:"problems"`
 	ErrorCategory       string             `json:"errorCategory,omitempty"`
 	ErrorMessage        string             `json:"errorMessage,omitempty"`
 	ErrorLine           int                `json:"errorLine,omitempty"`
 	ErrorColumn         int                `json:"errorColumn,omitempty"`
 	SafeStack           string             `json:"safeStack,omitempty"`
+}
+
+type Visualizer struct {
+	Template string         `json:"template"`
+	Data     map[string]any `json:"data"`
+	Options  map[string]any `json:"options,omitempty"`
+}
+
+type Execution struct {
+	RequestSkipped bool   `json:"requestSkipped,omitempty"`
+	NextRequestSet bool   `json:"nextRequestSet,omitempty"`
+	NextRequest    string `json:"nextRequest,omitempty"`
 }
 
 type Validation struct {

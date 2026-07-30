@@ -1024,6 +1024,43 @@ func (s *Service) ResolveTelemetryProfile(ctx context.Context, profileID string)
 	return runs.TelemetryMaterial{BaseURL: baseURL, Token: token}, nil
 }
 
+func (s *Service) ResolveEnvironmentProfile(ctx context.Context, profileID string) (runs.EnvironmentMaterial, error) {
+	profile, err := s.profileByIdentifier(ctx, "ENVIRONMENT", profileID)
+	if err != nil {
+		return runs.EnvironmentMaterial{}, err
+	}
+	variables := map[string]string{}
+	if configured, ok := profile.Config["variables"].(map[string]any); ok {
+		for key, raw := range configured {
+			value := strings.TrimSpace(fmt.Sprint(raw))
+			if strings.HasPrefix(value, "secret://") {
+				value, err = s.ResolveSecret(ctx, value)
+				if err != nil {
+					return runs.EnvironmentMaterial{}, fmt.Errorf("resolve environment variable %q: %w", key, err)
+				}
+			}
+			variables[key] = value
+		}
+	}
+	baseURL := strings.TrimSpace(fmt.Sprint(profile.Config["baseUrl"]))
+	region := strings.TrimSpace(fmt.Sprint(profile.Config["region"]))
+	if baseURL != "" {
+		variables["baseUrl"] = baseURL
+	}
+	if region != "" {
+		variables["region"] = region
+	}
+	return runs.EnvironmentMaterial{
+		ID:          profile.ID,
+		Name:        profile.Name,
+		ProfileType: profile.ProfileType,
+		BaseURL:     baseURL,
+		Region:      region,
+		UpdatedAt:   profile.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		Variables:   variables,
+	}, nil
+}
+
 func (s *Service) profileByIdentifier(ctx context.Context, kind, identifier string) (Profile, error) {
 	var item Profile
 	var encoded []byte

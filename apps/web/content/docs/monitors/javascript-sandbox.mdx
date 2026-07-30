@@ -1,15 +1,20 @@
 ---
-title: JavaScript pre-request sandbox
-description: Run deterministic Postman-style pre-request JavaScript with variables, HMAC signing, cookies, tests, and governed requests.
+title: JavaScript sandbox
+description: Run Postman-style Pre-request and Tests JavaScript with variables, packages, response checks, visualizers, HMAC signing, cookies, and governed requests.
 audience: [application-engineer]
 status: stable
 since: 0.0.1
-lastReviewed: 2026-07-27
+lastReviewed: 2026-07-29
 owners: [Script Runtime]
-keywords: [JavaScript, pre-request, HMAC, pm.sendRequest]
+keywords: [JavaScript, pre-request, tests, HMAC, pm.sendRequest, pm.require]
 ---
 
-The JavaScript editor lives in the request's **Pre-request → JavaScript** section. A script runs once before its HTTP step and can mutate the run-local request context.
+Rhythm provides two isolated JavaScript phases for each HTTP step:
+
+| Phase | Location | Runs | Primary APIs |
+| --- | --- | --- | --- |
+| Pre-request | **Pre-request** | Once before request rendering and retries | `pm.request`, variables, vault, cookies, `pm.sendRequest`, packages, Web Crypto |
+| Tests | **Tests → JavaScript** | Once after the final response and extractors | `pm.response`, tests, visualizer, variables, state, packages |
 
 ```javascript
 const requestId = crypto.randomUUID()
@@ -21,8 +26,70 @@ pm.test("request ID exists", () => {
 })
 ```
 
-Use Web Crypto SHA-256/384/512 digest and HMAC operations for signing. Use `pm.sendRequest` for a maximum of five governed auxiliary calls.
+## Response Tests
 
-<SecurityNote>The sandbox has no filesystem, process environment, Node globals, arbitrary `fetch`, `eval`, package imports, or writable vault access.</SecurityNote>
+```javascript
+const data = pm.response.json()
 
-<FailureExample>Preview blocks networking and substitutes masked secret placeholders. A preview success does not prove that a target host or runtime secret is available to the execution agent.</FailureExample>
+pm.test("request succeeded", () => {
+  pm.response.to.have.status(200)
+})
+
+pm.test("response contains an order", () => {
+  pm.expect(data).to.have.property("orderId")
+})
+
+pm.visualizer.set("<h2>Order {{orderId}}</h2>", {
+  orderId: data.orderId,
+})
+```
+
+A failed JavaScript test fails the HTTP step. Tests support synchronous callbacks, returned promises, and the Postman `done` callback form.
+
+## Packages
+
+Built-in compatibility modules include `ajv`, `chai`, `cheerio`, `csv-parse/lib/sync`, `lodash`, `moment`, `postman-collection`, `uuid`, `xml2js`, and safe Node-compatible modules such as `path`, `assert`, `buffer`, `util`, `url`, `querystring`, `string-decoder`, `stream`, `timers`, and `events`.
+
+Use an exact version for external npm or JSR packages:
+
+```javascript
+const lodash = pm.require("npm:lodash@4.17.21")
+const value = lodash.get(pm.response.json(), "data.id")
+```
+
+Use the editor's **Packages** action for revision-scoped team packages:
+
+```javascript
+const signing = pm.require("@rhythm/signing")
+const signature = signing.sign("payload")
+```
+
+External bundles are downloaded only from the governed registry, limited to 2 MB, recorded in diagnostics, and cached by exact specifier. Dynamic or unversioned external imports are rejected.
+
+## Supported context
+
+- Variables: `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, and read-only `pm.iterationData`.
+- Secrets: asynchronous read-only `pm.vault.get`.
+- Requests and cookies: `pm.request`, `pm.cookies`, and `pm.cookies.jar()`.
+- Responses: `pm.response` in Tests, including status, headers, body, size, time, JSON, and text helpers.
+- Execution: `pm.execution.skipRequest`, bounded `pm.execution.setNextRequest`, and `pm.execution.location`.
+- Run-local data: asynchronous `pm.state` with `get`, `set`, `delete`, `has`, `keys`, `size`, `clear`, `toObject`, `increment`, `push`, and `addToSet`; `pm.datasets("current-iteration")` with `executeQuery` and `executeView`.
+- Assertions: `pm.test`, `pm.test.skip`, and Chai-style `pm.expect`.
+- Networking: Promise and callback forms of `pm.sendRequest`, limited to five calls.
+- Web APIs: typed arrays, URL, encoding, Blob/File, events, AbortController, deterministic streams, base64, timers, structured cloning, and Web Crypto SHA-256/384/512 digest and HMAC.
+- Buffer extensions: `isAscii`, `isUtf8`, `transcode`, `resolveObjectURL`, and `Buffer.copyBytesFrom`, in addition to Postman-compatible Buffer operations.
+
+`pm.message` is specific to gRPC On message scripts. `pm.mock` and persistent mock state are specific to Postman code mocks. `pm.execution.runRequest` requires saved Postman collection requests; use `pm.sendRequest` for governed auxiliary HTTP in Rhythm. Rhythm keeps these APIs discoverable but returns `SCRIPT_CONTEXT_UNAVAILABLE` when an HTTP monitor has no equivalent context.
+
+<SecurityNote>The `rhythm-js-2` runtime uses a fresh VM for each execution. It has no filesystem, host process, environment variables, unrestricted `fetch`, `XMLHttpRequest`, or cross-run global state. Use `pm.sendRequest` for governed HTTP. Vault writes remain blocked.</SecurityNote>
+
+## Limits
+
+- 64 KB script and 64 KB per team package.
+- 1 MB serialized input and 256 KB evidence output.
+- 200 console entries or 64 KB of logs.
+- 250 ms JavaScript CPU budget and the remaining HTTP-step wall timeout.
+- Five `pm.sendRequest` calls and 2 MB per auxiliary response.
+- 100 workflow step executions when `setNextRequest` creates loops.
+
+<FailureExample>Preview uses masked vault placeholders and a sample response for Tests. A successful preview does not prove that a target host, external package registry, or runtime secret will be available to the selected execution agent.</FailureExample>

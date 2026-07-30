@@ -15,6 +15,7 @@ import (
 )
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var teamPackageNamePattern = regexp.MustCompile(`^@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
 type FieldError struct {
 	Path    string `json:"path"`
@@ -348,6 +349,7 @@ func ValidateDefinition(definition map[string]any) []FieldError {
 			fields = append(fields, FieldError{Path: path + ".request.url", Message: "Request URL is required."})
 		}
 		fields = append(fields, validateScriptObject(path+".request.preRequestScript", request["preRequestScript"])...)
+		fields = append(fields, validateScriptObject(path+".request.testScript", request["testScript"])...)
 	}
 	return fields
 }
@@ -358,16 +360,43 @@ func validateScriptObject(path string, raw any) []FieldError {
 		return nil
 	}
 	code, _ := value["code"].(string)
-	if strings.TrimSpace(code) == "" {
-		return nil
-	}
 	// Non-empty scripts are always treated as enabled (Postman-style).
-	validation := scripts.NewRuntime().Validate(code)
-	if validation.Valid {
-		return nil
+	fields := make([]FieldError, 0)
+	if strings.TrimSpace(code) != "" {
+		validation := scripts.NewRuntime().Validate(code)
+		if !validation.Valid {
+			problem := validation.Problems[0]
+			fields = append(fields, FieldError{Path: path + ".code", Message: fmt.Sprintf("JavaScript line %d, column %d: %s", problem.Line, problem.Column, problem.Message)})
+		}
 	}
-	problem := validation.Problems[0]
-	return []FieldError{{Path: path + ".code", Message: fmt.Sprintf("JavaScript line %d, column %d: %s", problem.Line, problem.Column, problem.Message)}}
+	packages, _ := value["packages"].([]any)
+	names := make(map[string]bool)
+	for index, rawPackage := range packages {
+		item, ok := rawPackage.(map[string]any)
+		packagePath := fmt.Sprintf("%s.packages.%d", path, index)
+		if !ok {
+			fields = append(fields, FieldError{Path: packagePath, Message: "Package must be an object."})
+			continue
+		}
+		name := strings.TrimSpace(fmt.Sprint(item["name"]))
+		packageCode := fmt.Sprint(item["code"])
+		if !teamPackageNamePattern.MatchString(name) {
+			fields = append(fields, FieldError{Path: packagePath + ".name", Message: "Use a scoped package name such as @team-domain/package-name."})
+		} else if names[name] {
+			fields = append(fields, FieldError{Path: packagePath + ".name", Message: "Package names must be unique within the script."})
+		}
+		names[name] = true
+		if len(packageCode) > 64<<10 {
+			fields = append(fields, FieldError{Path: packagePath + ".code", Message: "Package source must not exceed 64 KB."})
+		} else if strings.TrimSpace(packageCode) != "" {
+			validation := scripts.NewRuntime().Validate(packageCode)
+			if !validation.Valid {
+				problem := validation.Problems[0]
+				fields = append(fields, FieldError{Path: packagePath + ".code", Message: fmt.Sprintf("JavaScript line %d, column %d: %s", problem.Line, problem.Column, problem.Message)})
+			}
+		}
+	}
+	return fields
 }
 
 // normalizeScriptEnabledFlags sets enabled from script content so stuck
@@ -393,6 +422,7 @@ func normalizeScriptEnabledFlags(definition map[string]any) {
 			continue
 		}
 		setScriptEnabledFromCode(request["preRequestScript"])
+		setScriptEnabledFromCode(request["testScript"])
 	}
 }
 

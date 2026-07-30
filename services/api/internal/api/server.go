@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
 	"github.com/rhythm-monitoring/rhythm/internal/audit"
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
+	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
 	"github.com/rhythm-monitoring/rhythm/internal/library"
@@ -44,6 +46,7 @@ type Dependencies struct {
 	Notifications       *notifications.Service
 	Scripts             *scripts.Client
 	ELF                 *elf.Service
+	Dynatrace           *dynatrace.Service
 	Authenticator       authz.Authenticator
 	AllowedOrigin       string
 	AllowPrivateTargets bool
@@ -63,12 +66,16 @@ type server struct {
 	notifications       *notifications.Service
 	scripts             *scripts.Client
 	elf                 *elf.Service
+	dynatrace           *dynatrace.Service
 	authenticator       authz.Authenticator
 	allowedOrigin       string
 	allowPrivateTargets bool
 	checks              map[string]func(context.Context) error
 	webhookMu           sync.Mutex
 	webhookLimits       map[string]*webhookRateWindow
+	previewMu           sync.Mutex
+	previewCancels      map[string]context.CancelFunc
+	monitorCreationMu   sync.Mutex
 }
 
 type responseMeta struct {
@@ -95,12 +102,13 @@ type errorResponse struct {
 type requestIDContextKey struct{}
 
 func NewServer(dependencies Dependencies) http.Handler {
-	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, scripts: dependencies.Scripts, elf: dependencies.ELF, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}}
+	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
 	mux.HandleFunc("POST /api/v1/monitors", s.createMonitor)
 	mux.HandleFunc("POST /api/v1/monitors/preview", s.previewMonitorDefinition)
+	mux.HandleFunc("POST /api/v1/monitors/preview/{previewId}/cancel", s.cancelMonitorPreview)
 	mux.HandleFunc("POST /api/v1/monitors/bulk-delete", s.bulkDeleteMonitors)
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}", s.getMonitor)
 	mux.HandleFunc("PATCH /api/v1/monitors/{monitorId}", s.updateMonitor)
@@ -177,8 +185,29 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("DELETE /api/v1/applications/{applicationId}/services/{serviceId}", s.deleteApplicationService)
 	mux.HandleFunc("PUT /api/v1/applications/{applicationId}/monitors/{monitorId}", s.linkApplicationMonitor)
 	mux.HandleFunc("DELETE /api/v1/applications/{applicationId}/monitors/{monitorId}", s.unlinkApplicationMonitor)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/environments", s.listApplicationEnvironments)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/environments", s.createApplicationEnvironment)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/dynatrace/context", s.ensureApplicationDynatraceContext)
+	mux.HandleFunc("PATCH /api/v1/applications/{applicationId}/environments/{environmentBindingId}", s.updateApplicationEnvironment)
+	mux.HandleFunc("DELETE /api/v1/applications/{applicationId}/environments/{environmentBindingId}", s.deleteApplicationEnvironment)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace", s.getApplicationDynatrace)
+	mux.HandleFunc("PUT /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace", s.saveApplicationDynatrace)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/test", s.testApplicationDynatrace)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/management-zones", s.listDynatraceManagementZones)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources", s.previewDynatraceResources)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources/preview", s.previewDynatraceResources)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/resources/discover", s.discoverDynatraceResources)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/rules", s.listDynatraceRules)
+	mux.HandleFunc("PUT /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/rules", s.saveDynatraceRules)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/environments/{environmentBindingId}/dynatrace/query", s.queryApplicationDynatrace)
+	mux.HandleFunc("GET /api/v1/applications/{applicationId}/services/{serviceId}/environments/{environmentBindingId}/dynatrace", s.getServiceDynatrace)
+	mux.HandleFunc("PUT /api/v1/applications/{applicationId}/services/{serviceId}/environments/{environmentBindingId}/dynatrace", s.saveServiceDynatrace)
+	mux.HandleFunc("GET /api/v1/dynatrace/runs", s.listDynatraceRuns)
+	mux.HandleFunc("GET /api/v1/dynatrace/runs/{runId}", s.getDynatraceRun)
+	mux.HandleFunc("POST /api/v1/dynatrace/runs/{runId}/cancel", s.cancelDynatraceRun)
 	mux.HandleFunc("GET /api/v1/applications/{applicationId}/opensearch-alert-receivers", s.listOpenSearchAlertReceivers)
 	mux.HandleFunc("POST /api/v1/applications/{applicationId}/opensearch-alert-receivers", s.createOpenSearchAlertReceiver)
+	mux.HandleFunc("POST /api/v1/applications/{applicationId}/opensearch-alerts/service-assignment", s.assignOpenSearchAlertsToService)
 	mux.HandleFunc("GET /api/v1/opensearch-alert-receivers", s.listAllOpenSearchAlertReceivers)
 	mux.HandleFunc("GET /api/v1/opensearch-alert-receivers/{receiverId}", s.getOpenSearchAlertReceiver)
 	mux.HandleFunc("PATCH /api/v1/opensearch-alert-receivers/{receiverId}", s.updateOpenSearchAlertReceiver)
@@ -545,6 +574,39 @@ func (s *server) createMonitor(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body must contain exactly one JSON object.", nil)
 		return
 	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if len(idempotencyKey) > 128 {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must contain 128 characters or fewer.", nil)
+		return
+	}
+	fingerprint := ""
+	if idempotencyKey != "" {
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body is invalid.", nil)
+			return
+		}
+		fingerprint = fmt.Sprintf("%x", sha256.Sum256(encoded))
+		s.monitorCreationMu.Lock()
+		defer s.monitorCreationMu.Unlock()
+		if existing, state := s.findIdempotentMonitor(r.Context(), idempotencyKey, fingerprint); state != "" {
+			if state == "conflict" {
+				s.writeError(w, r, http.StatusConflict, "IDEMPOTENCY_KEY_REUSED", "This idempotency key was already used with a different monitor definition.", nil)
+				return
+			}
+			w.Header().Set("Idempotency-Replayed", "true")
+			w.Header().Set("Location", "/api/v1/monitors/"+existing.ID)
+			s.writeJSON(w, r, http.StatusOK, successResponse{Data: existing, Meta: s.meta(r)})
+			return
+		}
+		if input.Definition == nil {
+			input.Definition = map[string]any{}
+		}
+		input.Definition["_rhythmCreation"] = map[string]any{
+			"idempotencyKey": idempotencyKey,
+			"fingerprint":    fingerprint,
+		}
+	}
 	principal, _ := authz.PrincipalFromContext(r.Context())
 	monitor, err := s.monitors.Create(r.Context(), input, principal.ID)
 	var validationError monitors.ValidationError
@@ -558,6 +620,31 @@ func (s *server) createMonitor(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Location", "/api/v1/monitors/"+monitor.ID)
 	s.writeJSON(w, r, http.StatusCreated, successResponse{Data: monitor, Meta: s.meta(r)})
+}
+
+func (s *server) findIdempotentMonitor(ctx context.Context, key, fingerprint string) (monitors.Monitor, string) {
+	items, err := s.monitors.List(ctx)
+	if err != nil {
+		return monitors.Monitor{}, ""
+	}
+	for _, candidate := range items {
+		if candidate.CurrentDraftRevisionID == "" {
+			continue
+		}
+		revision, err := s.monitors.GetRevision(ctx, candidate.ID, candidate.CurrentDraftRevisionID)
+		if err != nil {
+			continue
+		}
+		metadata, ok := revision.Definition["_rhythmCreation"].(map[string]any)
+		if !ok || strings.TrimSpace(fmt.Sprint(metadata["idempotencyKey"])) != key {
+			continue
+		}
+		if strings.TrimSpace(fmt.Sprint(metadata["fingerprint"])) != fingerprint {
+			return monitors.Monitor{}, "conflict"
+		}
+		return candidate, "replay"
+	}
+	return monitors.Monitor{}, ""
 }
 
 func (s *server) updateMonitor(w http.ResponseWriter, r *http.Request) {
@@ -837,20 +924,29 @@ func (s *server) previewScript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Scope     string            `json:"scope"`
-		StepID    string            `json:"stepId"`
-		Code      string            `json:"code"`
-		Variables map[string]string `json:"variables"`
-		Request   *scripts.Request  `json:"request"`
+		Scope     string                `json:"scope"`
+		StepID    string                `json:"stepId"`
+		Code      string                `json:"code"`
+		Packages  []scripts.TeamPackage `json:"packages"`
+		Variables map[string]string     `json:"variables"`
+		Request   *scripts.Request      `json:"request"`
+		Response  *scripts.Response     `json:"response"`
 	}
 	if !s.decodeJSON(w, r, &input) {
 		return
 	}
-	if input.Scope != "monitor" && input.Scope != "request" {
-		s.writeError(w, r, http.StatusUnprocessableEntity, "SCRIPT_SCOPE_INVALID", "Script scope must be monitor or request.", nil)
+	if input.Scope != "monitor" && input.Scope != "request" && input.Scope != "test" {
+		s.writeError(w, r, http.StatusUnprocessableEntity, "SCRIPT_SCOPE_INVALID", "Script scope must be monitor, request, or test.", nil)
 		return
 	}
-	result, err := s.scripts.Execute(r.Context(), scripts.Input{Script: scripts.Script{Enabled: true, Language: "javascript", Code: input.Code, RuntimeVersion: scripts.RuntimeVersion}, Scope: input.Scope, Preview: true, AllowPrivateTargets: s.allowPrivateTargets, Variables: input.Variables, Environment: map[string]string{}, Collection: map[string]string{}, Globals: map[string]string{}, Secrets: map[string]string{}, Request: input.Request, TimeoutMS: 2000, Info: scripts.Info{MonitorID: r.PathValue("monitorId"), RevisionID: r.PathValue("revisionId"), StepID: input.StepID, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
+	if input.Scope == "test" && input.Response == nil {
+		input.Response = &scripts.Response{Code: http.StatusOK, Status: "200 OK", Headers: map[string]string{"Content-Type": "application/json"}, Body: `{"preview":true}`, ResponseTimeMS: 100, ResponseSize: 16, ContentType: "application/json"}
+	}
+	eventName := "prerequest"
+	if input.Scope == "test" {
+		eventName = "test"
+	}
+	result, err := s.scripts.Execute(r.Context(), scripts.Input{Script: scripts.Script{Enabled: true, Language: "javascript", Code: input.Code, RuntimeVersion: scripts.RuntimeVersion, Packages: input.Packages}, Scope: input.Scope, Preview: true, AllowPrivateTargets: s.allowPrivateTargets, Variables: input.Variables, Environment: map[string]string{}, Collection: map[string]string{}, Globals: map[string]string{}, Secrets: map[string]string{}, Request: input.Request, Response: input.Response, TimeoutMS: 2000, Info: scripts.Info{MonitorID: r.PathValue("monitorId"), RevisionID: r.PathValue("revisionId"), StepID: input.StepID, EventName: eventName, IterationCount: 1, RuntimeVersion: scripts.RuntimeVersion}})
 	if err != nil {
 		s.writeError(w, r, http.StatusServiceUnavailable, "SCRIPT_RUNTIME_UNAVAILABLE", "JavaScript preview is unavailable.", nil)
 		return
@@ -860,6 +956,7 @@ func (s *server) previewScript(w http.ResponseWriter, r *http.Request) {
 	result.InternalCollection = nil
 	result.InternalCookies = nil
 	result.InternalRequest = nil
+	result.InternalState = nil
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: result, Meta: s.meta(r)})
 }
 
@@ -894,12 +991,12 @@ func (s *server) runMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) previewMonitorDefinition(w http.ResponseWriter, r *http.Request) {
-	var definition runs.Definition
+	var body json.RawMessage
 	// Monitor definitions are versioned documents. The editor may send fields
 	// introduced by a newer schema that the current executor safely ignores,
 	// matching persisted-revision execution behavior.
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
-	if err := decoder.Decode(&definition); err != nil {
+	if err := decoder.Decode(&body); err != nil {
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Monitor definition is invalid.", nil)
 		return
 	}
@@ -907,14 +1004,63 @@ func (s *server) previewMonitorDefinition(w http.ResponseWriter, r *http.Request
 		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Request body must contain exactly one monitor definition.", nil)
 		return
 	}
+	var definition runs.Definition
+	environmentID := ""
+	var envelope struct {
+		Definition    json.RawMessage `json:"definition"`
+		EnvironmentID string          `json:"environmentId"`
+	}
+	if err := json.Unmarshal(body, &envelope); err == nil && len(envelope.Definition) > 0 {
+		if err := json.Unmarshal(envelope.Definition, &definition); err != nil {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Monitor definition is invalid.", nil)
+			return
+		}
+		environmentID = strings.TrimSpace(envelope.EnvironmentID)
+	} else if err := json.Unmarshal(body, &definition); err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "Monitor definition is invalid.", nil)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	preview, err := s.runs.PreviewDefinition(ctx, definition)
+	previewID := strings.TrimSpace(r.Header.Get("X-Rhythm-Preview-ID"))
+	if previewID != "" {
+		s.previewMu.Lock()
+		s.previewCancels[previewID] = cancel
+		s.previewMu.Unlock()
+		defer func() {
+			s.previewMu.Lock()
+			delete(s.previewCancels, previewID)
+			s.previewMu.Unlock()
+		}()
+	}
+	preview, err := s.runs.PreviewDefinitionWithEnvironment(ctx, definition, environmentID)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			s.writeError(w, r, http.StatusRequestTimeout, "DRAFT_PREVIEW_CANCELLED", "Draft preview was cancelled.", nil)
+			return
+		}
 		s.writeError(w, r, http.StatusUnprocessableEntity, "DRAFT_PREVIEW_FAILED", err.Error(), nil)
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: preview, Meta: s.meta(r)})
+}
+
+func (s *server) cancelMonitorPreview(w http.ResponseWriter, r *http.Request) {
+	previewID := strings.TrimSpace(r.PathValue("previewId"))
+	if previewID == "" {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PREVIEW_ID", "Preview ID is required.", nil)
+		return
+	}
+	s.previewMu.Lock()
+	cancel, exists := s.previewCancels[previewID]
+	if exists {
+		delete(s.previewCancels, previewID)
+	}
+	s.previewMu.Unlock()
+	if exists {
+		cancel()
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]bool{"cancelled": exists}, Meta: s.meta(r)})
 }
 
 func (s *server) listMonitorRuns(w http.ResponseWriter, r *http.Request) {
@@ -940,6 +1086,15 @@ func (s *server) getMonitorMetrics(w http.ResponseWriter, r *http.Request) {
 	if window == "" {
 		window = "30d"
 	}
+	maxPoints := 1000
+	if value := strings.TrimSpace(r.URL.Query().Get("maxPoints")); value != "" {
+		parsed, parseErr := strconv.Atoi(value)
+		if parseErr != nil || parsed < 100 || parsed > 1000 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_METRICS_LIMIT", "maxPoints must be between 100 and 1000.", nil)
+			return
+		}
+		maxPoints = parsed
+	}
 	metrics, err := s.runs.Metrics(r.Context(), r.PathValue("monitorId"), window)
 	var validationError runs.MetricsValidationError
 	switch {
@@ -953,6 +1108,7 @@ func (s *server) getMonitorMetrics(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to calculate monitor metrics.", nil)
 		return
 	}
+	metrics.Points = runs.SampleHistoryMetricPoints(metrics.Points, maxPoints)
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: metrics, Meta: s.meta(r)})
 }
 

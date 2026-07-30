@@ -65,9 +65,10 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
     >()
     const applications: MonitorListApplication[] = []
     if (applicationsResponse.ok) {
-      const applicationsEnvelope = (await applicationsResponse.json()) as ApiSuccess<
-        ELFApplicationContract[]
-      >
+      const applicationsEnvelope =
+        (await applicationsResponse.json()) as ApiSuccess<
+          ELFApplicationContract[]
+        >
       if (Array.isArray(applicationsEnvelope.data)) {
         for (const application of applicationsEnvelope.data) {
           applications.push({ id: application.id, name: application.name })
@@ -97,7 +98,13 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
 )
 
 export const previewMonitorDraft = createServerFn({ method: "POST" })
-  .validator(z.object({ definition: z.record(z.string(), z.unknown()) }))
+  .validator(
+    z.object({
+      definition: z.record(z.string(), z.unknown()),
+      previewId: z.string().min(1),
+      environmentId: z.string().optional(),
+    })
+  )
   .handler(
     async ({
       data,
@@ -112,8 +119,12 @@ export const previewMonitorDraft = createServerFn({ method: "POST" })
           headers: {
             Accept: "application/json",
             "Content-Type": "application/json",
+            "X-Rhythm-Preview-ID": data.previewId,
           },
-          body: JSON.stringify(data.definition),
+          body: JSON.stringify({
+            definition: data.definition,
+            environmentId: data.environmentId,
+          }),
           signal: AbortSignal.timeout(65000),
         })
         if (!response.ok) {
@@ -138,23 +149,61 @@ export const previewMonitorDraft = createServerFn({ method: "POST" })
     }
   )
 
+export const cancelMonitorDraftPreview = createServerFn({ method: "POST" })
+  .validator(z.object({ previewId: z.string().min(1) }))
+  .handler(
+    async ({
+      data,
+    }): Promise<{ ok: true; cancelled: boolean } | { ok: false }> => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      try {
+        const response = await fetch(
+          `${baseURL}/api/v1/monitors/preview/${encodeURIComponent(data.previewId)}/cancel`,
+          {
+            method: "POST",
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(5000),
+          }
+        )
+        if (!response.ok) return { ok: false }
+        const envelope = (await response.json()) as ApiSuccess<{
+          cancelled: boolean
+        }>
+        return { ok: true, cancelled: envelope.data.cancelled }
+      } catch {
+        return { ok: false }
+      }
+    }
+  )
+
 type CreateMonitorResult =
   | { ok: true; monitor: MonitorContract; schedule: ScheduleContract }
-  | { ok: false; message: string; fieldErrors?: Record<string, string>; monitorId?: string }
+  | {
+      ok: false
+      message: string
+      fieldErrors?: Record<string, string>
+      monitorId?: string
+    }
 
 export const createMonitor = createServerFn({ method: "POST" })
   .validator(createMonitorSchema)
   .handler(async ({ data }): Promise<CreateMonitorResult> => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     try {
-      const { enabled, schedule, ...monitorInput } = data
+      const { creationId, enabled, schedule, ...monitorInput } = data
       const response = await fetch(`${baseURL}/api/v1/monitors`, {
         method: "POST",
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
+          ...(creationId ? { "Idempotency-Key": creationId } : {}),
         },
-        body: JSON.stringify(monitorInput satisfies Omit<CreateMonitorInput, "enabled" | "schedule">),
+        body: JSON.stringify(
+          monitorInput satisfies Omit<
+            CreateMonitorInput,
+            "enabled" | "schedule"
+          >
+        ),
         signal: AbortSignal.timeout(5000),
       })
       if (!response.ok) {
@@ -179,24 +228,46 @@ export const createMonitor = createServerFn({ method: "POST" })
           `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/publish`,
           {
             method: "POST",
-            headers: { Accept: "application/json", "Content-Type": "application/json" },
-            body: JSON.stringify({ changeSummary: "Published during monitor creation" }),
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              changeSummary: "Published during monitor creation",
+            }),
             signal: AbortSignal.timeout(8000),
           }
         )
         if (!publishResponse.ok) {
           const failure = (await publishResponse.json()) as ApiErrorResponse
-          return { ok: false, monitorId: monitor.id, message: failure.error.message || "The monitor was saved as a draft, but could not be published." }
+          return {
+            ok: false,
+            monitorId: monitor.id,
+            message:
+              failure.error.message ||
+              "The monitor was saved as a draft, but could not be published.",
+          }
         }
         const enableResponse = await fetch(
           `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/enable`,
-          { method: "POST", headers: { Accept: "application/json" }, signal: AbortSignal.timeout(8000) }
+          {
+            method: "POST",
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(8000),
+          }
         )
         if (!enableResponse.ok) {
           const failure = (await enableResponse.json()) as ApiErrorResponse
-          return { ok: false, monitorId: monitor.id, message: failure.error.message || "The monitor was published, but could not be enabled." }
+          return {
+            ok: false,
+            monitorId: monitor.id,
+            message:
+              failure.error.message ||
+              "The monitor was published, but could not be enabled.",
+          }
         }
-        const enabledEnvelope = (await enableResponse.json()) as ApiSuccess<MonitorContract>
+        const enabledEnvelope =
+          (await enableResponse.json()) as ApiSuccess<MonitorContract>
         monitor = enabledEnvelope.data
       }
 
@@ -204,16 +275,26 @@ export const createMonitor = createServerFn({ method: "POST" })
         `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/schedule`,
         {
           method: "PUT",
-          headers: { Accept: "application/json", "Content-Type": "application/json" },
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(schedule),
           signal: AbortSignal.timeout(8000),
         }
       )
       if (!scheduleResponse.ok) {
         const failure = (await scheduleResponse.json()) as ApiErrorResponse
-        return { ok: false, monitorId: monitor.id, message: failure.error.message || "The monitor was created, but its schedule could not be saved." }
+        return {
+          ok: false,
+          monitorId: monitor.id,
+          message:
+            failure.error.message ||
+            "The monitor was created, but its schedule could not be saved.",
+        }
       }
-      const scheduleEnvelope = (await scheduleResponse.json()) as ApiSuccess<ScheduleContract>
+      const scheduleEnvelope =
+        (await scheduleResponse.json()) as ApiSuccess<ScheduleContract>
       return { ok: true, monitor, schedule: scheduleEnvelope.data }
     } catch {
       return {
@@ -225,26 +306,47 @@ export const createMonitor = createServerFn({ method: "POST" })
   })
 
 export const permanentlyDeleteMonitors = createServerFn({ method: "POST" })
-  .validator(z.object({ monitorIds: z.array(z.string().min(1)).min(1).max(100) }))
-  .handler(async ({ data }): Promise<{ ok: true; deletedCount: number } | { ok: false; message: string }> => {
-    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-    try {
-      const response = await fetch(`${baseURL}/api/v1/monitors/bulk-delete`, {
-        method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-        signal: AbortSignal.timeout(15000),
-      })
-      if (!response.ok) {
-        const failure = (await response.json()) as ApiErrorResponse
-        return { ok: false, message: failure.error.message || "Unable to permanently delete the selected monitors." }
+  .validator(
+    z.object({ monitorIds: z.array(z.string().min(1)).min(1).max(100) })
+  )
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      { ok: true; deletedCount: number } | { ok: false; message: string }
+    > => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      try {
+        const response = await fetch(`${baseURL}/api/v1/monitors/bulk-delete`, {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data),
+          signal: AbortSignal.timeout(15000),
+        })
+        if (!response.ok) {
+          const failure = (await response.json()) as ApiErrorResponse
+          return {
+            ok: false,
+            message:
+              failure.error.message ||
+              "Unable to permanently delete the selected monitors.",
+          }
+        }
+        const envelope = (await response.json()) as ApiSuccess<{
+          deletedCount: number
+        }>
+        return { ok: true, deletedCount: envelope.data.deletedCount }
+      } catch {
+        return {
+          ok: false,
+          message: "The delete operation could not reach the Rhythm API.",
+        }
       }
-      const envelope = (await response.json()) as ApiSuccess<{ deletedCount: number }>
-      return { ok: true, deletedCount: envelope.data.deletedCount }
-    } catch {
-      return { ok: false, message: "The delete operation could not reach the Rhythm API." }
     }
-  })
+  )
 
 type RunMonitorResult =
   { ok: true; run: RunContract } | { ok: false; message: string }
@@ -274,7 +376,9 @@ export const runMonitor = createServerFn({ method: "POST" })
           message: failure.error.message || "Unable to run the monitor.",
         }
       }
-      const envelope = (await response.json()) as ApiSuccess<{ run: RunContract }>
+      const envelope = (await response.json()) as ApiSuccess<{
+        run: RunContract
+      }>
       return { ok: true, run: envelope.data.run }
     } catch {
       return { ok: false, message: "The run could not reach the Rhythm API." }
@@ -364,15 +468,25 @@ export const listMonitorRuns = createServerFn({ method: "GET" })
   })
 
 export const getMonitorMetrics = createServerFn({ method: "GET" })
-  .validator(z.object({ monitorId: z.string().min(1), window: z.enum(["24h", "7d", "30d", "90d"]).default("30d") }))
+  .validator(
+    z.object({
+      monitorId: z.string().min(1),
+      window: z.enum(["24h", "7d", "30d", "90d"]).default("30d"),
+    })
+  )
   .handler(async ({ data }): Promise<RunHistoryMetricsContract> => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     const response = await fetch(
-      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics?window=${data.window}`,
-      { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) }
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics?window=${data.window}&maxPoints=400`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }
     )
-    if (!response.ok) throw new Error(`Unable to load run metrics (${response.status})`)
-    return ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>).data
+    if (!response.ok)
+      throw new Error(`Unable to load run metrics (${response.status})`)
+    return ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>)
+      .data
   })
 
 export const getRun = createServerFn({ method: "GET" })
@@ -396,39 +510,112 @@ export const getRunDiagnostics = createServerFn({ method: "GET" })
   .validator(z.object({ runId: z.string().min(1) }))
   .handler(async ({ data }): Promise<RunDiagnosticsContract> => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-    const response = await fetch(`${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}/diagnostics`, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) })
-    if (!response.ok) throw new Error(`Unable to load run diagnostics (${response.status})`)
+    const response = await fetch(
+      `${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}/diagnostics`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Unable to load run diagnostics (${response.status})`)
     return ((await response.json()) as ApiSuccess<RunDiagnosticsContract>).data
   })
 
 export const validatePreRequestScript = createServerFn({ method: "POST" })
   .validator(z.object({ code: z.string().max(65536) }))
-  .handler(async ({ data }): Promise<{ valid:boolean; problems:ScriptProblemContract[] }> => {
-    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-    const response = await fetch(`${baseURL}/api/v1/scripts/validate`, { method:"POST", headers:{ Accept:"application/json", "Content-Type":"application/json" }, body:JSON.stringify({code:data.code}), signal:AbortSignal.timeout(5000) })
-    if (!response.ok) throw new Error(`Unable to validate script (${response.status})`)
-    return ((await response.json()) as ApiSuccess<{ valid:boolean; problems:ScriptProblemContract[] }>).data
-  })
+  .handler(
+    async ({
+      data,
+    }): Promise<{ valid: boolean; problems: ScriptProblemContract[] }> => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      const response = await fetch(`${baseURL}/api/v1/scripts/validate`, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ code: data.code }),
+        signal: AbortSignal.timeout(5000),
+      })
+      if (!response.ok)
+        throw new Error(`Unable to validate script (${response.status})`)
+      return (
+        (await response.json()) as ApiSuccess<{
+          valid: boolean
+          problems: ScriptProblemContract[]
+        }>
+      ).data
+    }
+  )
 
-const scriptPreviewSchema = z.object({ monitorId:z.string().min(1), revisionId:z.string().min(1), scope:z.enum(["monitor","request"]), stepId:z.string().optional(), code:z.string().max(65536), variables:z.record(z.string(),z.string()).default({}), request:z.record(z.string(),z.unknown()).nullable().optional() })
-export const previewPreRequestScript = createServerFn({ method:"POST" })
+const scriptPreviewSchema = z.object({
+  monitorId: z.string().min(1),
+  revisionId: z.string().min(1),
+  scope: z.enum(["monitor", "request", "test"]),
+  stepId: z.string().optional(),
+  code: z.string().max(65536),
+  packages: z
+    .array(z.object({ name: z.string(), code: z.string().max(65536) }))
+    .default([]),
+  variables: z.record(z.string(), z.string()).default({}),
+  request: z.record(z.string(), z.unknown()).nullable().optional(),
+  response: z.record(z.string(), z.unknown()).nullable().optional(),
+})
+export const previewPreRequestScript = createServerFn({ method: "POST" })
   .validator(scriptPreviewSchema)
-  .handler(async ({data}):Promise<ScriptResultContract>=>{
-    const baseURL=process.env.RHYTHM_API_URL??"http://localhost:8080"
-    const response=await fetch(`${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/revisions/${encodeURIComponent(data.revisionId)}/scripts/preview`,{method:"POST",headers:{Accept:"application/json","Content-Type":"application/json"},body:JSON.stringify({scope:data.scope,stepId:data.stepId,code:data.code,variables:data.variables,request:data.request}),signal:AbortSignal.timeout(5000)})
-    if(!response.ok){const failure=(await response.json()) as ApiErrorResponse;throw new Error(failure.error.message||"Unable to preview script.")}
+  .handler(async ({ data }): Promise<ScriptResultContract> => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const response = await fetch(
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/revisions/${encodeURIComponent(data.revisionId)}/scripts/preview`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          scope: data.scope,
+          stepId: data.stepId,
+          code: data.code,
+          packages: data.packages,
+          variables: data.variables,
+          request: data.request,
+          response: data.response,
+        }),
+        signal: AbortSignal.timeout(5000),
+      }
+    )
+    if (!response.ok) {
+      const failure = (await response.json()) as ApiErrorResponse
+      throw new Error(failure.error.message || "Unable to preview script.")
+    }
     return ((await response.json()) as ApiSuccess<ScriptResultContract>).data
   })
 
 export const cancelRun = createServerFn({ method: "POST" })
   .validator(z.object({ runId: z.string().min(1) }))
-  .handler(async ({ data }): Promise<{ ok: true } | { ok: false; message: string }> => {
-    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-    const response = await fetch(`${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}/cancel`, { method: "POST", headers: { Accept: "application/json" }, signal: AbortSignal.timeout(5000) })
-    if (response.ok) return { ok: true }
-    const failure = (await response.json()) as ApiErrorResponse
-    return { ok: false, message: failure.error.message || "Unable to cancel the run." }
-  })
+  .handler(
+    async ({
+      data,
+    }): Promise<{ ok: true } | { ok: false; message: string }> => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      const response = await fetch(
+        `${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}/cancel`,
+        {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(5000),
+        }
+      )
+      if (response.ok) return { ok: true }
+      const failure = (await response.json()) as ApiErrorResponse
+      return {
+        ok: false,
+        message: failure.error.message || "Unable to cancel the run.",
+      }
+    }
+  )
 
 export const listRecentRuns = createServerFn({ method: "GET" }).handler(
   async (): Promise<RunContract[]> => {
@@ -517,6 +704,58 @@ export const saveMonitorDraft = createServerFn({ method: "POST" })
         return {
           ok: false,
           message: "The draft could not reach the Rhythm API.",
+        }
+      }
+    }
+  )
+
+export const saveMonitorEnvironment = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      monitorId: z.string().min(1),
+      environmentId: z.string(),
+      updatedAt: z.string().min(1),
+    })
+  )
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      { ok: true; monitor: MonitorContract } | { ok: false; message: string }
+    > => {
+      const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+      try {
+        const response = await fetch(
+          `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}`,
+          {
+            method: "PATCH",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+              "If-Match": `W/"${data.updatedAt}"`,
+            },
+            body: JSON.stringify({ environmentId: data.environmentId }),
+            signal: AbortSignal.timeout(8000),
+          }
+        )
+        if (!response.ok) {
+          const failure = (await response.json()) as ApiErrorResponse
+          return {
+            ok: false,
+            message:
+              failure.error.message ||
+              "Unable to update the monitor environment.",
+          }
+        }
+        return {
+          ok: true,
+          monitor: ((await response.json()) as ApiSuccess<MonitorContract>)
+            .data,
+        }
+      } catch {
+        return {
+          ok: false,
+          message: "The environment update could not reach the Rhythm API.",
         }
       }
     }
@@ -830,9 +1069,7 @@ export const saveConfigurationProfile = createServerFn({ method: "POST" })
   })
 
 export const deleteConfigurationProfile = createServerFn({ method: "POST" })
-  .validator(
-    z.object({ kind: profileKind, profileId: z.string().min(1) })
-  )
+  .validator(z.object({ kind: profileKind, profileId: z.string().min(1) }))
   .handler(async ({ data }) => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     try {
@@ -909,7 +1146,8 @@ function toMonitorSummary(
     enabled: monitor.enabled,
     applicationId: application?.id ?? null,
     application: application?.name || "Not assigned",
-    cadence: monitor.scheduleSummary ?? "Manual only",
+    cadence: formatCadenceLabel(monitor.scheduleSummary ?? "Manual only"),
+    tags: Array.isArray(monitor.tags) ? monitor.tags : [],
     owner: monitor.ownerId ?? "Unassigned",
     successRate: monitor.successRate24h ?? null,
     latencyMs: monitor.lastLatencyMs ?? null,
@@ -917,6 +1155,14 @@ function toMonitorSummary(
     stepCount: monitor.stepCount,
     state: monitor.state,
   }
+}
+
+/** Normalize Go duration leftovers like "Every 5m0s" → "Every 5m". */
+function formatCadenceLabel(summary: string) {
+  return summary
+    .replace(/(\d+h)0m0s\b/g, "$1")
+    .replace(/(\d+h)0m\b/g, "$1")
+    .replace(/(\d+m)0s\b/g, "$1")
 }
 
 function healthToStatus(health: MonitorContract["health"]): MonitorStatus {

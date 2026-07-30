@@ -1,8 +1,19 @@
 import type { ReactNode } from "react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from "@workspace/ui/components/alert-dialog"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import { CircleAlert, Plus } from "lucide-react"
+import { CircleAlert, LoaderCircle, Plus, Trash2, TriangleAlert } from "lucide-react"
 
 export function ConfigurationIntro({
   icon,
@@ -144,7 +155,7 @@ export function IdentityFields({
   return (
     <>
       <FormField label="Profile name" required>
-        <Input
+        <Input aria-label="Profile name"
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Production API"
@@ -154,7 +165,7 @@ export function IdentityFields({
         label="Description"
         help="Help monitor authors choose the right profile."
       >
-        <Input
+        <Input aria-label="Description"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
           placeholder="Used by production order-service checks"
@@ -198,5 +209,60 @@ export function ReadonlyValue({
       <dt className="text-xs text-muted-foreground">{label}</dt>
       <dd className="mt-1 truncate text-sm">{value || "Not configured"}</dd>
     </div>
+  )
+}
+
+export function DeleteProfileDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  confirming,
+  onConfirm,
+  confirmLabel = "Delete",
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  description: ReactNode
+  confirming: boolean
+  onConfirm: () => void
+  confirmLabel?: string
+}) {
+  return (
+    <AlertDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!confirming) onOpenChange(next)
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogMedia className="bg-destructive/10 text-destructive">
+            <TriangleAlert />
+          </AlertDialogMedia>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={confirming}>Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={confirming}
+            onClick={(event) => {
+              event.preventDefault()
+              onConfirm()
+            }}
+          >
+            {confirming ? (
+              <LoaderCircle className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <Trash2 data-icon="inline-start" />
+            )}
+            {confirming ? "Deleting…" : confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }

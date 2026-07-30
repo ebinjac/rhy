@@ -2,6 +2,7 @@ import { useMemo } from "react"
 import { createFileRoute } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
+import { CopyButton } from "@workspace/ui/components/copy-button"
 import { Input } from "@workspace/ui/components/input"
 import {
   Select,
@@ -15,13 +16,13 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleAlert,
-  Copy,
   Download,
   ScrollText,
 } from "lucide-react"
 
 import { listAuditEvents } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/audit")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -111,7 +112,7 @@ function AuditPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1280px] px-4 py-6 md:px-6 md:py-8">
+    <PageContainer>
       <p className="text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
         Governance
       </p>
@@ -213,16 +214,12 @@ function AuditPage() {
                     <dt className="text-muted-foreground">Full resource ID</dt>
                     <dd className="mt-1 flex items-center gap-2 font-mono break-all">
                       {event.resourceId}
-                      <Button
-                        aria-label="Copy full resource ID"
-                        onClick={() =>
-                          void navigator.clipboard.writeText(event.resourceId)
-                        }
+                      <CopyButton
+                        label="Copy full resource ID"
                         size="icon-sm"
+                        value={event.resourceId}
                         variant="ghost"
-                      >
-                        <Copy />
-                      </Button>
+                      />
                     </dd>
                   </div>
                   <div>
@@ -279,7 +276,7 @@ function AuditPage() {
           </div>
         </div>
       ) : null}
-    </div>
+    </PageContainer>
   )
 }
 

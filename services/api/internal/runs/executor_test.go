@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -115,6 +116,78 @@ pm.test("path prepared", () => pm.expect(pm.variables.get("path")).to.equal("gen
 	encoded, _ := json.Marshal(result.PreRequestScript)
 	if strings.Contains(string(encoded), "internalVariables") || strings.Contains(string(encoded), "internalCookies") {
 		t.Fatalf("internal script state leaked into evidence: %s", encoded)
+	}
+}
+
+func TestHTTPExecutorRunsPostResponseTestsScript(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"order-42","status":"ready"}`))
+	}))
+	defer target.Close()
+
+	executor := NewHTTPExecutor(true)
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "tested", Name: "Tested response", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{
+		Method: "GET", URL: target.URL,
+		TestScript: scripts.Script{Enabled: true, Language: "javascript", RuntimeVersion: scripts.RuntimeVersion, Code: `
+const data = pm.response.json();
+pm.test("status is 200", () => pm.response.to.have.status(200));
+pm.test("order is ready", () => pm.expect(data.status).to.equal("ready"));
+pm.collectionVariables.set("orderId", data.id);
+pm.visualizer.set("<p>{{id}}</p>", {id:data.id});`},
+		Settings: SettingsConfig{TimeoutMS: 1000, CaptureBody: true},
+	}}
+	values := map[string]string{}
+	result := executor.ExecuteWithState(context.Background(), step, nil, values)
+	if result.Status != StatusSuccess || result.TestScript == nil || result.TestScript.Status != "SUCCESS" || len(result.TestScript.Tests) != 2 {
+		t.Fatalf("expected response Tests success, got %#v", result)
+	}
+	if result.TestScript.Visualizer == nil || result.TestScript.Visualizer.Data["id"] != "order-42" {
+		t.Fatalf("expected visualizer evidence, got %#v", result.TestScript.Visualizer)
+	}
+	if values["orderId"] != "order-42" {
+		t.Fatalf("expected Tests variable changes to continue through the workflow, got %#v", values)
+	}
+}
+
+func TestHTTPExecutorStopsOnFailedPostResponseTest(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer target.Close()
+
+	executor := NewHTTPExecutor(true)
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "failed-test", Name: "Failed Tests", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{
+		Method: "GET", URL: target.URL,
+		TestScript: scripts.Script{Enabled: true, RuntimeVersion: scripts.RuntimeVersion, Code: `pm.test("status is 200", () => pm.response.to.have.status(200));`},
+		Settings:   SettingsConfig{TimeoutMS: 1000},
+	}}
+	result := executor.Execute(context.Background(), step)
+	if result.Status != StatusFailed || result.FailureCategory != "SCRIPT_ASSERTION_FAILURE" || result.TestScript == nil {
+		t.Fatalf("expected failed JavaScript Test to fail the step, got %#v", result)
+	}
+}
+
+func TestHTTPExecutorHonorsSkipRequest(t *testing.T) {
+	var called atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+	executor := NewHTTPExecutor(true)
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "skipped", Name: "Skipped request", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{
+		Method:           "GET",
+		URL:              target.URL,
+		PreRequestScript: scripts.Script{Enabled: true, RuntimeVersion: scripts.RuntimeVersion, Code: `pm.execution.skipRequest();`},
+		Settings:         SettingsConfig{TimeoutMS: 1000},
+	}}
+	result := executor.Execute(context.Background(), step)
+	if result.Status != StatusSkipped || called.Load() != 0 || result.PreRequestScript == nil || !result.PreRequestScript.Execution.RequestSkipped {
+		t.Fatalf("skipRequest should skip the primary HTTP call: %#v calls=%d", result, called.Load())
 	}
 }
 
@@ -495,5 +568,39 @@ func TestMetricValidationExecutesDynatraceQueryAndThreshold(t *testing.T) {
 	result := executor.ExecuteMetric(context.Background(), step)
 	if result.Status != StatusSuccess || result.Outputs["value"] != float64(50) || len(result.Assertions) != 1 || !result.Assertions[0].Passed {
 		t.Fatalf("metric validation failed: %#v", result)
+	}
+}
+
+func TestRenderSupportsScopedAndDynamicVariables(t *testing.T) {
+	values := map[string]string{
+		"name":                    "local",
+		"variables.name":          "script-local",
+		"environment.name":        "environment",
+		"collection.name":         "collection",
+		"globals.name":            "global",
+		"steps.create.outputs.id": "order-42",
+		"secrets.api-key":         "exact-secret",
+	}
+	rendered, err := render(
+		`{{name}}|{{environment.name}}|{{collection.name}}|{{globals.name}}|{{steps.create.outputs.id}}|{{secrets.api-key}}|{{$uuid}}|{{$timestamp}}`,
+		values,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(rendered, "|")
+	if len(parts) != 8 || parts[0] != "script-local" || parts[1] != "environment" || parts[2] != "collection" || parts[3] != "global" || parts[4] != "order-42" || parts[5] != "exact-secret" || parts[6] == "" || parts[7] == "" {
+		t.Fatalf("unexpected scoped rendering: %q", rendered)
+	}
+}
+
+func TestSafeRequestURLMasksTemplatedSecretValues(t *testing.T) {
+	target, err := url.Parse("https://example.com/orders/exact-secret?trace=exact-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	safe := safeRequestURL(target, AuthConfig{}, map[string]string{"secrets.api-key": "exact-secret"})
+	if strings.Contains(safe, "exact-secret") || !strings.Contains(safe, "••••••••") {
+		t.Fatalf("secret leaked through request URL summary: %q", safe)
 	}
 }

@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as SuitesRouteImport } from './routes/suites'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
+import { Route as RhythmRouteImport } from './routes/rhythm'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
 import { Route as ElfRouteImport } from './routes/elf'
@@ -59,6 +60,11 @@ const SitemapDotxmlRoute = SitemapDotxmlRouteImport.update({
 const RobotsDottxtRoute = RobotsDottxtRouteImport.update({
   id: '/robots.txt',
   path: '/robots.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RhythmRoute = RhythmRouteImport.update({
+  id: '/rhythm',
+  path: '/rhythm',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
@@ -243,6 +249,7 @@ export interface FileRoutesByFullPath {
   '/elf': typeof ElfRouteWithChildren
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/rhythm': typeof RhythmRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
@@ -278,6 +285,7 @@ export interface FileRoutesByTo {
   '/configuration': typeof ConfigurationRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/rhythm': typeof RhythmRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
@@ -315,6 +323,7 @@ export interface FileRoutesById {
   '/elf': typeof ElfRouteWithChildren
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
+  '/rhythm': typeof RhythmRoute
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
@@ -355,6 +364,7 @@ export interface FileRouteTypes {
     | '/elf'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/rhythm'
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/configuration'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/rhythm'
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
@@ -426,6 +437,7 @@ export interface FileRouteTypes {
     | '/elf'
     | '/llms-full.txt'
     | '/llms.txt'
+    | '/rhythm'
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
@@ -465,6 +477,7 @@ export interface RootRouteChildren {
   ElfRoute: typeof ElfRouteWithChildren
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
+  RhythmRoute: typeof RhythmRoute
   RobotsDottxtRoute: typeof RobotsDottxtRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   SuitesRoute: typeof SuitesRoute
@@ -499,6 +512,13 @@ declare module '@tanstack/react-router' {
       path: '/robots.txt'
       fullPath: '/robots.txt'
       preLoaderRoute: typeof RobotsDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/rhythm': {
+      id: '/rhythm'
+      path: '/rhythm'
+      fullPath: '/rhythm'
+      preLoaderRoute: typeof RhythmRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/llms.txt': {
@@ -824,6 +844,7 @@ const rootRouteChildren: RootRouteChildren = {
   ElfRoute: ElfRouteWithChildren,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
+  RhythmRoute: RhythmRoute,
   RobotsDottxtRoute: RobotsDottxtRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   SuitesRoute: SuitesRoute,
