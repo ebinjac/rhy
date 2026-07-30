@@ -236,16 +236,9 @@ export function VariableCatalogSheet({
           Need another value?{" "}
           <a
             className="font-medium text-primary underline"
-            href="/configuration?kind=environments"
-          >
-            Manage environments
-          </a>{" "}
-          or{" "}
-          <a
-            className="font-medium text-primary underline"
             href="/configuration?kind=secrets"
           >
-            manage secrets
+            Manage secrets
           </a>
           .
         </div>

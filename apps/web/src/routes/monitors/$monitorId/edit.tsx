@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Alert, AlertDescription } from "@workspace/ui/components/alert"
 import { Badge } from "@workspace/ui/components/badge"
@@ -33,22 +33,19 @@ import {
   listConfigurationProfiles,
   mutateMonitor,
   saveMonitorDraft,
-  saveMonitorEnvironment,
   saveMonitorSchedule,
 } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
 
 export const Route = createFileRoute("/monitors/$monitorId/edit")({
   loader: async ({ params }) => {
-    const [draft, applications, secrets, environments, schedule] =
-      await Promise.all([
-        getMonitorDraft({ data: { monitorId: params.monitorId } }),
-        listELFApplications(),
-        listConfigurationProfiles({ data: { kind: "secrets" } }),
-        listConfigurationProfiles({ data: { kind: "environments" } }),
-        getMonitorSchedule({ data: { monitorId: params.monitorId } }),
-      ])
-    return { ...draft, applications, secrets, environments, schedule }
+    const [draft, applications, secrets, schedule] = await Promise.all([
+      getMonitorDraft({ data: { monitorId: params.monitorId } }),
+      listELFApplications(),
+      listConfigurationProfiles({ data: { kind: "secrets" } }),
+      getMonitorSchedule({ data: { monitorId: params.monitorId } }),
+    ])
+    return { ...draft, applications, secrets, schedule }
   },
   component: EditMonitorPage,
 })
@@ -82,13 +79,6 @@ function EditMonitorPage() {
   const [applicationId, setApplicationId] = useState(initialApplicationId)
   const [linkedApplicationId, setLinkedApplicationId] =
     useState(initialApplicationId)
-  const [environmentId, setEnvironmentId] = useState(
-    loaded.monitor.environmentId ?? ""
-  )
-  const [savedEnvironmentId, setSavedEnvironmentId] = useState(
-    loaded.monitor.environmentId ?? ""
-  )
-  const monitorUpdatedAt = useRef(loaded.monitor.updatedAt)
   const [schedule, setSchedule] = useState<ScheduleContract>(
     loaded.schedule ?? defaultSchedule
   )
@@ -151,22 +141,6 @@ function EditMonitorPage() {
         }
       }
       setLinkedApplicationId(applicationId)
-    }
-    if (savedEnvironmentId !== environmentId) {
-      const environmentResult = await saveMonitorEnvironment({
-        data: {
-          monitorId: loaded.monitor.id,
-          environmentId,
-          updatedAt: monitorUpdatedAt.current,
-        },
-      })
-      if (!environmentResult.ok) {
-        setState("error")
-        setMessage(environmentResult.message)
-        return false
-      }
-      monitorUpdatedAt.current = environmentResult.monitor.updatedAt
-      setSavedEnvironmentId(environmentId)
     }
     setState("saved")
     setMessage(`Draft revision ${result.revision.revisionNumber} saved`)
@@ -320,23 +294,6 @@ function EditMonitorPage() {
                 ))}
               </NativeSelect>
             </ScheduleField>
-            <ScheduleField label="Runtime environment">
-              <NativeSelect
-                className="w-full md:w-72"
-                value={environmentId}
-                onChange={(event) => {
-                  setEnvironmentId(event.target.value)
-                  setState("idle")
-                }}
-              >
-                <NativeSelectOption value="">No environment</NativeSelectOption>
-                {loaded.environments.map((profile) => (
-                  <NativeSelectOption key={profile.id} value={profile.id}>
-                    {profile.name} · {profile.profileType}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
-            </ScheduleField>
           </div>
         </section>
         <div className="mb-4">
@@ -354,8 +311,6 @@ function EditMonitorPage() {
           monitorId={loaded.monitor.id}
           revisionId={loaded.revision.id}
           secrets={loaded.secrets}
-          environments={loaded.environments}
-          environmentId={environmentId}
         />
         <section className="mt-6 rounded-xl border p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">

@@ -16,7 +16,6 @@ import {
 
 import { CertificatesPanel } from "@/features/configuration/certificates-panel"
 import { AuthPanel } from "@/features/configuration/auth-panel"
-import { EnvironmentsPanel } from "@/features/configuration/environments-panel"
 import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import { NotificationsPanel } from "@/features/configuration/notifications-panel"
 import { ProxiesPanel } from "@/features/configuration/proxies-panel"
@@ -32,7 +31,6 @@ import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 import { PageContainer } from "@/components/page-container"
 
 const kinds = [
-  "environments",
   "secrets",
   "certificates",
   "proxies",
@@ -45,14 +43,6 @@ type Kind = (typeof kinds)[number]
 const profileFields: Partial<
   Record<Kind, Array<{ key: string; label: string; placeholder: string }>>
 > = {
-  environments: [
-    {
-      key: "baseUrl",
-      label: "Base URL",
-      placeholder: "https://api.example.com",
-    },
-    { key: "region", label: "Region", placeholder: "us-east-1" },
-  ],
   auth: [
     { key: "mode", label: "Authentication mode", placeholder: "BEARER" },
     {
@@ -79,7 +69,7 @@ export const Route = createFileRoute("/configuration")({
   validateSearch: (search: Record<string, unknown>) => ({
     kind: kinds.includes(search.kind as Kind)
       ? (search.kind as Kind)
-      : ("environments" as Kind),
+      : ("secrets" as Kind),
   }),
   loaderDeps: ({ search }) => ({ kind: search.kind }),
   loader: async ({ deps }) => {
@@ -89,7 +79,6 @@ export const Route = createFileRoute("/configuration")({
     if (
       deps.kind !== "notifications" &&
       deps.kind !== "proxies" &&
-      deps.kind !== "environments" &&
       deps.kind !== "auth" &&
       deps.kind !== "telemetry"
     ) {
@@ -256,22 +245,19 @@ function ConfigurationPage() {
                 ? "Validated TLS identities and trust bundles for secure monitor connections."
                 : kind === "proxies"
                   ? "Governed outbound routes for monitor and ELF network traffic."
-                  : kind === "environments"
-                    ? "Reusable target URLs, regions, and run-time variables for monitors."
-                    : kind === "auth"
-                      ? "Secret-backed authentication policies for HTTP requests."
-                      : kind === "telemetry"
-                        ? "Governed provider connections and defaults for metric checks."
-                        : kind === "notifications"
-                          ? "SMTP, Slack, and webhook channels for alert delivery. Application destinations are configured per app."
-                          : "Environment, certificate, proxy, authentication, notification, and telemetry profiles."}
+                  : kind === "auth"
+                    ? "Secret-backed authentication policies for HTTP requests."
+                    : kind === "telemetry"
+                      ? "Governed provider connections and defaults for metric checks."
+                      : kind === "notifications"
+                        ? "SMTP, Slack, and webhook channels for alert delivery. Application destinations are configured per app."
+                        : "Certificate, proxy, authentication, notification, and telemetry profiles."}
           </p>
         </div>
         {kind !== "secrets" &&
         kind !== "certificates" &&
         kind !== "proxies" &&
         kind !== "notifications" &&
-        kind !== "environments" &&
         kind !== "auth" &&
         kind !== "telemetry" ? (
           <Button onClick={() => setOpen(!open)}>
@@ -316,14 +302,6 @@ function ConfigurationPage() {
         />
       ) : kind === "notifications" ? (
         <NotificationsPanel
-          profiles={profiles}
-          secrets={secrets}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
-      ) : kind === "environments" ? (
-        <EnvironmentsPanel
           profiles={profiles}
           secrets={secrets}
           onChanged={async () => {

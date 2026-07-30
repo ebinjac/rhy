@@ -229,7 +229,7 @@ function ELFQueriesPage() {
                 }}
                 items={applications.map((app) => ({
                   value: app.id,
-                  label: `${app.name}${app.carId ? ` · ${app.carId}` : ""} · ${app.environment || "Any environment"}`,
+                  label: `${app.name}${app.carId ? ` · ${app.carId}` : ""}`,
                 }))}
               >
                 <SelectTrigger aria-label="Filter" className="h-9 w-full">
@@ -239,8 +239,7 @@ function ELFQueriesPage() {
                   {applications.map((app) => (
                     <SelectItem key={app.id} value={app.id}>
                       {app.name}
-                      {app.carId ? ` · ${app.carId}` : ""} ·{" "}
-                      {app.environment || "Any environment"}
+                      {app.carId ? ` · ${app.carId}` : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>

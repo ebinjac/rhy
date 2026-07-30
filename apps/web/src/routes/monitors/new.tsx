@@ -85,12 +85,11 @@ const RequestWorkbench = lazy(async () => ({
 
 export const Route = createFileRoute("/monitors/new")({
   loader: async () => {
-    const [applications, secrets, environments] = await Promise.all([
+    const [applications, secrets] = await Promise.all([
       listELFApplications(),
       listConfigurationProfiles({ data: { kind: "secrets" } }),
-      listConfigurationProfiles({ data: { kind: "environments" } }),
     ])
-    return { applications, secrets, environments }
+    return { applications, secrets }
   },
   head: () => ({
     meta: [
@@ -144,7 +143,7 @@ const frequencyOptions = [
 ] as const
 
 function NewMonitorPage() {
-  const { applications, secrets, environments } = Route.useLoaderData()
+  const { applications, secrets } = Route.useLoaderData()
   const navigate = useNavigate()
   const [values, setValues] = useState(initialValues)
   const [definition, setDefinition] = useState<RequestDefinition>(
@@ -161,7 +160,6 @@ function NewMonitorPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [createdMonitorId, setCreatedMonitorId] = useState("")
   const [applicationId, setApplicationId] = useState("")
-  const [environmentId, setEnvironmentId] = useState("")
   const [previewing, setPreviewing] = useState(false)
   const [preview, setPreview] = useState<DraftMonitorPreviewContract | null>(
     null
@@ -182,7 +180,6 @@ function NewMonitorPage() {
       schedule: initialSchedule,
       enabled: false,
       applicationId: "",
-      environmentId: "",
     })
   )
   const currentPreviewId = useRef("")
@@ -197,9 +194,8 @@ function NewMonitorPage() {
         schedule,
         enabled,
         applicationId,
-        environmentId,
       }),
-    [applicationId, definition, enabled, environmentId, schedule, values]
+    [applicationId, definition, enabled, schedule, values]
   )
   const isDirty =
     !createdMonitorId && currentSnapshot !== initialSnapshot.current
@@ -318,7 +314,6 @@ function NewMonitorPage() {
         data: {
           definition: normalizeDefinitionScripts(definition),
           previewId,
-          environmentId: environmentId || undefined,
         },
       })
       if (currentPreviewId.current !== previewId) return
@@ -395,7 +390,6 @@ function NewMonitorPage() {
       slug,
       description: values.description,
       ownerId: values.ownerId,
-      environmentId: environmentId || undefined,
       tags: values.tags
         .split(",")
         .map((tag) => tag.trim())
@@ -847,52 +841,6 @@ function NewMonitorPage() {
                     Links this monitor to its owning application.
                   </span>
                 </Field>
-                <Field className="gap-1.5">
-                  <FieldLabel htmlFor="monitor-environment">
-                    Runtime environment{" "}
-                    <span className="font-normal text-muted-foreground">
-                      Optional
-                    </span>
-                  </FieldLabel>
-                  <Select
-                    value={environmentId || null}
-                    onValueChange={(next) => {
-                      setEnvironmentId(next ?? "")
-                      setPreview(null)
-                      setPreviewError("")
-                    }}
-                    items={[
-                      { value: null, label: "No environment" },
-                      ...environments.map((profile) => ({
-                        value: profile.id,
-                        label: `${profile.name} · ${profile.profileType}`,
-                      })),
-                    ]}
-                  >
-                    <SelectTrigger
-                      id="monitor-environment"
-                      className="h-9 w-full"
-                      aria-describedby="monitor-environment-help"
-                    >
-                      <SelectValue placeholder="No environment" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={null}>No environment</SelectItem>
-                      {environments.map((profile) => (
-                        <SelectItem key={profile.id} value={profile.id}>
-                          {profile.name} · {profile.profileType}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p
-                    id="monitor-environment-help"
-                    className="text-xs text-muted-foreground"
-                  >
-                    Loads baseUrl, region, variables, and secret references for
-                    previews and scheduled runs.
-                  </p>
-                </Field>
               </div>
 
               <div>
@@ -1253,8 +1201,6 @@ function NewMonitorPage() {
             value={definition}
             onChange={updateDefinition}
             secrets={secrets}
-            environments={environments}
-            environmentId={environmentId}
             preview={preview}
             focusTarget={focusTarget}
           />

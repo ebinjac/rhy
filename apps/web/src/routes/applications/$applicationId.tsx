@@ -19,13 +19,6 @@ import {
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { toast } from "@workspace/ui/components/sonner"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
@@ -50,7 +43,6 @@ import { z } from "zod"
 
 import { PageContainer } from "@/components/page-container"
 import { OperationalStatusBadge } from "@/components/operational-status"
-import { environmentChoices } from "@/features/applications/environment"
 import { EditField } from "@/features/applications/form-field"
 import { OpenSearchReceivers } from "@/features/applications/opensearch-receivers"
 import { DynatraceWorkspace } from "@/features/applications/dynatrace-workspace"
@@ -300,9 +292,6 @@ function ApplicationWorkspace() {
               {application.carId ? (
                 <Badge variant="outline">CAR {application.carId}</Badge>
               ) : null}
-              <Badge variant="secondary">
-                {application.environment || "Any environment"}
-              </Badge>
             </div>
             <Button
               className="shrink-0"
@@ -524,9 +513,6 @@ function ApplicationSettings({
   const [name, setName] = useState(application.name)
   const [carId, setCarId] = useState(application.carId ?? "")
   const [owner, setOwner] = useState(application.owner ?? "")
-  const [environment, setEnvironment] = useState(
-    application.environment || "production"
-  )
   const [indexPattern, setIndexPattern] = useState(
     application.defaultIndexPattern ?? ""
   )
@@ -539,7 +525,6 @@ function ApplicationSettings({
   )
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
-  const envChoices = environmentChoices(environment, application.environment)
 
   async function save() {
     setPending(true)
@@ -550,7 +535,7 @@ function ApplicationSettings({
         name: name.trim(),
         carId: carId.trim(),
         owner: owner.trim(),
-        environment: environment.trim(),
+        environment: application.environment ?? "",
         defaultIndexPattern: indexPattern.trim(),
         defaultTimeField: timeField.trim() || "@timestamp",
         maskingRules: maskingRules
@@ -617,25 +602,6 @@ function ApplicationSettings({
             value={owner}
             onChange={(event) => setOwner(event.target.value)}
           />
-        </EditField>
-        <EditField label="Environment">
-          <Select
-            value={environment}
-            onValueChange={(value) => {
-              if (value != null) setEnvironment(value)
-            }}
-          >
-            <SelectTrigger aria-label="Environment" className="w-full">
-              <SelectValue placeholder="Select environment" />
-            </SelectTrigger>
-            <SelectContent>
-              {envChoices.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </EditField>
         <EditField label="Default index pattern">
           <Input

@@ -50,7 +50,6 @@ export function DeploymentWorkflow({
   const [step, setStep] = useState(1)
   const [suiteId, setSuiteId] = useState(suites[0]?.id ?? "")
   const [applicationId, setApplicationId] = useState("")
-  const [environment, setEnvironment] = useState("production")
   const [deploymentId, setDeploymentId] = useState("")
   const [version, setVersion] = useState("")
   const [commit, setCommit] = useState("")
@@ -182,7 +181,7 @@ export function DeploymentWorkflow({
         version,
         commit,
         applicationId,
-        environment,
+        environment: "",
         notes,
         deploymentStart: new Date(deploymentStart).toISOString(),
         deploymentCompletedAt: deploymentCompletedAt
@@ -318,12 +317,6 @@ export function DeploymentWorkflow({
                       ))}
                     </SelectContent>
                   </Select>
-                </Field>
-                <Field label="Environment">
-                  <Input aria-label="Environment"
-                    value={environment}
-                    onChange={(event) => setEnvironment(event.target.value)}
-                  />
                 </Field>
                 <Field label="Deployment ID" hint="Optional">
                   <Input aria-label="Deployment ID"

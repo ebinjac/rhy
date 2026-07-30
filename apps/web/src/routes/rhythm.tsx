@@ -502,7 +502,7 @@ function CapabilityAuthoring() {
           </li>
           <li>
             <Check aria-hidden="true" />
-            Environment, secret, and workflow-variable intelligence
+            Secret and workflow-variable intelligence
           </li>
           <li>
             <Check aria-hidden="true" />

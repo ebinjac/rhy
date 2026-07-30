@@ -21,13 +21,6 @@ import {
   DropdownMenuTrigger,
 } from "@workspace/ui/components/dropdown-menu"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { Textarea } from "@workspace/ui/components/textarea"
 import {
   Table,
@@ -52,7 +45,6 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
-import { environmentChoices } from "@/features/applications/environment"
 import { FormField } from "@/features/applications/form-field"
 import type {
   DeploymentValidationRunContract,
@@ -71,11 +63,6 @@ import { PageContainer } from "@/components/page-container"
 export const Route = createFileRoute("/applications/")({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.q === "string" && search.q ? { q: search.q } : {}),
-    ...(typeof search.environment === "string" &&
-    search.environment &&
-    search.environment !== "ALL"
-      ? { environment: search.environment }
-      : {}),
     ...(positivePage(search.page) > 1
       ? { page: positivePage(search.page) }
       : {}),
@@ -111,7 +98,6 @@ function ApplicationsPage() {
   const [name, setName] = useState("")
   const [carId, setCarId] = useState("")
   const [owner, setOwner] = useState("")
-  const [environment, setEnvironment] = useState("production")
   const [index, setIndex] = useState("")
   const [alertEmails, setAlertEmails] = useState("")
   const [deleteTarget, setDeleteTarget] =
@@ -120,13 +106,11 @@ function ApplicationsPage() {
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState("")
   const query = routeSearch.q ?? ""
-  const environmentFilter = routeSearch.environment ?? "ALL"
 
   function resetForm() {
     setName("")
     setCarId("")
     setOwner("")
-    setEnvironment("production")
     setIndex("")
     setAlertEmails("")
     setMessage("")
@@ -154,7 +138,7 @@ function ApplicationsPage() {
         carId,
         name,
         owner,
-        environment,
+        environment: "",
         defaultIndexPattern: index,
         defaultTimeField: "@timestamp",
         maskingRules: [
@@ -214,18 +198,10 @@ function ApplicationsPage() {
     await router.invalidate()
   }
 
-  const envChoices = environmentChoices(
-    environment,
-    ...applications.map((item) => item.environment)
-  )
   const filteredApplications = applications.filter((application) => {
     const searchValue =
       `${application.name} ${application.carId ?? ""} ${application.owner ?? ""}`.toLowerCase()
-    return (
-      searchValue.includes(query.trim().toLowerCase()) &&
-      (environmentFilter === "ALL" ||
-        application.environment === environmentFilter)
-    )
+    return searchValue.includes(query.trim().toLowerCase())
   })
   const pageSize = 25
   const pageCount = Math.max(
@@ -246,8 +222,8 @@ function ApplicationsPage() {
             Application registry
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Maintain CAR IDs, ownership, environments, and the services that
-            make up each internal application.
+            Maintain CAR IDs, ownership, and the services that make up each
+            internal application.
           </p>
         </div>
         <Button onClick={openCreate}>
@@ -293,25 +269,6 @@ function ApplicationsPage() {
                 onChange={(event) => setOwner(event.target.value)}
                 placeholder="Commerce Platform"
               />
-            </FormField>
-            <FormField label="Environment">
-              <Select
-                value={environment}
-                onValueChange={(value) => {
-                  if (value != null) setEnvironment(value)
-                }}
-              >
-                <SelectTrigger aria-label="Environment" className="w-full">
-                  <SelectValue placeholder="Select environment" />
-                </SelectTrigger>
-                <SelectContent>
-                  {envChoices.map((option) => (
-                    <SelectItem key={option} value={option}>
-                      {option}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </FormField>
             <FormField label="Default ELF index pattern">
               <Input aria-label="Default ELF index pattern"
@@ -361,7 +318,7 @@ function ApplicationsPage() {
       {applications.length ? (
         <section
           aria-label="Application filters"
-          className="mt-7 flex flex-col gap-3 rounded-xl border p-3 sm:flex-row"
+          className="mt-7 flex flex-col gap-3 border-b pb-4 sm:flex-row"
         >
           <Input
             aria-label="Search applications"
@@ -379,36 +336,6 @@ function ApplicationsPage() {
             }}
             placeholder="Search name, CAR ID, or owner"
           />
-          <Select
-            value={environmentFilter}
-            onValueChange={(value) => {
-              if (value != null) {
-                void navigate({
-                  search: {
-                    ...routeSearch,
-                    environment: value,
-                    page: 1,
-                  },
-                  replace: true,
-                })
-              }
-            }}
-          >
-            <SelectTrigger
-              aria-label="Filter applications by environment"
-              className="w-full sm:w-52"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="ALL">All environments</SelectItem>
-              {envChoices.map((option) => (
-                <SelectItem key={option} value={option}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </section>
       ) : null}
 
@@ -417,8 +344,8 @@ function ApplicationsPage() {
       >
         <Table>
           <TableCaption className="sr-only">
-            Registered applications with CAR ID, owner, environment, service
-            count, and operational status.
+            Registered applications with CAR ID, owner, service count, and
+            operational status.
           </TableCaption>
           <TableHeader>
             <TableRow className="bg-muted/45 hover:bg-muted/45">
@@ -427,7 +354,6 @@ function ApplicationsPage() {
               <TableHead className="hidden md:table-cell" scope="col">
                 Owner
               </TableHead>
-              <TableHead scope="col">Environment</TableHead>
               <TableHead className="hidden sm:table-cell" scope="col">
                 Services
               </TableHead>
@@ -489,11 +415,6 @@ function ApplicationsPage() {
                   </TableCell>
                   <TableCell className="hidden max-w-[180px] truncate text-sm text-muted-foreground md:table-cell">
                     {application.owner || "No owner assigned"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">
-                      {application.environment || "Any environment"}
-                    </Badge>
                   </TableCell>
                   <TableCell className="hidden text-sm text-muted-foreground sm:table-cell">
                     <span className="inline-flex items-center gap-1.5">
@@ -582,7 +503,7 @@ function ApplicationsPage() {
           <div className="py-12 text-center">
             <h2 className="font-medium">No applications match</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Adjust the search or environment filter.
+              Adjust the search to find an application.
             </p>
           </div>
         ) : null}

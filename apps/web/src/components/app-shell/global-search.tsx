@@ -245,7 +245,6 @@ export function GlobalSearch() {
       })
     } else if (resource.kind === "CONFIGURATION") {
       const kinds = {
-        ENVIRONMENT: "environments",
         CERTIFICATE: "certificates",
         PROXY: "proxies",
         AUTH: "auth",
@@ -256,7 +255,7 @@ export function GlobalSearch() {
         to: "/configuration",
         search: {
           kind:
-            kinds[resource.context as keyof typeof kinds] ?? "environments",
+            kinds[resource.context as keyof typeof kinds] ?? "secrets",
         },
       })
     } else {

@@ -312,10 +312,6 @@ function RunHeader({ diagnostics }: { diagnostics: RunDiagnosticsContract }) {
             value={printable(context.agentId ?? run.agentId) || "Local worker"}
             mono
           />
-          <Meta
-            label="Environment"
-            value={printable(context.environmentId) || "Default"}
-          />
           <Meta label="Trigger source" value={run.triggerSource || "System"} />
           <Meta
             label="Started"

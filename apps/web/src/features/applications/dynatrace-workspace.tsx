@@ -40,6 +40,7 @@ import type {
   DynatraceRunContract,
   ELFApplicationContract,
 } from "@/lib/api-client/contracts"
+import { defaultEnvironmentBindingId } from "@/features/applications/default-environment-binding"
 import {
   discoverDynatraceResources,
   ensureApplicationDynatraceContext,
@@ -77,13 +78,13 @@ export function DynatraceWorkspace({
   runs: DynatraceRunContract[]
 }) {
   const router = useRouter()
-  const initialBindingId = bindings[0]?.id ?? ""
+  const initialBindingId = defaultEnvironmentBindingId(bindings)
   const [view, setView] = useState<View>(
     initialBindingId && configurations[initialBindingId]
       ? "resources"
       : "connection"
   )
-  const [bindingId, setBindingId] = useState(bindings[0]?.id ?? "")
+  const [bindingId, setBindingId] = useState(initialBindingId)
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
   const configuration = configurations[bindingId] ?? null
@@ -125,9 +126,6 @@ export function DynatraceWorkspace({
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
               Start with the Dynatrace management zone that owns this
               application, then select its Hydra services or TIMS servers.
-              Rhythm uses the application&apos;s existing{" "}
-              <strong>{application.environment || "application"}</strong>{" "}
-              context automatically.
             </p>
             <ol className="mt-5 space-y-3 text-sm">
               {[
@@ -194,9 +192,6 @@ export function DynatraceWorkspace({
       <WorkspaceHeader />
       <div className="mt-5 flex flex-col justify-between gap-3 border-y py-3 sm:flex-row sm:items-center">
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            {application.environment || binding?.environmentType || "Application"}
-          </Badge>
           <Badge variant={configuration ? "secondary" : "outline"}>
             {configuration ? "Configured" : "Setup required"}
           </Badge>
@@ -243,7 +238,6 @@ export function DynatraceWorkspace({
           configuration ? (
             <DynatraceOverview
               application={application}
-              binding={binding!}
               configuration={configuration}
               latestRun={latestRun}
             />
@@ -834,12 +828,11 @@ function ConfigurationEditor({
 }
 
 function DynatraceOverview({
-  binding,
+  application,
   configuration,
   latestRun,
 }: {
   application: ELFApplicationContract
-  binding: DynatraceEnvironmentBindingContract
   configuration: DynatraceConfigurationContract
   latestRun?: DynatraceRunContract
 }) {
@@ -882,10 +875,10 @@ function DynatraceOverview({
     <div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
-          detail={binding.environmentName}
+          detail={application.name}
           icon={DatabaseZap}
-          label="Environment"
-          value={binding.environmentType}
+          label="Application"
+          value={application.carId || "Scoped resources"}
         />
         <SummaryCard
           detail={configuration.baseUrl ?? "Approved endpoint"}

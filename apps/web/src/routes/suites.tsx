@@ -52,7 +52,6 @@ import {
 } from "lucide-react"
 
 import type {
-  DynatraceEnvironmentBindingContract,
   ValidationSuiteContract,
   ValidationSuiteRunContract,
 } from "@/lib/api-client/contracts"
@@ -67,7 +66,11 @@ import {
   updateSuite,
 } from "@/lib/api-client/suites"
 import { listELFApplications, listELFQueries } from "@/lib/api-client/elf"
-import { listApplicationEnvironments } from "@/lib/api-client/dynatrace"
+import {
+  ensureApplicationDynatraceContext,
+  listApplicationEnvironments,
+} from "@/lib/api-client/dynatrace"
+import { defaultEnvironmentBindingId } from "@/features/applications/default-environment-binding"
 import { DeploymentWorkflow } from "@/features/suites/deployment-workflow"
 import { PageContainer } from "@/components/page-container"
 
@@ -178,7 +181,6 @@ function SuitesPage() {
   const [deploymentOpen, setDeploymentOpen] = useState(false)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [environment, setEnvironment] = useState("production")
   const [parallelism, setParallelism] = useState(2)
   const [failFast, setFailFast] = useState(true)
   const [timeoutSeconds, setTimeoutSeconds] = useState(900)
@@ -243,7 +245,6 @@ function SuitesPage() {
     setEditingSuiteId(null)
     setName("")
     setDescription("")
-    setEnvironment("production")
     setParallelism(2)
     setFailFast(true)
     setTimeoutSeconds(900)
@@ -270,7 +271,6 @@ function SuitesPage() {
     setEditingSuiteId(suite.id)
     setName(suite.name)
     setDescription(suite.description ?? "")
-    setEnvironment(suite.environment || "production")
     setParallelism(suite.parallelism)
     setFailFast(suite.failFast)
     setTimeoutSeconds(suite.timeoutSeconds)
@@ -349,7 +349,10 @@ function SuitesPage() {
     const payload = {
       name,
       description,
-      environment,
+      environment: editingSuiteId
+        ? (suites.find((suite) => suite.id === editingSuiteId)?.environment ??
+          "")
+        : "",
       stages,
       parallelism,
       failFast,
@@ -550,12 +553,6 @@ function SuitesPage() {
                       required
                     />
                   </Field>
-                  <Field label="Environment">
-                    <Input
-                      value={environment}
-                      onChange={(event) => setEnvironment(event.target.value)}
-                    />
-                  </Field>
                   <Field label="Description" wide>
                     <Textarea
                       value={description}
@@ -649,7 +646,7 @@ function SuitesPage() {
                           { value: "ALWAYS", label: "Notify on every run" },
                         ]}
                       >
-                        <SelectTrigger aria-label="Environment" className="h-9 w-full">
+                        <SelectTrigger aria-label="Notification policy" className="h-9 w-full">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -721,67 +718,86 @@ function SuitesPage() {
                                 const kind = value
                                 const firstAlert = alertOptions[0]
                                 const firstApplication = applications[0]
-                                const firstEnvironment = firstApplication
-                                  ? applicationEnvironments[
-                                      firstApplication.id
-                                    ]?.[0]
-                                  : undefined
-                                updateStage(stageIndex, (current) => ({
-                                  ...current,
-                                  checks: current.checks.map((item, index) =>
-                                    index === checkIndex
-                                      ? {
-                                          ...item,
-                                          kind,
-                                          monitorId:
-                                            kind === "MONITOR"
-                                              ? (monitors[0]?.id ?? "")
-                                              : "",
-                                          queryId:
-                                            kind === "ELF_QUERY"
-                                              ? (elfQueries[0]?.id ?? "")
-                                              : "",
-                                          receiverId:
-                                            kind === "OPENSEARCH_ALERT"
-                                              ? (firstAlert?.receiverId ?? "")
-                                              : "",
-                                          externalMonitorId:
-                                            kind === "OPENSEARCH_ALERT"
-                                              ? (firstAlert?.externalMonitorId ??
-                                                "")
-                                              : "",
-                                          externalTriggerId:
-                                            kind === "OPENSEARCH_ALERT"
-                                              ? (firstAlert?.externalTriggerId ??
-                                                "")
-                                              : "",
-                                          externalMonitorName:
-                                            kind === "OPENSEARCH_ALERT"
-                                              ? (firstAlert?.externalMonitorName ??
-                                                "")
-                                              : "",
-                                          externalTriggerName:
-                                            kind === "OPENSEARCH_ALERT"
-                                              ? (firstAlert?.externalTriggerName ??
-                                                "")
-                                              : "",
-                                          applicationId:
-                                            kind ===
-                                            "DYNATRACE_INFRASTRUCTURE"
-                                              ? (firstApplication?.id ?? "")
-                                              : "",
-                                          environmentBindingId:
-                                            kind ===
-                                            "DYNATRACE_INFRASTRUCTURE"
-                                              ? (firstEnvironment?.id ?? "")
-                                              : "",
-                                          serviceIds: [],
-                                          ruleIds: [],
-                                          gateMode: "ADVISORY",
-                                          name:
-                                            kind === "MONITOR"
-                                              ? (monitors[0]?.name ?? "")
-                                              : kind === "ELF_QUERY"
+                                void (async () => {
+                                  let firstEnvironmentId =
+                                    defaultEnvironmentBindingId(
+                                      firstApplication
+                                        ? applicationEnvironments[
+                                            firstApplication.id
+                                          ]
+                                        : undefined
+                                    )
+                                  if (
+                                    kind === "DYNATRACE_INFRASTRUCTURE" &&
+                                    firstApplication &&
+                                    !firstEnvironmentId
+                                  ) {
+                                    const ensured =
+                                      await ensureApplicationDynatraceContext({
+                                        data: {
+                                          applicationId: firstApplication.id,
+                                        },
+                                      })
+                                    if (ensured.ok) {
+                                      firstEnvironmentId = ensured.binding.id
+                                    }
+                                  }
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            kind,
+                                            monitorId:
+                                              kind === "MONITOR"
+                                                ? (monitors[0]?.id ?? "")
+                                                : "",
+                                            queryId:
+                                              kind === "ELF_QUERY"
+                                                ? (elfQueries[0]?.id ?? "")
+                                                : "",
+                                            receiverId:
+                                              kind === "OPENSEARCH_ALERT"
+                                                ? (firstAlert?.receiverId ?? "")
+                                                : "",
+                                            externalMonitorId:
+                                              kind === "OPENSEARCH_ALERT"
+                                                ? (firstAlert?.externalMonitorId ??
+                                                  "")
+                                                : "",
+                                            externalTriggerId:
+                                              kind === "OPENSEARCH_ALERT"
+                                                ? (firstAlert?.externalTriggerId ??
+                                                  "")
+                                                : "",
+                                            externalMonitorName:
+                                              kind === "OPENSEARCH_ALERT"
+                                                ? (firstAlert?.externalMonitorName ??
+                                                  "")
+                                                : "",
+                                            externalTriggerName:
+                                              kind === "OPENSEARCH_ALERT"
+                                                ? (firstAlert?.externalTriggerName ??
+                                                  "")
+                                                : "",
+                                            applicationId:
+                                              kind ===
+                                              "DYNATRACE_INFRASTRUCTURE"
+                                                ? (firstApplication?.id ?? "")
+                                                : "",
+                                            environmentBindingId:
+                                              kind ===
+                                              "DYNATRACE_INFRASTRUCTURE"
+                                                ? firstEnvironmentId
+                                                : "",
+                                            serviceIds: [],
+                                            ruleIds: [],
+                                            gateMode: "ADVISORY",
+                                            name:
+                                              kind === "MONITOR"
+                                                ? (monitors[0]?.name ?? "")
+                                                : kind === "ELF_QUERY"
                                                 ? (elfQueries[0]?.name ?? "")
                                                 : kind ===
                                                     "DYNATRACE_INFRASTRUCTURE"
@@ -797,6 +813,7 @@ function SuitesPage() {
                                       : item
                                   ),
                                 }))
+                                })()
                               }}
                               items={[
                                 { value: "MONITOR", label: "Monitor" },
@@ -920,16 +937,31 @@ function SuitesPage() {
                               </Select>
                             ) : check.kind ===
                               "DYNATRACE_INFRASTRUCTURE" ? (
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                <Select
-                                  value={check.applicationId || null}
-                                  onValueChange={(value) => {
-                                    if (value == null) return
-                                    const environment =
-                                      applicationEnvironments[value]?.[0]
-                                    const application = applications.find(
-                                      (item) => item.id === value
-                                    )
+                              <Select
+                                value={check.applicationId || null}
+                                onValueChange={(value) => {
+                                  if (value == null) return
+                                  const application = applications.find(
+                                    (item) => item.id === value
+                                  )
+                                  void (async () => {
+                                    let bindingId =
+                                      defaultEnvironmentBindingId(
+                                        applicationEnvironments[value]
+                                      )
+                                    if (!bindingId) {
+                                      const ensured =
+                                        await ensureApplicationDynatraceContext(
+                                          {
+                                            data: {
+                                              applicationId: value,
+                                            },
+                                          }
+                                        )
+                                      if (ensured.ok) {
+                                        bindingId = ensured.binding.id
+                                      }
+                                    }
                                     updateStage(stageIndex, (current) => ({
                                       ...current,
                                       checks: current.checks.map(
@@ -939,78 +971,32 @@ function SuitesPage() {
                                                 ...item,
                                                 applicationId: value,
                                                 environmentBindingId:
-                                                  environment?.id ?? "",
+                                                  bindingId,
                                                 name: `${application?.name ?? "Application"} infrastructure`,
                                               }
                                             : item
                                       ),
                                     }))
-                                  }}
+                                  })()
+                                }}
+                              >
+                                <SelectTrigger
+                                  aria-label="Dynatrace application"
+                                  className="h-9 w-full min-w-0"
                                 >
-                                  <SelectTrigger
-                                    aria-label="Dynatrace application"
-                                    className="h-9 w-full min-w-0"
-                                  >
-                                    <SelectValue placeholder="Application" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {applications.map((application) => (
-                                      <SelectItem
-                                        key={application.id}
-                                        value={application.id}
-                                      >
-                                        {application.name}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                                <Select
-                                  value={check.environmentBindingId || null}
-                                  onValueChange={(value) => {
-                                    if (value == null) return
-                                    updateStage(stageIndex, (current) => ({
-                                      ...current,
-                                      checks: current.checks.map(
-                                        (item, index) =>
-                                          index === checkIndex
-                                            ? {
-                                                ...item,
-                                                environmentBindingId: value,
-                                              }
-                                            : item
-                                      ),
-                                    }))
-                                  }}
-                                >
-                                  <SelectTrigger
-                                    aria-label="Dynatrace application environment"
-                                    className="h-9 w-full min-w-0"
-                                  >
-                                    <SelectValue placeholder="Environment" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {(
-                                      applicationEnvironments[
-                                        check.applicationId
-                                      ] ?? []
-                                    ).map(
-                                      (
-                                        environment: DynatraceEnvironmentBindingContract
-                                      ) => (
-                                      <SelectItem
-                                        key={environment.id}
-                                        value={environment.id}
-                                      >
-                                        {environment.environmentName} ·{" "}
-                                        {environment.dynatraceConfigured
-                                          ? "configured"
-                                          : "setup required"}
-                                      </SelectItem>
-                                      )
-                                    )}
-                                  </SelectContent>
-                                </Select>
-                              </div>
+                                  <SelectValue placeholder="Application" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {applications.map((application) => (
+                                    <SelectItem
+                                      key={application.id}
+                                      value={application.id}
+                                    >
+                                      {application.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             ) : (
                               <Select
                                 value={
@@ -1189,9 +1175,6 @@ function SuitesPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-medium">{suite.name}</h3>
-                        <Badge variant="secondary">
-                          {suite.environment || "Any environment"}
-                        </Badge>
                       </div>
                       <p className="mt-1 text-sm text-muted-foreground">
                         {suite.description ||
