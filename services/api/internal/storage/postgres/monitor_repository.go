@@ -20,23 +20,22 @@ const monitorSelect = `
 	SELECT
 		m.id::text, m.name, m.slug, COALESCE(m.description, ''), COALESCE(m.owner_id, ''), m.tags,
 		COALESCE(m.environment_id::text, ''), m.state,
-		CASE WHEN m.state = 'ARCHIVED' OR NOT m.enabled THEN 'PAUSED' WHEN run_stats.last_status = 'SUCCESS' THEN 'HEALTHY' WHEN run_stats.last_status IN ('FAILED','TIMED_OUT') THEN 'FAILING' ELSE 'UNKNOWN' END,
+		CASE
+			WHEN m.state = 'ARCHIVED' OR NOT m.enabled THEN 'PAUSED'
+			WHEN current_health.operational_status = 'HEALTHY' THEN 'HEALTHY'
+			WHEN current_health.operational_status = 'DEGRADED' THEN 'WARNING'
+			WHEN current_health.operational_status = 'FAILING' THEN 'FAILING'
+			ELSE 'UNKNOWN'
+		END,
 		m.enabled, COALESCE(m.current_draft_revision_id::text, ''), COALESCE(m.latest_published_revision_id::text, ''),
 		COALESCE(jsonb_array_length(COALESCE(revision.definition_json->'steps', '[]'::jsonb)), 0),
 		COALESCE(schedule.schedule_type, ''), COALESCE(schedule.expression, ''), COALESCE(schedule.interval_seconds, 0),
 		m.created_by, m.updated_by, m.created_at, m.updated_at,
-		run_stats.success_rate, run_stats.last_duration_ms, run_stats.last_run_at
+		current_health.success_rate_24h, current_health.last_duration_ms, current_health.last_run_at
 	FROM monitors m
 	LEFT JOIN monitor_revisions revision ON revision.id = COALESCE(m.current_draft_revision_id, m.latest_published_revision_id)
 	LEFT JOIN monitor_schedules schedule ON schedule.monitor_id = m.id AND schedule.active = TRUE
-	LEFT JOIN LATERAL (
-		SELECT
-			100.0 * COUNT(*) FILTER (WHERE status = 'SUCCESS') / NULLIF(COUNT(*), 0) AS success_rate,
-			(ARRAY_AGG(duration_ms ORDER BY created_at DESC))[1] AS last_duration_ms,
-			MAX(created_at) AS last_run_at,
-			(ARRAY_AGG(status ORDER BY created_at DESC))[1] AS last_status
-		FROM monitor_runs WHERE monitor_id = m.id AND created_at >= NOW() - INTERVAL '24 hours'
-	) run_stats ON TRUE
+	LEFT JOIN monitor_current_health current_health ON current_health.monitor_id = m.id
 `
 
 type MonitorRepository struct {
@@ -65,6 +64,150 @@ func (r *MonitorRepository) List(ctx context.Context) ([]monitors.Monitor, error
 		return nil, fmt.Errorf("iterate monitors: %w", err)
 	}
 	return items, nil
+}
+
+func (r *MonitorRepository) Overview(ctx context.Context, limit int) (monitors.OverviewResult, error) {
+	if limit < 1 {
+		limit = 12
+	}
+	var result monitors.OverviewResult
+	if err := r.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*),
+			COUNT(*) FILTER (WHERE m.enabled),
+			COUNT(*) FILTER (
+				WHERE m.enabled AND m.state<>'ARCHIVED'
+				  AND current_health.operational_status='HEALTHY'
+			),
+			COUNT(*) FILTER (
+				WHERE m.enabled AND m.state<>'ARCHIVED'
+				  AND current_health.operational_status IN ('DEGRADED','FAILING')
+			)
+		FROM monitors m
+		LEFT JOIN monitor_current_health current_health ON current_health.monitor_id=m.id
+		WHERE m.deleted_at IS NULL`).Scan(
+		&result.Counts.Total,
+		&result.Counts.Enabled,
+		&result.Counts.Healthy,
+		&result.Counts.Attention,
+	); err != nil {
+		return monitors.OverviewResult{}, fmt.Errorf("load monitor overview counts: %w", err)
+	}
+	rows, err := r.pool.Query(ctx, monitorSelect+`
+		WHERE m.deleted_at IS NULL
+		ORDER BY
+			CASE
+				WHEN m.enabled AND current_health.operational_status='FAILING' THEN 0
+				WHEN m.enabled AND current_health.operational_status='DEGRADED' THEN 1
+				WHEN m.enabled AND COALESCE(current_health.operational_status,'NO_SIGNAL')='NO_SIGNAL' THEN 2
+				WHEN m.enabled AND current_health.operational_status='HEALTHY' THEN 3
+				ELSE 4
+			END,
+			LOWER(m.name),m.id
+		LIMIT $1`, limit)
+	if err != nil {
+		return monitors.OverviewResult{}, fmt.Errorf("load monitor overview items: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item, scanErr := scanMonitor(rows)
+		if scanErr != nil {
+			return monitors.OverviewResult{}, scanErr
+		}
+		result.Items = append(result.Items, item)
+	}
+	return result, rows.Err()
+}
+
+func (r *MonitorRepository) ListPage(ctx context.Context, query monitors.PageQuery) (monitors.PageResult, error) {
+	if query.Limit < 1 {
+		query.Limit = 50
+	}
+	if query.Limit > 200 {
+		query.Limit = 200
+	}
+	conditions := []string{"m.deleted_at IS NULL"}
+	arguments := []any{}
+	add := func(value any) string {
+		arguments = append(arguments, value)
+		return fmt.Sprintf("$%d", len(arguments))
+	}
+	if text := strings.TrimSpace(query.Query); text != "" {
+		placeholder := add("%" + strings.ToLower(text) + "%")
+		conditions = append(conditions, `(LOWER(m.name) LIKE `+placeholder+` OR LOWER(m.slug) LIKE `+placeholder+
+			` OR LOWER(COALESCE(m.description,'')) LIKE `+placeholder+
+			` OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(m.tags) tag WHERE LOWER(tag) LIKE `+placeholder+`))`)
+	}
+	if health := strings.TrimSpace(query.Health); health != "" {
+		health = strings.ToUpper(health)
+		if health == "WARNING" {
+			health = "DEGRADED"
+		}
+		if health == "UNKNOWN" {
+			health = "NO_SIGNAL"
+		}
+		conditions = append(conditions, `(CASE
+			WHEN m.state='ARCHIVED' OR NOT m.enabled THEN 'PAUSED'
+			ELSE COALESCE(current_health.operational_status,'NO_SIGNAL')
+		END)=`+add(health))
+	}
+	if applicationID := strings.TrimSpace(query.ApplicationID); applicationID != "" {
+		conditions = append(conditions, `EXISTS(
+			SELECT 1 FROM application_monitor_links link
+			WHERE link.monitor_id=m.id AND link.application_id=`+add(applicationID)+`::uuid
+		)`)
+	}
+	if query.Enabled != nil {
+		conditions = append(conditions, `m.enabled=`+add(*query.Enabled))
+	}
+	if query.AfterID != "" {
+		name := add(strings.ToLower(query.AfterName))
+		identifier := add(query.AfterID)
+		conditions = append(conditions, `(LOWER(m.name),m.id)>(`+name+`,`+identifier+`::uuid)`)
+	}
+	totalQuery := `SELECT COUNT(*) FROM monitors m
+		LEFT JOIN monitor_current_health current_health ON current_health.monitor_id=m.id
+		WHERE ` + strings.Join(conditions, " AND ")
+	// Cursor predicates must not reduce the bounded total.
+	totalConditions := conditions
+	totalArgs := arguments
+	if query.AfterID != "" {
+		totalConditions = conditions[:len(conditions)-1]
+		totalArgs = arguments[:len(arguments)-2]
+		totalQuery = `SELECT COUNT(*) FROM monitors m
+			LEFT JOIN monitor_current_health current_health ON current_health.monitor_id=m.id
+			WHERE ` + strings.Join(totalConditions, " AND ")
+	}
+	var total int
+	if err := r.pool.QueryRow(ctx, totalQuery, totalArgs...).Scan(&total); err != nil {
+		return monitors.PageResult{}, err
+	}
+	limitPlaceholder := add(query.Limit + 1)
+	rows, err := r.pool.Query(ctx, monitorSelect+` WHERE `+strings.Join(conditions, " AND ")+`
+		ORDER BY LOWER(m.name),m.id LIMIT `+limitPlaceholder, arguments...)
+	if err != nil {
+		return monitors.PageResult{}, err
+	}
+	defer rows.Close()
+	items := make([]monitors.Monitor, 0, query.Limit+1)
+	for rows.Next() {
+		item, err := scanMonitor(rows)
+		if err != nil {
+			return monitors.PageResult{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return monitors.PageResult{}, err
+	}
+	result := monitors.PageResult{Total: total}
+	if len(items) > query.Limit {
+		items = items[:query.Limit]
+		last := items[len(items)-1]
+		result.NextName, result.NextID = last.Name, last.ID
+	}
+	result.Items = items
+	return result, nil
 }
 
 func (r *MonitorRepository) Get(ctx context.Context, monitorID string) (monitors.Monitor, error) {

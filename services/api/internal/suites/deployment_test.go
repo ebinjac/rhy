@@ -47,10 +47,38 @@ func TestDeploymentDecisionIncludesStepRegressionsAndELFGates(t *testing.T) {
 }
 
 func TestDeploymentPDFIsValidAndContainsReportText(t *testing.T) {
-	report := DeploymentReport{SuiteName: "Production gate", GateDecision: "ALLOW", Recommendation: "The deployment passed validation.", BaselineFrom: time.Now().Add(-time.Hour), BaselineTo: time.Now()}
+	report := DeploymentReport{
+		SuiteName: "Production gate", GateDecision: "ALLOW",
+		Recommendation: "The deployment passed validation.",
+		BaselineFrom:   time.Now().Add(-time.Hour), BaselineTo: time.Now(),
+		BrowserMonitors: []BrowserComparison{{
+			MonitorName: "Customer portal", Classification: "NORMAL",
+			Baseline: Distribution{SampleCount: 10, P95MS: 1200},
+			Post:     Distribution{SampleCount: 5, P95MS: 1300},
+		}},
+	}
 	pdf := renderDeploymentPDF(report)
-	if !bytes.HasPrefix(pdf, []byte("%PDF-1.4")) || !bytes.Contains(pdf, []byte("Production gate")) {
+	if !bytes.HasPrefix(pdf, []byte("%PDF-1.4")) ||
+		!bytes.Contains(pdf, []byte("Production gate")) ||
+		!bytes.Contains(pdf, []byte("UI journey validation")) {
 		t.Fatalf("unexpected PDF output: %q", pdf[:min(32, len(pdf))])
+	}
+}
+
+func TestRequiredBrowserFailureBlocksDeployment(t *testing.T) {
+	browser := []BrowserComparison{{
+		MonitorName: "Customer portal", Required: true,
+		Classification: "INSUFFICIENT_HISTORY",
+		Post:           Distribution{FailureCount: 1},
+	}}
+	decision, warnings, reasons := deploymentDecisionWithBrowser(
+		nil, browser, nil, nil,
+	)
+	if decision != "BLOCK" || len(reasons) != 1 || len(warnings) != 1 {
+		t.Fatalf(
+			"required browser failure should block and retain history warning: %s %#v %#v",
+			decision, warnings, reasons,
+		)
 	}
 }
 
@@ -59,6 +87,9 @@ func TestNormalizeDeploymentReportCoercesNilCollections(t *testing.T) {
 		Monitors: []MonitorComparison{{
 			Post:  Distribution{},
 			Steps: []StepComparison{{Post: Distribution{}}},
+		}},
+		BrowserMonitors: []BrowserComparison{{
+			Post: Distribution{},
 		}},
 	}
 	normalizeDeploymentReport(&report)
@@ -78,6 +109,10 @@ func TestNormalizeDeploymentReportCoercesNilCollections(t *testing.T) {
 	}
 	if report.Monitors[0].Steps[0].Post.Series == nil {
 		t.Fatal("step post series should be non-nil")
+	}
+	if report.BrowserMonitors[0].Post.Series == nil ||
+		report.BrowserMonitors[0].Samples == nil {
+		t.Fatal("browser report collections should be non-nil")
 	}
 	if report.ELFResults == nil || report.AlertResults == nil {
 		t.Fatal("report result slices should be non-nil")

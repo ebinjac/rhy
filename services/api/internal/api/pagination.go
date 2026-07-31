@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type pageMetadata struct {
@@ -63,6 +64,57 @@ func decodeCursor(cursor string) (int, error) {
 		return 0, errors.New("invalid cursor")
 	}
 	return offset, nil
+}
+
+func encodeTimeIDCursor(kind string, timestamp time.Time, identifier string) string {
+	value := kind + ":" + timestamp.UTC().Format(time.RFC3339Nano) + "\x00" + identifier
+	return base64.RawURLEncoding.EncodeToString([]byte(value))
+}
+
+func decodeTimeIDCursor(cursor, kind string) (time.Time, string, error) {
+	if cursor == "" {
+		return time.Time{}, "", nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, "", err
+	}
+	value := strings.TrimPrefix(string(decoded), kind+":")
+	if value == string(decoded) {
+		return time.Time{}, "", errors.New("invalid cursor")
+	}
+	parts := strings.Split(value, "\x00")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return time.Time{}, "", errors.New("invalid cursor")
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, "", errors.New("invalid cursor")
+	}
+	return timestamp, parts[1], nil
+}
+
+func encodeSequenceCursor(kind string, sequence int) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(kind + ":" + strconv.Itoa(sequence)))
+}
+
+func decodeSequenceCursor(cursor, kind string) (int, error) {
+	if cursor == "" {
+		return 0, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return 0, err
+	}
+	value := strings.TrimPrefix(string(decoded), kind+":")
+	if value == string(decoded) {
+		return 0, errors.New("invalid cursor")
+	}
+	sequence, err := strconv.Atoi(value)
+	if err != nil || sequence < 0 {
+		return 0, errors.New("invalid cursor")
+	}
+	return sequence, nil
 }
 
 func (s *server) paginatedMeta(r *http.Request, page *pageMetadata) responseMeta {

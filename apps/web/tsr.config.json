@@ -1,0 +1,12 @@
+{
+  "autoCodeSplitting": true,
+  "codeSplittingOptions": {
+    "defaultBehavior": [
+      ["loader"],
+      ["component"],
+      ["pendingComponent"],
+      ["errorComponent"],
+      ["notFoundComponent"]
+    ]
+  }
+}

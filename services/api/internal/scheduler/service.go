@@ -2,9 +2,9 @@ package scheduler
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"strings"
 	"time"
@@ -38,16 +38,27 @@ type ValidationError struct{ Message string }
 func (e ValidationError) Error() string { return e.Message }
 
 type Service struct {
-	pool     *pgxpool.Pool
-	redis    *redis.Client
-	monitors *monitors.Service
-	runs     *runs.Service
-	logger   *slog.Logger
-	parser   cronlib.Parser
+	pool         *pgxpool.Pool
+	monitors     *monitors.Service
+	runs         *runs.Service
+	logger       *slog.Logger
+	parser       cronlib.Parser
+	batchSize    int
+	pollInterval time.Duration
 }
 
 func New(pool *pgxpool.Pool, redisClient *redis.Client, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger) *Service {
-	return &Service{pool: pool, redis: redisClient, monitors: monitorService, runs: runService, logger: logger, parser: cronlib.NewParser(cronlib.Minute | cronlib.Hour | cronlib.Dom | cronlib.Month | cronlib.Dow)}
+	return NewWithOptions(pool, redisClient, monitorService, runService, logger, 1000, 500*time.Millisecond)
+}
+
+func NewWithOptions(pool *pgxpool.Pool, _ *redis.Client, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger, batchSize int, pollInterval time.Duration) *Service {
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+	if pollInterval <= 0 {
+		pollInterval = 500 * time.Millisecond
+	}
+	return &Service{pool: pool, monitors: monitorService, runs: runService, logger: logger, parser: cronlib.NewParser(cronlib.Minute | cronlib.Hour | cronlib.Dom | cronlib.Month | cronlib.Dow), batchSize: batchSize, pollInterval: pollInterval}
 }
 
 func (s *Service) Configure(ctx context.Context, monitorID string, input Config) (Config, error) {
@@ -85,7 +96,7 @@ func (s *Service) Configure(ctx context.Context, monitorID string, input Config)
 	input.Active = monitor.Enabled && input.Type != "MANUAL"
 	now := time.Now().UTC()
 	if input.Active {
-		next, err := s.next(input, now)
+		next, err := s.next(input, now, true)
 		if err != nil {
 			return Config{}, err
 		}
@@ -123,6 +134,9 @@ func (s *Service) validate(config Config) error {
 	if config.ConcurrencyPolicy != "SKIP_IF_RUNNING" && config.ConcurrencyPolicy != "QUEUE" && config.ConcurrencyPolicy != "ALLOW" {
 		return ValidationError{Message: "Concurrency policy is invalid."}
 	}
+	if config.MissedRunPolicy != "SKIP" && config.MissedRunPolicy != "CATCH_UP" {
+		return ValidationError{Message: "Missed-run policy must be SKIP or CATCH_UP."}
+	}
 	switch config.Type {
 	case "MANUAL":
 		return nil
@@ -140,36 +154,32 @@ func (s *Service) validate(config Config) error {
 	return nil
 }
 
-func (s *Service) next(config Config, after time.Time) (time.Time, error) {
+func (s *Service) next(config Config, after time.Time, initial bool) (time.Time, error) {
 	location, _ := time.LoadLocation(config.Timezone)
 	switch config.Type {
 	case "INTERVAL":
-		return after.Add(time.Duration(config.IntervalSeconds) * time.Second), nil
+		next := after.Add(time.Duration(config.IntervalSeconds) * time.Second)
+		if initial {
+			next = next.Add(deterministicJitter(config.ID, config.JitterSeconds))
+		}
+		return next, nil
 	case "CRON":
 		schedule, err := s.parser.Parse(config.Expression)
 		if err != nil {
 			return time.Time{}, err
 		}
-		return schedule.Next(after.In(location)).UTC(), nil
+		return schedule.Next(after.In(location)).UTC().Add(deterministicJitter(config.ID, config.JitterSeconds)), nil
 	default:
 		return time.Time{}, ValidationError{Message: "Manual schedules have no next run."}
 	}
 }
 
-type job struct {
-	MonitorID         string    `json:"monitorId"`
-	ScheduleID        string    `json:"scheduleId"`
-	ConcurrencyPolicy string    `json:"concurrencyPolicy"`
-	DueAt             time.Time `json:"dueAt"`
-}
-
 func (s *Service) Start(ctx context.Context) {
 	go s.poll(ctx)
-	go s.consume(ctx)
 }
 
 func (s *Service) poll(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -189,7 +199,7 @@ func (s *Service) enqueueDue(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rows, err := tx.Query(ctx, `SELECT s.id::text, s.monitor_id::text, s.schedule_type, COALESCE(s.expression,''), COALESCE(s.interval_seconds,0), s.timezone, s.jitter_seconds, s.concurrency_policy, s.missed_run_policy, s.active, s.next_run_at FROM monitor_schedules s JOIN monitors m ON m.id=s.monitor_id WHERE s.active=TRUE AND s.next_run_at<=NOW() AND m.enabled=TRUE AND m.deleted_at IS NULL ORDER BY s.next_run_at FOR UPDATE OF s SKIP LOCKED LIMIT 25`)
+	rows, err := tx.Query(ctx, `SELECT s.id::text, s.monitor_id::text, s.schedule_type, COALESCE(s.expression,''), COALESCE(s.interval_seconds,0), s.timezone, s.jitter_seconds, s.concurrency_policy, s.missed_run_policy, s.active, s.next_run_at FROM monitor_schedules s JOIN monitors m ON m.id=s.monitor_id WHERE s.active=TRUE AND s.next_run_at<=NOW() AND m.enabled=TRUE AND m.deleted_at IS NULL ORDER BY s.next_run_at FOR UPDATE OF s SKIP LOCKED LIMIT $1`, s.batchSize)
 	if err != nil {
 		return err
 	}
@@ -206,18 +216,16 @@ func (s *Service) enqueueDue(ctx context.Context) error {
 		if item.NextRunAt == nil {
 			continue
 		}
-		payload, _ := json.Marshal(job{MonitorID: item.MonitorID, ScheduleID: item.ID, ConcurrencyPolicy: item.ConcurrencyPolicy, DueAt: *item.NextRunAt})
-		key := fmt.Sprintf("rhythm:schedule:%s:%d", item.ID, item.NextRunAt.Unix())
-		claimed, err := s.redis.SetNX(ctx, key, "queued", 7*24*time.Hour).Result()
-		if err != nil {
-			return err
+		if _, err := s.runs.StartScheduled(ctx, item.MonitorID, item.ID, item.ConcurrencyPolicy, *item.NextRunAt); err != nil && !errors.Is(err, runs.ErrAlreadyQueued) {
+			return fmt.Errorf("queue scheduled run: %w", err)
 		}
-		if claimed {
-			if err := s.redis.LPush(ctx, "rhythm:runs:due", payload).Err(); err != nil {
-				return err
-			}
+		nextFrom := *item.NextRunAt
+		initial := false
+		if item.MissedRunPolicy == "SKIP" && time.Since(*item.NextRunAt) > s.pollInterval {
+			nextFrom = time.Now().UTC()
+			initial = item.Type == "INTERVAL"
 		}
-		next, err := s.next(item, *item.NextRunAt)
+		next, err := s.next(item, nextFrom, initial)
 		if err != nil {
 			return err
 		}
@@ -228,74 +236,11 @@ func (s *Service) enqueueDue(ctx context.Context) error {
 	return tx.Commit(ctx)
 }
 
-func (s *Service) consume(ctx context.Context) {
-	for ctx.Err() == nil {
-		result, err := s.redis.BRPop(ctx, 2*time.Second, "rhythm:runs:due").Result()
-		if err == redis.Nil || errors.Is(err, context.Canceled) {
-			continue
-		}
-		if err != nil {
-			s.logger.Error("schedule dequeue failed", "error", err)
-			continue
-		}
-		var item job
-		if err := json.Unmarshal([]byte(result[1]), &item); err != nil {
-			s.logger.Error("invalid scheduled job", "error", err)
-			continue
-		}
-		release, acquired, err := s.acquireRunLock(ctx, item)
-		if err != nil {
-			s.logger.Error("scheduled concurrency lock failed", "monitorId", item.MonitorID, "scheduleId", item.ScheduleID, "error", err)
-			continue
-		}
-		if !acquired {
-			s.logger.Info("scheduled run skipped because monitor is already running", "monitorId", item.MonitorID, "scheduleId", item.ScheduleID, "policy", item.ConcurrencyPolicy)
-			continue
-		}
-		if _, err := s.runs.RunScheduled(ctx, item.MonitorID, item.ScheduleID); err != nil {
-			s.logger.Error("scheduled run failed", "monitorId", item.MonitorID, "scheduleId", item.ScheduleID, "error", err)
-		}
-		if release != nil {
-			release()
-			release = nil
-		}
+func deterministicJitter(scheduleID string, maximumSeconds int) time.Duration {
+	if maximumSeconds <= 0 {
+		return 0
 	}
-}
-
-func (s *Service) acquireRunLock(ctx context.Context, item job) (func(), bool, error) {
-	policy := strings.ToUpper(strings.TrimSpace(item.ConcurrencyPolicy))
-	if policy == "" {
-		policy = "SKIP_IF_RUNNING"
-	}
-	if policy == "ALLOW" {
-		return nil, true, nil
-	}
-	lockKey := "rhythm:monitor-running:" + item.MonitorID
-	token, err := id.NewUUID()
-	if err != nil {
-		return nil, false, err
-	}
-	for {
-		acquired, err := s.redis.SetNX(ctx, lockKey, token, 24*time.Hour).Result()
-		if err != nil {
-			return nil, false, err
-		}
-		if acquired {
-			release := func() {
-				const unlock = `if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`
-				if err := s.redis.Eval(context.Background(), unlock, []string{lockKey}, token).Err(); err != nil {
-					s.logger.Error("scheduled concurrency unlock failed", "monitorId", item.MonitorID, "error", err)
-				}
-			}
-			return release, true, nil
-		}
-		if policy != "QUEUE" {
-			return nil, false, nil
-		}
-		select {
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		case <-time.After(time.Second):
-		}
-	}
+	hash := fnv.New32a()
+	_, _ = hash.Write([]byte(scheduleID))
+	return time.Duration(hash.Sum32()%uint32(maximumSeconds+1)) * time.Second
 }

@@ -15,6 +15,7 @@ import {
   Check,
   CircleAlert,
   LoaderCircle,
+  MonitorCheck,
   Webhook,
 } from "lucide-react"
 
@@ -98,15 +99,16 @@ export function AlertsInbox() {
 
   useEffect(() => {
     void loadAlerts("mount")
-    const timer = window.setInterval(() => {
-      void loadAlerts("poll")
-    }, POLL_MS)
-    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
     if (!open) return
     void loadAlerts("open")
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return
+      void loadAlerts("poll")
+    }, POLL_MS)
+    return () => window.clearInterval(timer)
   }, [open])
 
   const preview = alerts.slice(0, PREVIEW_LIMIT)
@@ -202,6 +204,8 @@ export function AlertsInbox() {
             <ul className="divide-y">
               {preview.map((alert) => {
                 const external = alert.sourceType === "OPENSEARCH_ALERTING"
+                const browser =
+                  alert.sourceType === "RHYTHM_BROWSER_MONITOR"
                 return (
                   <li key={alert.id}>
                     <button
@@ -220,6 +224,8 @@ export function AlertsInbox() {
                       >
                         {external ? (
                           <Webhook className="size-3.5" />
+                        ) : browser ? (
+                          <MonitorCheck className="size-3.5" />
                         ) : (
                           <CircleAlert className="size-3.5" />
                         )}
@@ -246,9 +252,13 @@ export function AlertsInbox() {
                             )}
                           </span>
                         </span>
-                        {(alert.monitorName || alert.applicationName) && (
+                        {(alert.monitorName ||
+                          alert.browserMonitorName ||
+                          alert.applicationName) && (
                           <span className="mt-1 block truncate text-xs text-muted-foreground">
-                            {alert.monitorName || alert.applicationName}
+                            {alert.monitorName ||
+                              alert.browserMonitorName ||
+                              alert.applicationName}
                           </span>
                         )}
                       </span>

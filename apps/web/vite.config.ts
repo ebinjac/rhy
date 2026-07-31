@@ -23,7 +23,27 @@ const config = defineConfig({
       "fumadocs-ui",
     ],
   },
-  plugins: [mdx(), devtools(), tailwindcss(), tanstackStart(), viteReact()],
+  plugins: [
+    mdx(),
+    devtools(),
+    tailwindcss(),
+    // Start always registers the route code splitter; tsr.config.json
+    // enables autoCodeSplitting for the generator/config merge path.
+    tanstackStart({
+      router: {
+        codeSplittingOptions: {
+          defaultBehavior: [
+            ["loader"],
+            ["component"],
+            ["pendingComponent"],
+            ["errorComponent"],
+            ["notFoundComponent"],
+          ],
+        },
+      },
+    }),
+    viteReact(),
+  ],
 })
 
 export default config

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
@@ -62,17 +63,31 @@ func (s *server) listDeploymentRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := suites.DeploymentFilter{SuiteID: r.URL.Query().Get("suiteId"), ApplicationID: r.URL.Query().Get("applicationId"), Environment: r.URL.Query().Get("environment"), Status: r.URL.Query().Get("status"), Decision: r.URL.Query().Get("decision")}
-	runs, err := s.suites.ListDeploymentRuns(r.Context(), filter)
+	limit := 25
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "limit must be between 1 and 200", nil)
+			return
+		}
+		limit = parsed
+	}
+	afterCreatedAt, afterID, cursorErr := decodeTimeIDCursor(strings.TrimSpace(r.URL.Query().Get("cursor")), "deployment")
+	if cursorErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "cursor is invalid or has expired", nil)
+		return
+	}
+	page, err := s.suites.ListDeploymentRunsPage(r.Context(), filter, limit, afterCreatedAt, afterID)
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list deployment validations.", nil)
 		return
 	}
-	pageItems, page, pageErr := paginate(r, runs, 50, 200)
-	if pageErr != nil {
-		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
-		return
+	metadata := &pageMetadata{Limit: limit, Total: page.Total}
+	if page.HasMore && len(page.Items) > 0 {
+		last := page.Items[len(page.Items)-1]
+		metadata.NextCursor = encodeTimeIDCursor("deployment", last.CreatedAt, last.ID)
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: page.Items, Meta: s.paginatedMeta(r, metadata)})
 }
 func (s *server) getDeploymentRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.suites.GetDeploymentRun(r.Context(), r.PathValue("deploymentRunId"))

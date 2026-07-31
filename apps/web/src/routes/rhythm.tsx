@@ -18,7 +18,7 @@ import {
 } from "lucide-react"
 
 import { ThemeToggle } from "@/components/app-shell/theme-toggle"
-import "@/styles/rhythm-marketing.css"
+import marketingStylesheetUrl from "@/styles/rhythm-marketing.css?url"
 
 export const Route = createFileRoute("/rhythm")({
   head: () => ({
@@ -41,7 +41,10 @@ export const Route = createFileRoute("/rhythm")({
           "Synthetic monitoring, incident-grade diagnostics, and before-and-after deployment validation for complete business API journeys.",
       },
     ],
-    links: [{ rel: "canonical", href: "/rhythm" }],
+    links: [
+      { rel: "canonical", href: "/rhythm" },
+      { rel: "stylesheet", href: marketingStylesheetUrl },
+    ],
   }),
   component: RhythmMarketingPage,
 })

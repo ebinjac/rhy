@@ -46,11 +46,7 @@ import {
 } from "lucide-react"
 
 import { FormField } from "@/features/applications/form-field"
-import type {
-  DeploymentValidationRunContract,
-  ELFApplicationContract,
-} from "@/lib/api-client/contracts"
-import { listDeploymentValidations } from "@/lib/api-client/suites"
+import type { ELFApplicationContract } from "@/lib/api-client/contracts"
 import {
   deleteELFApplication,
   listELFApplications,
@@ -59,6 +55,7 @@ import {
 } from "@/lib/api-client/elf"
 import { listUnifiedAlerts } from "@/lib/api-client/opensearch-alerts"
 import { PageContainer } from "@/components/page-container"
+import { PageEmptyState } from "@/components/page-empty-state"
 
 export const Route = createFileRoute("/applications/")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -68,7 +65,7 @@ export const Route = createFileRoute("/applications/")({
       : {}),
   }),
   loader: async () => {
-    const [applications, alerts, deploymentRuns, queries] = await Promise.all([
+    const [applications, alerts, queries] = await Promise.all([
       listELFApplications(),
       listUnifiedAlerts({
         data: {
@@ -79,16 +76,15 @@ export const Route = createFileRoute("/applications/")({
           severity: "",
         },
       }),
-      listDeploymentValidations(),
       listELFQueries(),
     ])
-    return { applications, alerts, deploymentRuns, queries }
+    return { applications, alerts, queries }
   },
   component: ApplicationsPage,
 })
 
 function ApplicationsPage() {
-  const { applications, alerts, deploymentRuns, queries } = Route.useLoaderData()
+  const { applications, alerts, queries } = Route.useLoaderData()
   const routeSearch = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
@@ -370,9 +366,6 @@ function ApplicationsPage() {
               const appAlerts = alerts.filter(
                 (alert) => alert.applicationId === application.id
               )
-              const appRuns = deploymentRuns.filter(
-                (run) => run.deployment.applicationId === application.id
-              )
               const activeAlertCount = appAlerts.filter(
                 (alert) => alert.state === "OPEN" || alert.state === "ERROR"
               ).length
@@ -431,7 +424,6 @@ function ApplicationsPage() {
                           (item) => item.applicationId === application.id
                         )
                       }
-                      latestRun={appRuns[0]}
                     />
                   </TableCell>
                   <TableCell className="text-right">
@@ -485,27 +477,23 @@ function ApplicationsPage() {
           </TableBody>
         </Table>
         {!applications.length ? (
-          <div className="py-16 text-center">
-            <Layers3
-              aria-hidden="true"
-              className="mx-auto size-7 text-muted-foreground"
-            />
-            <h2 className="mt-3 font-medium">No applications registered</h2>
-            <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-              Create an application first, then add the deployable services that
-              belong to it.
-            </p>
-            <Button className="mt-4" onClick={openCreate}>
-              <Plus /> New application
-            </Button>
-          </div>
+          <PageEmptyState
+            className="mt-0 border-0"
+            icon={<Layers3 aria-hidden="true" />}
+            title="No applications registered"
+            description="Create an application first, then add the deployable services that belong to it."
+            action={
+              <Button onClick={openCreate}>
+                <Plus /> New application
+              </Button>
+            }
+          />
         ) : !visibleApplications.length ? (
-          <div className="py-12 text-center">
-            <h2 className="font-medium">No applications match</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Adjust the search to find an application.
-            </p>
-          </div>
+          <PageEmptyState
+            className="mt-0 border-0"
+            title="No applications match"
+            description="Adjust the search to find an application."
+          />
         ) : null}
       </div>
       {applications.length ? (
@@ -614,34 +602,15 @@ function positivePage(value: unknown) {
 function ApplicationStatus({
   activeAlertCount,
   monitored,
-  latestRun,
 }: {
   activeAlertCount: number
   monitored: boolean
-  latestRun?: DeploymentValidationRunContract
 }) {
   if (activeAlertCount > 0) {
     return (
       <Badge className="bg-destructive/10 text-destructive" variant="secondary">
         <BellRing className="size-3" />
         {activeAlertCount} active alert{activeAlertCount === 1 ? "" : "s"}
-      </Badge>
-    )
-  }
-  if (latestRun?.gateDecision === "BLOCK") {
-    return (
-      <Badge className="bg-destructive/10 text-destructive" variant="secondary">
-        Deployment blocked
-      </Badge>
-    )
-  }
-  if (latestRun?.gateDecision === "ALLOW_WITH_WARNINGS") {
-    return (
-      <Badge
-        className="bg-warning-soft text-warning-foreground"
-        variant="secondary"
-      >
-        Deployment warnings
       </Badge>
     )
   }

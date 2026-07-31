@@ -215,7 +215,16 @@ func (s *Service) RunScheduled(ctx context.Context, monitorID, scheduleID string
 }
 
 func (s *Service) Start(ctx context.Context, monitorID, actorID, mode string) (Run, error) {
-	monitor, revision, _, triggerType, err := s.resolveExecution(ctx, monitorID, mode, "")
+	return s.start(ctx, monitorID, actorID, mode, "", "", "")
+}
+
+func (s *Service) StartScheduled(ctx context.Context, monitorID, scheduleID, concurrencyPolicy string, dueAt time.Time) (Run, error) {
+	deduplication := fmt.Sprintf("schedule:%s:%d", scheduleID, dueAt.UTC().Unix())
+	return s.start(ctx, monitorID, scheduleID, "published", "SCHEDULED", scheduleID, deduplication, concurrencyPolicy)
+}
+
+func (s *Service) start(ctx context.Context, monitorID, actorID, mode, triggerOverride, scheduleID, deduplication string, concurrencyPolicy ...string) (Run, error) {
+	monitor, revision, definition, triggerType, err := s.resolveExecution(ctx, monitorID, mode, triggerOverride)
 	if err != nil {
 		return Run{}, err
 	}
@@ -226,6 +235,20 @@ func (s *Service) Start(ctx context.Context, monitorID, actorID, mode string) (R
 	queuedAt := s.now()
 	run := Run{ID: runID, MonitorID: monitorID, RevisionID: revision.ID, Status: StatusQueued, TriggerType: triggerType, TriggerSource: actorID, CreatedAt: queuedAt, Steps: []StepRun{}, ExecutionContext: map[string]any{"monitorName": monitor.Name, "environmentId": monitor.EnvironmentID, "revisionId": revision.ID, "revisionNumber": revision.RevisionNumber}}
 	appendRunEvent(&run, "RUN_QUEUED", StatusQueued, "Run accepted and queued for execution.", "", nil)
+	request := QueueRequest{
+		MonitorID: monitorID, ActorID: actorID, Mode: mode, TriggerType: triggerOverride,
+		ScheduleID: scheduleID, Deduplication: deduplication, QueuedAt: queuedAt,
+		RecoverySafe: definitionRecoverySafe(definition),
+	}
+	if len(concurrencyPolicy) > 0 {
+		request.ConcurrencyPolicy = concurrencyPolicy[0]
+	}
+	if durable, ok := s.repository.(DurableRepository); ok {
+		if err := durable.Enqueue(context.WithoutCancel(ctx), run, request); err != nil {
+			return Run{}, err
+		}
+		return run, nil
+	}
 	if err := s.repository.Save(context.WithoutCancel(ctx), run); err != nil {
 		return Run{}, err
 	}
@@ -250,6 +273,37 @@ func (s *Service) Start(ctx context.Context, monitorID, actorID, mode string) (R
 	return run, nil
 }
 
+func definitionRecoverySafe(definition Definition) bool {
+	if strings.TrimSpace(definition.Scripts.PreRequest.Code) != "" {
+		return false
+	}
+	for _, step := range definition.Steps {
+		if !step.Enabled || step.Type != "HTTP_REQUEST" {
+			continue
+		}
+		request := step.Request
+		if strings.TrimSpace(request.PreRequestScript.Code) != "" ||
+			strings.TrimSpace(request.TestScript.Code) != "" {
+			return false
+		}
+		switch strings.ToUpper(strings.TrimSpace(request.Method)) {
+		case "GET", "HEAD", "OPTIONS", "PUT", "DELETE":
+			continue
+		}
+		idempotencyKey := ""
+		for _, header := range request.Headers {
+			if header.Enabled && strings.EqualFold(strings.TrimSpace(header.Key), "Idempotency-Key") {
+				idempotencyKey = strings.TrimSpace(header.Value)
+				break
+			}
+		}
+		if idempotencyKey == "" || strings.Contains(idempotencyKey, "{{") {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) Cancel(ctx context.Context, runID string) (Run, error) {
 	run, err := s.repository.Get(ctx, runID)
 	if err != nil {
@@ -257,6 +311,15 @@ func (s *Service) Cancel(ctx context.Context, runID string) (Run, error) {
 	}
 	if isTerminalStatus(run.Status) {
 		return run, errors.New("run is already complete")
+	}
+	if durable, ok := s.repository.(DurableRepository); ok {
+		requested, requestErr := durable.RequestCancel(ctx, runID)
+		if requestErr != nil {
+			return run, requestErr
+		}
+		if requested {
+			return run, nil
+		}
 	}
 	s.cancelMu.Lock()
 	cancel := s.cancels[runID]
@@ -266,6 +329,21 @@ func (s *Service) Cancel(ctx context.Context, runID string) (Run, error) {
 	}
 	cancel()
 	return run, nil
+}
+
+// ExecuteQueued is the durable worker entry point. It intentionally accepts
+// the stable run ID allocated by the API or scheduler so Redis redelivery
+// cannot create a duplicate execution.
+func (s *Service) ExecuteQueued(ctx context.Context, runID string, request QueueRequest) (Run, error) {
+	queuedAt := request.QueuedAt
+	if queuedAt.IsZero() {
+		if queued, err := s.repository.Get(ctx, runID); err == nil {
+			queuedAt = queued.CreatedAt
+		} else {
+			queuedAt = s.now()
+		}
+	}
+	return s.run(ctx, request.MonitorID, request.ActorID, request.Mode, request.TriggerType, runID, &queuedAt)
 }
 
 func isTerminalStatus(status Status) bool {
@@ -278,10 +356,6 @@ func isTerminalStatus(status Status) bool {
 
 func (s *Service) resolveExecution(ctx context.Context, monitorID, mode, triggerOverride string) (monitors.Monitor, monitors.Revision, Definition, string, error) {
 	monitor, err := s.monitors.Get(ctx, monitorID)
-	if err != nil {
-		return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", err
-	}
-	revisions, err := s.monitors.ListRevisions(ctx, monitorID)
 	if err != nil {
 		return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", err
 	}
@@ -299,15 +373,15 @@ func (s *Service) resolveExecution(ctx context.Context, monitorID, mode, trigger
 	if triggerOverride != "" {
 		triggerType = triggerOverride
 	}
-	var revision monitors.Revision
-	for _, candidate := range revisions {
-		if candidate.ID == revisionID {
-			revision = candidate
-			break
-		}
-	}
-	if revision.ID == "" {
+	if revisionID == "" {
 		return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", errors.New("monitor has no executable draft revision")
+	}
+	revision, err := s.monitors.GetRevision(ctx, monitorID, revisionID)
+	if err != nil {
+		if errors.Is(err, monitors.ErrNotFound) {
+			return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", errors.New("monitor has no executable revision")
+		}
+		return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", err
 	}
 	encoded, err := json.Marshal(revision.Definition)
 	if err != nil {
@@ -355,7 +429,21 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		appendRunEvent(&run, "RUN_QUEUED", StatusQueued, "Run accepted and queued for execution.", "", map[string]any{"queueDelayMs": queueDelay})
 	}
 	appendRunEvent(&run, "RUN_STARTED", StatusRunning, "Execution started.", "", map[string]any{"stepCount": len(definition.Steps)})
-	if err := s.repository.Save(context.WithoutCancel(ctx), run); err != nil {
+	persistedSteps, persistedEvents := 0, 0
+	saveProgress := func() error {
+		saveContext := context.WithoutCancel(ctx)
+		if repository, ok := s.repository.(IncrementalRepository); ok {
+			if err := repository.SaveDelta(saveContext, run, run.Steps[persistedSteps:], run.Events[persistedEvents:]); err != nil {
+				return err
+			}
+		} else if err := s.repository.Save(saveContext, run); err != nil {
+			return err
+		}
+		persistedSteps = len(run.Steps)
+		persistedEvents = len(run.Events)
+		return nil
+	}
+	if err := saveProgress(); err != nil {
 		return Run{}, err
 	}
 	jar, err := cookiejar.New(nil)
@@ -370,7 +458,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		now := s.now()
 		run.EndedAt = &now
 		run.DurationMS = now.Sub(started).Milliseconds()
-		_ = s.repository.Save(context.WithoutCancel(ctx), run)
+		_ = saveProgress()
 		return run, nil
 	}
 	if environment.ID != "" {
@@ -386,7 +474,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 		now := s.now()
 		run.EndedAt = &now
 		run.DurationMS = now.Sub(started).Milliseconds()
-		_ = s.repository.Save(context.WithoutCancel(ctx), run)
+		_ = saveProgress()
 		return run, nil
 	}
 	if strings.TrimSpace(definition.Scripts.PreRequest.Code) != "" {
@@ -400,7 +488,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			appendRunEvent(&run, "PRE_REQUEST_SCRIPT_COMPLETED", StatusSuccess, "Monitor setup script completed.", "", map[string]any{"scope": "monitor", "durationMs": setupResult.DurationMS, "tests": len(setupResult.Tests), "changes": len(setupResult.VariableChanges), "auxiliaryRequests": len(setupResult.AuxiliaryRequests)})
 		}
 		appendAuxiliaryRequestEvents(&run, nil, "monitor", setupResult.AuxiliaryRequests)
-		_ = s.repository.Save(context.WithoutCancel(ctx), run)
+		_ = saveProgress()
 	}
 	executedSteps := 0
 	for index := 0; index < len(definition.Steps); index++ {
@@ -540,7 +628,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 			run.Status, run.FailureCategory, run.FailureReason, run.FailedStepID = stepResult.Status, stepResult.FailureCategory, stepResult.ErrorMessage, step.ID
 			break
 		}
-		if err := s.repository.Save(context.WithoutCancel(ctx), run); err != nil {
+		if err := saveProgress(); err != nil {
 			return Run{}, err
 		}
 		execution := scripts.Execution{}
@@ -578,7 +666,7 @@ func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOver
 	ended := s.now()
 	run.EndedAt, run.DurationMS = &ended, ended.Sub(started).Milliseconds()
 	appendRunEvent(&run, "RUN_COMPLETED", run.Status, "Execution reached a terminal state.", run.FailureCategory, map[string]any{"durationMs": run.DurationMS, "status": run.Status})
-	if err := s.repository.Save(context.WithoutCancel(ctx), run); err != nil {
+	if err := saveProgress(); err != nil {
 		return Run{}, err
 	}
 	return run, nil
@@ -739,4 +827,40 @@ func (s *Service) ListRecent(ctx context.Context, limit int) ([]Run, error) {
 
 func (s *Service) Get(ctx context.Context, runID string) (Run, error) {
 	return s.repository.Get(ctx, runID)
+}
+
+func (s *Service) GetSummary(ctx context.Context, runID string) (Run, error) {
+	if repository, ok := s.repository.(SummaryRepository); ok {
+		return repository.GetSummary(ctx, runID)
+	}
+	run, err := s.repository.Get(ctx, runID)
+	if err != nil {
+		return Run{}, err
+	}
+	run.Steps = nil
+	run.Events = nil
+	return run, nil
+}
+
+func (s *Service) ListEvents(ctx context.Context, runID string, afterSequence, limit int) ([]RunEvent, int, bool, error) {
+	if repository, ok := s.repository.(EventRepository); ok {
+		return repository.ListEvents(ctx, runID, afterSequence, limit)
+	}
+	run, err := s.repository.Get(ctx, runID)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	total := len(run.Events)
+	start := 0
+	if afterSequence > 0 {
+		start = total
+		for index, event := range run.Events {
+			if event.Sequence > afterSequence {
+				start = index
+				break
+			}
+		}
+	}
+	end := min(total, start+limit)
+	return run.Events[start:end], total, end < total, nil
 }

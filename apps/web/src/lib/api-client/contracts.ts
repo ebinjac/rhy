@@ -80,9 +80,12 @@ export type ScheduleContract = {
 
 export type AlertContract = {
   id: string
-  sourceType: "RHYTHM_MONITOR" | "OPENSEARCH_ALERTING"
+  sourceType:
+    "RHYTHM_MONITOR" | "RHYTHM_BROWSER_MONITOR" | "OPENSEARCH_ALERTING"
   monitorId?: string
   monitorName?: string
+  browserMonitorId?: string
+  browserMonitorName?: string
   applicationId?: string
   applicationName?: string
   applicationCarId?: string
@@ -225,6 +228,7 @@ export type SearchResourceHit = {
   kind:
     | "APPLICATION"
     | "SERVICE"
+    | "BROWSER_MONITOR"
     | "ELF_QUERY"
     | "ELF_RUN"
     | "SUITE"
@@ -277,10 +281,14 @@ export type ValidationSuiteContract = {
       id: string
       kind:
         | "MONITOR"
+        | "BROWSER_MONITOR"
         | "ELF_QUERY"
         | "OPENSEARCH_ALERT"
         | "DYNATRACE_INFRASTRUCTURE"
       monitorId?: string
+      browserMonitorId?: string
+      checkpointIds?: string[]
+      performanceBudgetIds?: string[]
       queryId?: string
       receiverId?: string
       externalMonitorId?: string
@@ -308,7 +316,9 @@ export type ValidationSuiteRunContract = {
   id: string
   suiteId: string
   status:
+    | "QUEUED"
     | "RUNNING"
+    | "CANCELLING"
     | "PASSED"
     | "PASSED_WITH_WARNINGS"
     | "FAILED"
@@ -321,8 +331,14 @@ export type ValidationSuiteRunContract = {
     stageId: string
     stageName: string
     checkId: string
-    kind: "MONITOR" | "ELF_QUERY" | "OPENSEARCH_ALERT"
+    kind:
+      | "MONITOR"
+      | "BROWSER_MONITOR"
+      | "ELF_QUERY"
+      | "OPENSEARCH_ALERT"
+      | "DYNATRACE_INFRASTRUCTURE"
     monitorId?: string
+    browserMonitorId?: string
     queryId?: string
     queryRevisionId?: string
     elfRunId?: string
@@ -338,6 +354,7 @@ export type ValidationSuiteRunContract = {
     required: boolean
     status: string
     monitorRunId?: string
+    browserRunId?: string
     gateMode?: string
     decision?: string
     hitCount?: number
@@ -396,9 +413,11 @@ export type DeploymentValidationRunContract = {
     sampleCount: number
     sampleIntervalSeconds: number
     minimumSamples: number
+    browserSampleCount?: number
     regressionPercent: number
     regressionMinimumMs: number
     monitorRevisionIds?: Record<string, string>
+    browserRevisionIds?: Record<string, string>
     elfRevisionIds?: Record<string, string>
     dynatraceRevisionNumbers?: Record<string, number>
   }
@@ -448,6 +467,29 @@ export type DeploymentValidationRunContract = {
         deltaPercent: number
       }>
     }>
+    browserMonitors?: Array<{
+      checkId: string
+      browserMonitorId: string
+      monitorName: string
+      revisionId: string
+      required: boolean
+      baseline: DeploymentDistributionContract
+      post: DeploymentDistributionContract
+      classification: string
+      deltaMs: number
+      deltaPercent: number
+      reasons: string[]
+      samples: Array<{
+        id: string
+        browserMonitorId: string
+        browserRunId?: string
+        sampleNumber: number
+        status: string
+        durationMs: number
+        failureCategory?: string
+        createdAt: string
+      }>
+    }>
     elfResults?: ValidationSuiteRunContract["results"]
     alertResults?: ValidationSuiteRunContract["results"]
     dynatraceResults?: DynatraceDeploymentComparisonContract[]
@@ -458,6 +500,24 @@ export type DeploymentValidationRunContract = {
   endedAt?: string
   createdAt: string
   updatedAt: string
+}
+
+export type DeploymentValidationRunSummaryContract = Pick<
+  DeploymentValidationRunContract,
+  | "id"
+  | "suiteId"
+  | "status"
+  | "phase"
+  | "gateDecision"
+  | "progress"
+  | "deployment"
+  | "failureReason"
+  | "startedAt"
+  | "endedAt"
+  | "createdAt"
+  | "updatedAt"
+> & {
+  suiteSnapshot: Pick<ValidationSuiteContract, "name">
 }
 
 export type DynatraceEnvironmentBindingContract = {
@@ -668,6 +728,17 @@ export type DynatraceDeploymentComparisonContract = {
 
 export type DeploymentBaselinePreviewContract = {
   monitors: Array<{
+    monitorId: string
+    monitorName: string
+    revisionId?: string
+    baselineFrom: string
+    baselineTo: string
+    sampleCount: number
+    minimumSamples: number
+    compatible: boolean
+    reason?: string
+  }>
+  browserMonitors: Array<{
     monitorId: string
     monitorName: string
     revisionId?: string

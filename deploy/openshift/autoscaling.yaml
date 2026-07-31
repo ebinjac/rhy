@@ -1,0 +1,47 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rhythm-api-worker
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: rhythm-api-worker }
+  minReplicas: 4
+  maxReplicas: 20
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15
+      policies:
+        - { type: Percent, value: 100, periodSeconds: 30 }
+        - { type: Pods, value: 4, periodSeconds: 30 }
+      selectPolicy: Max
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Percent, value: 25, periodSeconds: 60 }
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+    - type: External
+      external:
+        metric:
+          name: rhythm_execution_oldest_queued_job_age_seconds
+          selector:
+            matchLabels: { queue_class: scheduled }
+        target: { type: AverageValue, averageValue: "2" }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rhythm-browser-agent
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: rhythm-browser-agent }
+  minReplicas: 2
+  maxReplicas: 20
+  behavior:
+    scaleDown: { stabilizationWindowSeconds: 600 }
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

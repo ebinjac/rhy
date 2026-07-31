@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { lazy, Suspense, useState } from "react"
 import { createFileRoute, useRouter } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -14,13 +14,7 @@ import {
   Trash2,
 } from "lucide-react"
 
-import { CertificatesPanel } from "@/features/configuration/certificates-panel"
-import { AuthPanel } from "@/features/configuration/auth-panel"
 import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
-import { NotificationsPanel } from "@/features/configuration/notifications-panel"
-import { ProxiesPanel } from "@/features/configuration/proxies-panel"
-import { SecretsPanel } from "@/features/configuration/secrets-panel"
-import { TelemetryPanel } from "@/features/configuration/telemetry-panel"
 import {
   createConfigurationProfile,
   deleteConfigurationProfile,
@@ -29,6 +23,28 @@ import {
 } from "@/lib/api-client/monitors"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 import { PageContainer } from "@/components/page-container"
+
+const CertificatesPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/certificates-panel"))
+    .CertificatesPanel,
+}))
+const AuthPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/auth-panel")).AuthPanel,
+}))
+const NotificationsPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/notifications-panel"))
+    .NotificationsPanel,
+}))
+const ProxiesPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/proxies-panel")).ProxiesPanel,
+}))
+const SecretsPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/secrets-panel")).SecretsPanel,
+}))
+const TelemetryPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/telemetry-panel"))
+    .TelemetryPanel,
+}))
 
 const kinds = [
   "secrets",
@@ -279,53 +295,65 @@ function ConfigurationPage() {
       </div>
 
       {kind === "secrets" ? (
-        <SecretsPanel
-          profiles={profiles}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <SecretsPanel
+            profiles={profiles}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : kind === "certificates" ? (
-        <CertificatesPanel
-          profiles={profiles}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <CertificatesPanel
+            profiles={profiles}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : kind === "proxies" ? (
-        <ProxiesPanel
-          profiles={profiles}
-          secrets={secrets}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <ProxiesPanel
+            profiles={profiles}
+            secrets={secrets}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : kind === "notifications" ? (
-        <NotificationsPanel
-          profiles={profiles}
-          secrets={secrets}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <NotificationsPanel
+            profiles={profiles}
+            secrets={secrets}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : kind === "auth" ? (
-        <AuthPanel
-          profiles={profiles}
-          secrets={secrets}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <AuthPanel
+            profiles={profiles}
+            secrets={secrets}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : kind === "telemetry" ? (
-        <TelemetryPanel
-          profiles={profiles}
-          secrets={secrets}
-          certificates={certificates}
-          proxies={proxies}
-          onChanged={async () => {
-            await router.invalidate()
-          }}
-        />
+        <Suspense fallback={<ConfigPanelLoading />}>
+          <TelemetryPanel
+            profiles={profiles}
+            secrets={secrets}
+            certificates={certificates}
+            proxies={proxies}
+            onChanged={async () => {
+              await router.invalidate()
+            }}
+          />
+        </Suspense>
       ) : (
         <>
           {open ? (
@@ -488,5 +516,19 @@ function Field({
       {label}
       <span className="mt-2 block">{children}</span>
     </label>
+  )
+}
+
+function ConfigPanelLoading() {
+  return (
+    <div
+      aria-busy="true"
+      aria-label="Loading configuration panel"
+      className="mt-5 flex min-h-64 items-center justify-center gap-2 rounded-xl border text-sm text-muted-foreground"
+      role="status"
+    >
+      <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+      Loading panel…
+    </div>
   )
 }

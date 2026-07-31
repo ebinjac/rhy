@@ -21,6 +21,7 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
 	"github.com/rhythm-monitoring/rhythm/internal/audit"
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
+	"github.com/rhythm-monitoring/rhythm/internal/browsermonitors"
 	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
@@ -47,10 +48,12 @@ type Dependencies struct {
 	Scripts             *scripts.Client
 	ELF                 *elf.Service
 	Dynatrace           *dynatrace.Service
+	BrowserMonitors     *browsermonitors.Service
 	Authenticator       authz.Authenticator
 	AllowedOrigin       string
 	AllowPrivateTargets bool
 	Checks              map[string]func(context.Context) error
+	WebhookRateLimiter  func(context.Context, string) (bool, error)
 }
 
 type server struct {
@@ -67,6 +70,7 @@ type server struct {
 	scripts             *scripts.Client
 	elf                 *elf.Service
 	dynatrace           *dynatrace.Service
+	browserMonitors     *browsermonitors.Service
 	authenticator       authz.Authenticator
 	allowedOrigin       string
 	allowPrivateTargets bool
@@ -76,6 +80,11 @@ type server struct {
 	previewMu           sync.Mutex
 	previewCancels      map[string]context.CancelFunc
 	monitorCreationMu   sync.Mutex
+	readinessMu         sync.Mutex
+	readinessCachedAt   time.Time
+	readinessStatus     int
+	readinessComponents map[string]string
+	webhookRateLimiter  func(context.Context, string) (bool, error)
 }
 
 type responseMeta struct {
@@ -102,9 +111,12 @@ type errorResponse struct {
 type requestIDContextKey struct{}
 
 func NewServer(dependencies Dependencies) http.Handler {
-	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}}
+	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, browserMonitors: dependencies.BrowserMonitors, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}, webhookRateLimiter: dependencies.WebhookRateLimiter}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
+	mux.HandleFunc("GET /livez", s.liveness)
+	mux.HandleFunc("GET /readyz", s.readiness)
+	mux.HandleFunc("GET /healthz", s.readiness)
+	mux.HandleFunc("GET /api/v1/overview", s.getOverview)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
 	mux.HandleFunc("POST /api/v1/monitors", s.createMonitor)
 	mux.HandleFunc("POST /api/v1/monitors/preview", s.previewMonitorDefinition)
@@ -132,13 +144,20 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/export", s.exportMonitor)
 	mux.HandleFunc("POST /api/v1/monitors/{monitorId}/runs", s.runMonitor)
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/runs", s.listMonitorRuns)
+	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/metrics/summary", s.getMonitorMetricsSummary)
+	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/metrics/series", s.getMonitorMetricsSeries)
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/metrics", s.getMonitorMetrics)
 	mux.HandleFunc("GET /api/v1/runs/{runId}", s.getRun)
+	mux.HandleFunc("GET /api/v1/runs/{runId}/status", s.getRunStatus)
 	mux.HandleFunc("GET /api/v1/runs/{runId}/diagnostics", s.getRunDiagnostics)
+	mux.HandleFunc("GET /api/v1/runs/{runId}/diagnostics/summary", s.getRunDiagnosticsSummary)
+	mux.HandleFunc("GET /api/v1/runs/{runId}/steps/{stepRunId}", s.getRunStepDiagnostics)
+	mux.HandleFunc("GET /api/v1/runs/{runId}/events", s.getRunEvents)
 	mux.HandleFunc("POST /api/v1/runs/{runId}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /api/v1/runs", s.listRecentRuns)
 	mux.HandleFunc("GET /api/v1/search", s.searchWorkspace)
 	mux.HandleFunc("GET /api/v1/alerts", s.listAlerts)
+	mux.HandleFunc("GET /api/v1/alerts/summary", s.getAlertSummary)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}", s.getAlert)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}/events", s.listAlertEvents)
 	mux.HandleFunc("POST /api/v1/alerts/{alertId}/acknowledge", s.acknowledgeAlert)
@@ -205,6 +224,34 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/dynatrace/runs", s.listDynatraceRuns)
 	mux.HandleFunc("GET /api/v1/dynatrace/runs/{runId}", s.getDynatraceRun)
 	mux.HandleFunc("POST /api/v1/dynatrace/runs/{runId}/cancel", s.cancelDynatraceRun)
+	mux.HandleFunc("GET /api/v1/browser-monitors", s.listBrowserMonitors)
+	mux.HandleFunc("POST /api/v1/browser-monitors", s.createBrowserMonitor)
+	mux.HandleFunc("POST /api/v1/browser-monitors/preview", s.previewUnsavedBrowserMonitor)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}", s.getBrowserMonitor)
+	mux.HandleFunc("PATCH /api/v1/browser-monitors/{monitorId}", s.updateBrowserMonitor)
+	mux.HandleFunc("DELETE /api/v1/browser-monitors/{monitorId}", s.deleteBrowserMonitor)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}/revisions", s.listBrowserMonitorRevisions)
+	mux.HandleFunc("PUT /api/v1/browser-monitors/{monitorId}/draft", s.saveBrowserMonitorDraft)
+	mux.HandleFunc("POST /api/v1/browser-monitors/{monitorId}/publish", s.publishBrowserMonitor)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}/schedule", s.getBrowserMonitorSchedule)
+	mux.HandleFunc("PUT /api/v1/browser-monitors/{monitorId}/schedule", s.saveBrowserMonitorSchedule)
+	mux.HandleFunc("POST /api/v1/browser-monitors/{monitorId}/preview", s.previewBrowserMonitor)
+	mux.HandleFunc("POST /api/v1/browser-monitors/{monitorId}/runs", s.runBrowserMonitor)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}/runs", s.listBrowserMonitorRuns)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}/metrics", s.getBrowserMonitorMetrics)
+	mux.HandleFunc("GET /api/v1/browser-monitors/{monitorId}/baselines", s.listBrowserBaselines)
+	mux.HandleFunc("POST /api/v1/browser-monitors/{monitorId}/baselines", s.proposeBrowserBaseline)
+	mux.HandleFunc("GET /api/v1/browser-runs/{runId}", s.getBrowserRun)
+	mux.HandleFunc("GET /api/v1/browser-runs/{runId}/diagnostics", s.getBrowserRun)
+	mux.HandleFunc("GET /api/v1/browser-runs/{runId}/events", s.streamBrowserRunEvents)
+	mux.HandleFunc("POST /api/v1/browser-runs/{runId}/cancel", s.cancelBrowserRun)
+	mux.HandleFunc("POST /api/v1/browser-baselines/{baselineId}/approve", s.approveBrowserBaseline)
+	mux.HandleFunc("DELETE /api/v1/browser-baselines/{baselineId}", s.deleteBrowserBaseline)
+	mux.HandleFunc("GET /api/v1/browser-auth-sessions", s.listBrowserAuthSessions)
+	mux.HandleFunc("POST /api/v1/browser-auth-sessions", s.createBrowserAuthSession)
+	mux.HandleFunc("POST /api/v1/browser-auth-sessions/{sessionId}/validate", s.validateBrowserAuthSession)
+	mux.HandleFunc("DELETE /api/v1/browser-auth-sessions/{sessionId}", s.deleteBrowserAuthSession)
+	mux.HandleFunc("GET /api/v1/browser-artifacts/{artifactId}", s.getBrowserArtifact)
 	mux.HandleFunc("GET /api/v1/applications/{applicationId}/opensearch-alert-receivers", s.listOpenSearchAlertReceivers)
 	mux.HandleFunc("POST /api/v1/applications/{applicationId}/opensearch-alert-receivers", s.createOpenSearchAlertReceiver)
 	mux.HandleFunc("POST /api/v1/applications/{applicationId}/opensearch-alerts/service-assignment", s.assignOpenSearchAlertsToService)
@@ -237,24 +284,75 @@ func NewServer(dependencies Dependencies) http.Handler {
 	return s.recoverPanic(s.logRequest(s.cors(s.requestID(s.authenticate(s.authorize(s.auditMutations(mux)))))))
 }
 
-func (s *server) health(w http.ResponseWriter, r *http.Request) {
+func (s *server) liveness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]any{
+		"status":  "ok",
+		"service": "rhythm-api",
+	}, Meta: s.meta(r)})
+}
+
+func (s *server) readiness(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	s.readinessMu.Lock()
+	if !s.readinessCachedAt.IsZero() && time.Since(s.readinessCachedAt) < 3*time.Second {
+		status := s.readinessStatus
+		components := cloneStringMap(s.readinessComponents)
+		s.readinessMu.Unlock()
+		s.writeReadiness(w, r, status, components, true)
+		return
+	}
+	s.readinessMu.Unlock()
+
 	status := http.StatusOK
 	components := make(map[string]string, len(s.checks))
 	checkContext, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
+	var mu sync.Mutex
+	var wait sync.WaitGroup
 	for name, check := range s.checks {
-		if err := check(checkContext); err != nil {
-			components[name] = "unavailable"
+		name, check := name, check
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			state := "ok"
+			if err := check(checkContext); err != nil {
+				state = "unavailable"
+			}
+			mu.Lock()
+			components[name] = state
+			mu.Unlock()
+		}()
+	}
+	wait.Wait()
+	for _, component := range components {
+		if component != "ok" {
 			status = http.StatusServiceUnavailable
-		} else {
-			components[name] = "ok"
+			break
 		}
 	}
+	s.readinessMu.Lock()
+	s.readinessCachedAt = time.Now()
+	s.readinessStatus = status
+	s.readinessComponents = cloneStringMap(components)
+	s.readinessMu.Unlock()
+	s.writeReadiness(w, r, status, components, false)
+}
+
+func (s *server) writeReadiness(w http.ResponseWriter, r *http.Request, status int, components map[string]string, cached bool) {
 	overall := "ok"
 	if status != http.StatusOK {
 		overall = "degraded"
 	}
-	s.writeJSON(w, r, status, successResponse{Data: map[string]any{"status": overall, "service": "rhythm-api", "components": components}, Meta: s.meta(r)})
+	s.writeJSON(w, r, status, successResponse{Data: map[string]any{"status": overall, "service": "rhythm-api", "components": components, "cached": cached}, Meta: s.meta(r)})
+}
+
+func cloneStringMap(source map[string]string) map[string]string {
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (s *server) listSuites(w http.ResponseWriter, r *http.Request) {
@@ -481,7 +579,7 @@ func (s *server) runSuite(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	principal, _ := authz.PrincipalFromContext(r.Context())
-	item, err := s.suites.RunWithInput(r.Context(), r.PathValue("suiteId"), principal.ID, input)
+	item, err := s.suites.QueueRunWithInput(r.Context(), r.PathValue("suiteId"), principal.ID, input)
 	if errors.Is(err, suites.ErrNotFound) {
 		s.writeError(w, r, http.StatusNotFound, "SUITE_NOT_FOUND", "Validation suite was not found.", nil)
 		return
@@ -490,7 +588,12 @@ func (s *server) runSuite(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "SUITE_RUN_FAILED", "Unable to run validation suite.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusCreated, successResponse{Data: item, Meta: s.meta(r)})
+	status := http.StatusCreated
+	if item.Status == "QUEUED" {
+		status = http.StatusAccepted
+		w.Header().Set("Location", "/api/v1/suite-runs/"+item.ID)
+	}
+	s.writeJSON(w, r, status, successResponse{Data: item, Meta: s.meta(r)})
 }
 
 func (s *server) getSuiteRun(w http.ResponseWriter, r *http.Request) {
@@ -515,11 +618,12 @@ func (s *server) cancelSuiteRun(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "SUITES_UNAVAILABLE", "Validation suites are unavailable.", nil)
 		return
 	}
-	if !s.suites.Cancel(r.PathValue("suiteRunId")) {
-		s.writeError(w, r, http.StatusConflict, "SUITE_RUN_NOT_RUNNING", "Validation suite run is not active on this API instance.", nil)
+	item, err := s.suites.RequestCancel(r.Context(), r.PathValue("suiteRunId"))
+	if err != nil {
+		s.writeError(w, r, http.StatusConflict, "SUITE_RUN_NOT_RUNNING", err.Error(), nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusAccepted, successResponse{Data: map[string]any{"id": r.PathValue("suiteRunId"), "status": "CANCELLING"}, Meta: s.meta(r)})
+	s.writeJSON(w, r, http.StatusAccepted, successResponse{Data: item, Meta: s.meta(r)})
 }
 
 func decodeStrictJSON(w http.ResponseWriter, r *http.Request, target any) error {
@@ -535,6 +639,12 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, target any) error 
 }
 
 func (s *server) listMonitors(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("limit") || r.URL.Query().Has("cursor") ||
+		r.URL.Query().Has("query") || r.URL.Query().Has("health") ||
+		r.URL.Query().Has("applicationId") || r.URL.Query().Has("enabled") {
+		s.listMonitorPage(w, r)
+		return
+	}
 	items, err := s.monitors.List(r.Context())
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list monitors.", nil)
@@ -548,6 +658,70 @@ func (s *server) listMonitors(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
 }
 
+func (s *server) listMonitorPage(w http.ResponseWriter, r *http.Request) {
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 1 || parsed > 200 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "limit must be between 1 and 200", nil)
+			return
+		}
+		limit = parsed
+	}
+	afterName, afterID, err := decodeMonitorCursor(strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if err != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "cursor is invalid or has expired", nil)
+		return
+	}
+	var enabled *bool
+	if raw := strings.TrimSpace(r.URL.Query().Get("enabled")); raw != "" {
+		parsed, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_FILTER", "enabled must be true or false", nil)
+			return
+		}
+		enabled = &parsed
+	}
+	pageResult, err := s.monitors.ListPage(r.Context(), monitors.PageQuery{
+		Limit: limit, AfterName: afterName, AfterID: afterID,
+		Query: r.URL.Query().Get("query"), Health: r.URL.Query().Get("health"),
+		ApplicationID: r.URL.Query().Get("applicationId"), Enabled: enabled,
+	})
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list monitors.", nil)
+		return
+	}
+	page := &pageMetadata{Limit: limit, Total: pageResult.Total}
+	if pageResult.NextID != "" {
+		page.NextCursor = encodeMonitorCursor(pageResult.NextName, pageResult.NextID)
+	}
+	w.Header().Set("Cache-Control", "private, max-age=10, stale-while-revalidate=30")
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageResult.Items, Meta: s.paginatedMeta(r, page)})
+}
+
+func encodeMonitorCursor(name, identifier string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte("monitor:" + strings.ToLower(name) + "\x00" + identifier))
+}
+
+func decodeMonitorCursor(cursor string) (string, string, error) {
+	if cursor == "" {
+		return "", "", nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", "", err
+	}
+	value := strings.TrimPrefix(string(decoded), "monitor:")
+	if value == string(decoded) {
+		return "", "", errors.New("invalid monitor cursor")
+	}
+	parts := strings.Split(value, "\x00")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", errors.New("invalid monitor cursor")
+	}
+	return parts[0], parts[1], nil
+}
+
 func (s *server) getMonitor(w http.ResponseWriter, r *http.Request) {
 	monitor, err := s.monitors.Get(r.Context(), r.PathValue("monitorId"))
 	if errors.Is(err, monitors.ErrNotFound) {
@@ -558,7 +732,13 @@ func (s *server) getMonitor(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load the monitor.", nil)
 		return
 	}
-	w.Header().Set("ETag", monitorETag(monitor))
+	etag := monitorETag(monitor)
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=15, stale-while-revalidate=45")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: monitor, Meta: s.meta(r)})
 }
 
@@ -743,6 +923,13 @@ func (s *server) getMonitorRevision(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load monitor revision.", nil)
+		return
+	}
+	etag := `"` + revision.ID + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=60, stale-while-revalidate=300")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: revision, Meta: s.meta(r)})
@@ -1112,6 +1299,87 @@ func (s *server) getMonitorMetrics(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: metrics, Meta: s.meta(r)})
 }
 
+func (s *server) getMonitorMetricsSummary(w http.ResponseWriter, r *http.Request) {
+	window := monitorMetricsWindow(r)
+	metrics, err := s.runs.MetricsSummary(r.Context(), r.PathValue("monitorId"), window)
+	if !s.writeMonitorMetricsError(w, r, err) {
+		return
+	}
+	metrics.Points = []runs.HistoryMetricPoint{}
+	w.Header().Set("Cache-Control", "private, max-age=15, stale-while-revalidate=45")
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: metrics, Meta: s.meta(r)})
+}
+
+func (s *server) getMonitorMetricsSeries(w http.ResponseWriter, r *http.Request) {
+	maxPoints := 400
+	if value := strings.TrimSpace(r.URL.Query().Get("maxPoints")); value != "" {
+		parsed, parseErr := strconv.Atoi(value)
+		if parseErr != nil || parsed < 50 || parsed > 1000 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_METRICS_LIMIT", "maxPoints must be between 50 and 1,000.", nil)
+			return
+		}
+		maxPoints = parsed
+	}
+	window := monitorMetricsWindow(r)
+	points, err := s.runs.MetricSeries(r.Context(), r.PathValue("monitorId"), window, maxPoints)
+	if !s.writeMonitorMetricsError(w, r, err) {
+		return
+	}
+	now := time.Now().UTC()
+	duration := map[string]time.Duration{"24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "90d": 90 * 24 * time.Hour}[window]
+	w.Header().Set("Cache-Control", "private, max-age=15, stale-while-revalidate=45")
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]any{
+		"window":      window,
+		"windowStart": now.Add(-duration),
+		"windowEnd":   now,
+		"points":      points,
+	}, Meta: s.meta(r)})
+}
+
+func monitorMetricsWindow(r *http.Request) string {
+	window := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("window")))
+	if window == "" {
+		return "30d"
+	}
+	return window
+}
+
+func (s *server) writeMonitorMetricsError(w http.ResponseWriter, r *http.Request, err error) bool {
+	if err == nil {
+		return true
+	}
+	var validationError runs.MetricsValidationError
+	switch {
+	case errors.As(err, &validationError):
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_METRICS_WINDOW", validationError.Error(), nil)
+	case errors.Is(err, monitors.ErrNotFound):
+		s.writeError(w, r, http.StatusNotFound, "MONITOR_NOT_FOUND", "Monitor was not found.", nil)
+	default:
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to calculate monitor metrics.", nil)
+	}
+	return false
+}
+
+func (s *server) loadMonitorMetrics(w http.ResponseWriter, r *http.Request) (runs.HistoryMetrics, bool) {
+	window := r.URL.Query().Get("window")
+	if window == "" {
+		window = "30d"
+	}
+	metrics, err := s.runs.Metrics(r.Context(), r.PathValue("monitorId"), window)
+	var validationError runs.MetricsValidationError
+	switch {
+	case errors.As(err, &validationError):
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_METRICS_WINDOW", validationError.Error(), nil)
+	case errors.Is(err, monitors.ErrNotFound):
+		s.writeError(w, r, http.StatusNotFound, "MONITOR_NOT_FOUND", "Monitor was not found.", nil)
+	case err != nil:
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to calculate monitor metrics.", nil)
+	default:
+		return metrics, true
+	}
+	return runs.HistoryMetrics{}, false
+}
+
 func (s *server) getRun(w http.ResponseWriter, r *http.Request) {
 	run, err := s.runs.Get(r.Context(), r.PathValue("runId"))
 	if errors.Is(err, runs.ErrNotFound) {
@@ -1136,6 +1404,82 @@ func (s *server) getRunDiagnostics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: diagnostics, Meta: s.meta(r)})
+}
+
+func (s *server) getRunStatus(w http.ResponseWriter, r *http.Request) {
+	run, err := s.runs.GetSummary(r.Context(), r.PathValue("runId"))
+	if errors.Is(err, runs.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "RUN_NOT_FOUND", "Run was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load run status.", nil)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: map[string]any{
+		"id": run.ID, "monitorId": run.MonitorID, "status": run.Status,
+		"warningCount": run.WarningCount, "failureCategory": run.FailureCategory,
+		"failedStepId": run.FailedStepID, "durationMs": run.DurationMS,
+		"startedAt": run.StartedAt, "endedAt": run.EndedAt, "createdAt": run.CreatedAt,
+	}, Meta: s.meta(r)})
+}
+
+func (s *server) getRunDiagnosticsSummary(w http.ResponseWriter, r *http.Request) {
+	diagnostics, err := s.runs.DiagnosticsSummary(r.Context(), r.PathValue("runId"))
+	if errors.Is(err, runs.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "RUN_NOT_FOUND", "Run was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load run diagnostics.", nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: diagnostics, Meta: s.meta(r)})
+}
+
+func (s *server) getRunStepDiagnostics(w http.ResponseWriter, r *http.Request) {
+	diagnostics, err := s.runs.StepDiagnostics(r.Context(), r.PathValue("runId"), r.PathValue("stepRunId"))
+	if errors.Is(err, runs.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "RUN_NOT_FOUND", "Run was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load step diagnostics.", nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: diagnostics, Meta: s.meta(r)})
+}
+
+func (s *server) getRunEvents(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 500 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "limit must be between 1 and 500", nil)
+			return
+		}
+		limit = parsed
+	}
+	afterSequence, cursorErr := decodeSequenceCursor(strings.TrimSpace(r.URL.Query().Get("cursor")), "run-event")
+	if cursorErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "cursor is invalid or has expired", nil)
+		return
+	}
+	events, total, hasMore, err := s.runs.ListEvents(r.Context(), r.PathValue("runId"), afterSequence, limit)
+	if errors.Is(err, runs.ErrNotFound) {
+		s.writeError(w, r, http.StatusNotFound, "RUN_NOT_FOUND", "Run was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load run events.", nil)
+		return
+	}
+	page := &pageMetadata{Limit: limit, Total: total}
+	if hasMore && len(events) > 0 {
+		page.NextCursor = encodeSequenceCursor("run-event", events[len(events)-1].Sequence)
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: events, Meta: s.paginatedMeta(r, page)})
 }
 
 func (s *server) cancelRun(w http.ResponseWriter, r *http.Request) {
@@ -1217,17 +1561,52 @@ func (s *server) listAlerts(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusServiceUnavailable, "ALERTING_UNAVAILABLE", "Alerting requires PostgreSQL.", nil)
 		return
 	}
-	items, err := s.alerts.ListFiltered(r.Context(), alerts.Filter{State: strings.ToUpper(r.URL.Query().Get("state")), SourceType: strings.ToUpper(r.URL.Query().Get("sourceType")), ApplicationID: r.URL.Query().Get("applicationId"), ServiceID: r.URL.Query().Get("serviceId"), Severity: strings.ToUpper(r.URL.Query().Get("severity"))})
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "limit must be between 1 and 200", nil)
+			return
+		}
+		limit = parsed
+	}
+	afterUpdatedAt, afterID, cursorErr := decodeTimeIDCursor(strings.TrimSpace(r.URL.Query().Get("cursor")), "alert")
+	if cursorErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "cursor is invalid or has expired", nil)
+		return
+	}
+	page, err := s.alerts.ListFilteredPage(r.Context(), alerts.Filter{
+		State:               strings.ToUpper(r.URL.Query().Get("state")),
+		SourceType:          strings.ToUpper(r.URL.Query().Get("sourceType")),
+		ApplicationID:       r.URL.Query().Get("applicationId"),
+		ServiceID:           r.URL.Query().Get("serviceId"),
+		Severity:            strings.ToUpper(r.URL.Query().Get("severity")),
+		Query:               r.URL.Query().Get("query"),
+		ExternalMonitorType: strings.ToUpper(r.URL.Query().Get("monitorType")),
+	}, limit, afterUpdatedAt, afterID)
 	if err != nil {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list alerts.", nil)
 		return
 	}
-	pageItems, page, pageErr := paginate(r, items, 50, 200)
-	if pageErr != nil {
-		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
+	metadata := &pageMetadata{Limit: limit, Total: page.Total}
+	if page.HasMore && len(page.Items) > 0 {
+		last := page.Items[len(page.Items)-1]
+		metadata.NextCursor = encodeTimeIDCursor("alert", last.UpdatedAt, last.ID)
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: page.Items, Meta: s.paginatedMeta(r, metadata)})
+}
+
+func (s *server) getAlertSummary(w http.ResponseWriter, r *http.Request) {
+	if s.alerts == nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "ALERTING_UNAVAILABLE", "Alerting requires PostgreSQL.", nil)
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
+	summary, err := s.alerts.Summary(r.Context())
+	if err != nil {
+		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to load the alert summary.", nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: summary, Meta: s.meta(r)})
 }
 
 func (s *server) getAlert(w http.ResponseWriter, r *http.Request) {
@@ -1627,7 +2006,7 @@ func auditDescriptor(r *http.Request) (string, string, string) {
 
 func (s *server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/hooks/v1/opensearch-alerting/") || r.Method == http.MethodOptions {
+		if isPublicProbe(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/hooks/v1/opensearch-alerting/") || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1642,7 +2021,7 @@ func (s *server) authenticate(next http.Handler) http.Handler {
 
 func (s *server) authorize(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/hooks/v1/opensearch-alerting/") || r.Method == http.MethodOptions {
+		if isPublicProbe(r.URL.Path) || strings.HasPrefix(r.URL.Path, "/hooks/v1/opensearch-alerting/") || r.Method == http.MethodOptions {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -1653,6 +2032,10 @@ func (s *server) authorize(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isPublicProbe(path string) bool {
+	return path == "/livez" || path == "/readyz" || path == "/healthz"
 }
 
 func (s *server) requestID(next http.Handler) http.Handler {

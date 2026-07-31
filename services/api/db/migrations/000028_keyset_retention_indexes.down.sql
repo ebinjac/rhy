@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS deployment_validation_runs_created_brin_idx;
+DROP INDEX IF EXISTS dynatrace_runs_created_brin_idx;
+DROP INDEX IF EXISTS elf_runs_created_brin_idx;
+DROP INDEX IF EXISTS browser_runs_created_brin_idx;
+DROP INDEX IF EXISTS run_events_occurred_brin_idx;
+DROP INDEX IF EXISTS monitor_runs_created_brin_idx;
+DROP INDEX IF EXISTS run_events_sequence_keyset_idx;
+DROP INDEX IF EXISTS deployment_validation_runs_created_keyset_idx;
+DROP INDEX IF EXISTS alerts_updated_keyset_idx;

@@ -23,7 +23,7 @@ export class AppErrorBoundary extends Component<Props, State> {
   }
 
   private reset = () => {
-    this.setState({ error: null })
+    window.location.reload()
   }
 
   render() {
@@ -36,13 +36,13 @@ export class AppErrorBoundary extends Component<Props, State> {
         <CircleAlert aria-hidden="true" className="size-7 text-destructive" />
         <h1 className="mt-4 text-2xl font-semibold">Something went wrong</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Rhythm hit an unexpected rendering error. Your data was not changed.
-          Try again, or reload the page.
+          Rhythm could not display this page correctly. Your data was not
+          changed. Reload the page to recover.
         </p>
         <div className="mt-6 flex flex-wrap gap-2">
           <Button onClick={this.reset} type="button">
             <RefreshCw data-icon="inline-start" />
-            Try again
+            Reload page
           </Button>
           <Button
             onClick={() => window.location.assign("/")}

@@ -28,6 +28,43 @@ type Repository interface {
 	GetRevision(context.Context, string, string) (Revision, error)
 }
 
+type PageQuery struct {
+	Limit         int
+	AfterName     string
+	AfterID       string
+	Query         string
+	Health        string
+	ApplicationID string
+	Enabled       *bool
+}
+
+type PageResult struct {
+	Items    []Monitor
+	Total    int
+	NextName string
+	NextID   string
+}
+
+type PageRepository interface {
+	ListPage(context.Context, PageQuery) (PageResult, error)
+}
+
+type OverviewCounts struct {
+	Total     int
+	Enabled   int
+	Healthy   int
+	Attention int
+}
+
+type OverviewResult struct {
+	Items  []Monitor
+	Counts OverviewCounts
+}
+
+type OverviewRepository interface {
+	Overview(context.Context, int) (OverviewResult, error)
+}
+
 type MemoryRepository struct {
 	mu        sync.RWMutex
 	monitors  map[string]Monitor

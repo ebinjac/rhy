@@ -36,6 +36,11 @@ type MonitorListResult = {
   source: "api"
 }
 
+type MonitorPageResult = MonitorListResult & {
+  total: number
+  nextCursor?: string
+}
+
 export const listMonitors = createServerFn({ method: "GET" }).handler(
   async (): Promise<MonitorListResult> => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
@@ -96,6 +101,113 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
     }
   }
 )
+
+export const listMonitorPage = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      query: z.string().optional(),
+      status: z.string().optional(),
+      applicationId: z.string().optional(),
+      cursor: z.string().optional(),
+      limit: z.number().int().min(1).max(200).default(25),
+    })
+  )
+  .handler(async ({ data }): Promise<MonitorPageResult> => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const parameters = new URLSearchParams({ limit: String(data.limit) })
+    if (data.query) parameters.set("query", data.query)
+    if (data.status) parameters.set("health", data.status)
+    if (data.applicationId)
+      parameters.set("applicationId", data.applicationId)
+    if (data.cursor) parameters.set("cursor", data.cursor)
+    const [monitorsResponse, applicationsResponse] = await Promise.all([
+      fetch(`${baseURL}/api/v1/monitors?${parameters}`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }),
+      fetch(`${baseURL}/api/v1/applications`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ])
+    if (!monitorsResponse.ok) {
+      throw new Error(`Rhythm API returned ${monitorsResponse.status}`)
+    }
+    const envelope =
+      (await monitorsResponse.json()) as ApiSuccess<MonitorContract[]>
+    if (!Array.isArray(envelope.data)) {
+      throw new Error("Rhythm API returned an invalid monitor page")
+    }
+    const applicationByMonitorId = new Map<
+      string,
+      { id: string; name: string }
+    >()
+    const applications: MonitorListApplication[] = []
+    if (applicationsResponse.ok) {
+      const applicationsEnvelope =
+        (await applicationsResponse.json()) as ApiSuccess<
+          ELFApplicationContract[]
+        >
+      for (const application of applicationsEnvelope.data ?? []) {
+        applications.push({ id: application.id, name: application.name })
+        for (const monitorId of application.monitorIds ?? []) {
+          applicationByMonitorId.set(monitorId, {
+            id: application.id,
+            name: application.name,
+          })
+        }
+      }
+    }
+    return {
+      monitors: envelope.data.map((monitor) =>
+        toMonitorSummary(monitor, applicationByMonitorId.get(monitor.id))
+      ),
+      applications: applications.sort((left, right) =>
+        left.name.localeCompare(right.name)
+      ),
+      source: "api",
+      total: envelope.meta.page?.total ?? envelope.data.length,
+      nextCursor: envelope.meta.page?.nextCursor,
+    }
+  })
+
+export const getMonitorSummary = createServerFn({ method: "GET" })
+  .validator(z.object({ monitorId: z.string().min(1) }))
+  .handler(async ({ data }): Promise<MonitorSummary> => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const [monitorResponse, applicationsResponse] = await Promise.all([
+      fetch(
+        `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}`,
+        {
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(5000),
+        }
+      ),
+      fetch(`${baseURL}/api/v1/applications`, {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }),
+    ])
+    if (!monitorResponse.ok) {
+      throw new Error(`Rhythm API returned ${monitorResponse.status}`)
+    }
+    const monitor = (
+      (await monitorResponse.json()) as ApiSuccess<MonitorContract>
+    ).data
+    let application: MonitorListApplication | undefined
+    if (applicationsResponse.ok) {
+      const applications = (
+        (await applicationsResponse.json()) as ApiSuccess<
+          ELFApplicationContract[]
+        >
+      ).data
+      const linked = applications.find((item) =>
+        (item.monitorIds ?? []).includes(monitor.id)
+      )
+      if (linked) application = { id: linked.id, name: linked.name }
+    }
+    return toMonitorSummary(monitor, application)
+  })
 
 export const previewMonitorDraft = createServerFn({ method: "POST" })
   .validator(
@@ -487,6 +599,53 @@ export const getMonitorMetrics = createServerFn({ method: "GET" })
       throw new Error(`Unable to load run metrics (${response.status})`)
     return ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>)
       .data
+  })
+
+export const getMonitorMetricsSummary = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      monitorId: z.string().min(1),
+      window: z.enum(["24h", "7d", "30d", "90d"]).default("30d"),
+    })
+  )
+  .handler(async ({ data }): Promise<RunHistoryMetricsContract> => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const response = await fetch(
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics/summary?window=${data.window}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(5000),
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Unable to load run metric summary (${response.status})`)
+    return ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>)
+      .data
+  })
+
+export const getMonitorMetricSeries = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      monitorId: z.string().min(1),
+      window: z.enum(["24h", "7d", "30d", "90d"]).default("30d"),
+      maxPoints: z.number().int().min(50).max(1000).default(400),
+    })
+  )
+  .handler(async ({ data }): Promise<RunHistoryMetricsContract["points"]> => {
+    const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const response = await fetch(
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics/series?window=${data.window}&maxPoints=${data.maxPoints}`,
+      {
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      }
+    )
+    if (!response.ok)
+      throw new Error(`Unable to load run metric series (${response.status})`)
+    const envelope = (await response.json()) as ApiSuccess<{
+      points: RunHistoryMetricsContract["points"]
+    }>
+    return envelope.data.points
   })
 
 export const getRun = createServerFn({ method: "GET" })
@@ -1133,7 +1292,7 @@ export const sendNotificationTestEmail = createServerFn({ method: "POST" })
     }
   )
 
-function toMonitorSummary(
+export function toMonitorSummary(
   monitor: MonitorContract,
   application?: { id: string; name: string }
 ): MonitorSummary {

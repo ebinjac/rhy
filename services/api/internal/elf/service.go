@@ -344,23 +344,120 @@ func (s *Service) TestSettings(ctx context.Context, input *Settings) (map[string
 }
 
 func (s *Service) ListApplications(ctx context.Context) ([]Application, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_at,updated_at FROM applications ORDER BY name`)
+	return s.listApplications(ctx, 0)
+}
+
+type Overview struct {
+	Applications     []Application
+	ApplicationCount int
+	QueryCount       int
+}
+
+func (s *Service) Overview(ctx context.Context, limit int) (Overview, error) {
+	var result Overview
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM applications),
+			(SELECT COUNT(*) FROM elf_queries)`).Scan(
+		&result.ApplicationCount,
+		&result.QueryCount,
+	); err != nil {
+		return Overview{}, err
+	}
+	applications, err := s.listApplications(ctx, limit)
+	if err != nil {
+		return Overview{}, err
+	}
+	result.Applications = applications
+	return result, nil
+}
+
+func (s *Service) listApplications(ctx context.Context, limit int) ([]Application, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text,car_id,name,owner,environment,default_index_pattern,
+			default_time_field,masking_rules,semantic_mapping,alert_emails,
+			active,created_at,updated_at
+		FROM applications
+		ORDER BY name
+		LIMIT NULLIF($1,0)`, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	items := []Application{}
+	byID := map[string]int{}
+	applicationIDs := []string{}
 	for rows.Next() {
 		item, err := scanApplication(rows)
 		if err != nil {
 			return nil, err
 		}
-		if err = s.loadApplicationChildren(ctx, &item); err != nil {
-			return nil, err
-		}
+		item.Services = []AppService{}
+		item.MonitorIDs = []string{}
+		byID[item.ID] = len(items)
+		applicationIDs = append(applicationIDs, item.ID)
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	if len(applicationIDs) == 0 {
+		return items, nil
+	}
+	serviceRows, err := s.pool.Query(ctx, `
+		SELECT id::text,application_id::text,name,index_pattern,time_field,
+			semantic_mapping,created_at,updated_at
+		FROM application_services
+		WHERE application_id=ANY($1::uuid[])
+		ORDER BY application_id,name`, applicationIDs)
+	if err != nil {
+		return nil, err
+	}
+	for serviceRows.Next() {
+		var service AppService
+		var mapping []byte
+		if err := serviceRows.Scan(&service.ID, &service.ApplicationID, &service.Name, &service.IndexPattern, &service.TimeField, &mapping, &service.CreatedAt, &service.UpdatedAt); err != nil {
+			serviceRows.Close()
+			return nil, err
+		}
+		_ = json.Unmarshal(mapping, &service.SemanticMapping)
+		if service.SemanticMapping == nil {
+			service.SemanticMapping = map[string]string{}
+		}
+		if index, ok := byID[service.ApplicationID]; ok {
+			items[index].Services = append(items[index].Services, service)
+		}
+	}
+	if err := serviceRows.Err(); err != nil {
+		serviceRows.Close()
+		return nil, err
+	}
+	serviceRows.Close()
+	linkRows, err := s.pool.Query(ctx, `
+		SELECT application_id::text,monitor_id::text
+		FROM application_monitor_links
+		WHERE application_id=ANY($1::uuid[])
+		ORDER BY application_id,monitor_id`, applicationIDs)
+	if err != nil {
+		return nil, err
+	}
+	for linkRows.Next() {
+		var applicationID, monitorID string
+		if err := linkRows.Scan(&applicationID, &monitorID); err != nil {
+			linkRows.Close()
+			return nil, err
+		}
+		if index, ok := byID[applicationID]; ok {
+			items[index].MonitorIDs = append(items[index].MonitorIDs, monitorID)
+		}
+	}
+	if err := linkRows.Err(); err != nil {
+		linkRows.Close()
+		return nil, err
+	}
+	linkRows.Close()
+	return items, nil
 }
 func (s *Service) GetApplication(ctx context.Context, applicationID string) (Application, error) {
 	item, err := scanApplication(s.pool.QueryRow(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_at,updated_at FROM applications WHERE id=$1`, applicationID))
@@ -615,15 +712,57 @@ func (s *Service) ListQueries(ctx context.Context) ([]Query, error) {
 	}
 	defer rows.Close()
 	items := []Query{}
+	byID := map[string]int{}
 	for rows.Next() {
 		q, err := scanQuery(rows)
 		if err != nil {
 			return nil, err
 		}
-		q.LastRun, _ = s.lastRun(ctx, q.ID)
+		byID[q.ID] = len(items)
 		items = append(items, q)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	runRows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT ON (query_id)
+			query_id::text,id::text,revision_id::text,status,decision,gate_mode,
+			resolved_index,time_from,time_to,hit_count,open_search_took_ms,
+			round_trip_ms,COALESCE(failure_category,''),COALESCE(failure_reason,''),
+			created_at,completed_at
+		FROM elf_runs
+		WHERE query_id IS NOT NULL
+		ORDER BY query_id,created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer runRows.Close()
+	for runRows.Next() {
+		var queryID string
+		var run RunSummary
+		if err := runRows.Scan(
+			&queryID, &run.ID, &run.RevisionID, &run.Status, &run.Decision,
+			&run.GateMode, &run.ResolvedIndex, &run.TimeFrom, &run.TimeTo,
+			&run.HitCount, &run.OpenSearchTookMS, &run.RoundTripMS,
+			&run.FailureCategory, &run.FailureReason, &run.CreatedAt,
+			&run.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		run.QueryID = queryID
+		run.ShardSummary = map[string]any{}
+		run.Aggregations = map[string]any{}
+		run.RawResponse = map[string]any{}
+		run.Samples = []map[string]any{}
+		run.Truncation = map[string]any{}
+		run.Debug = map[string]any{}
+		run.Fields = []Field{}
+		if index, ok := byID[queryID]; ok {
+			items[index].LastRun = &run
+		}
+	}
+	return items, runRows.Err()
 }
 func (s *Service) GetQuery(ctx context.Context, queryID string) (Query, error) {
 	q, err := scanQuery(s.pool.QueryRow(ctx, querySelect+` WHERE q.id=$1`, queryID))

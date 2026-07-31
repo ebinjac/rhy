@@ -1,0 +1,63 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rhythm-production-slos
+  labels:
+    app.kubernetes.io/name: rhythm
+spec:
+  groups:
+    - name: rhythm.execution
+      rules:
+        - alert: RhythmSchedulingLag
+          expr: rhythm_scheduler_due_lag_seconds > 5
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm scheduled execution lag exceeds five seconds
+        - alert: RhythmScheduledQueueAge
+          expr: rhythm_execution_oldest_queued_job_age_seconds{queue_class="scheduled"} > 15
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: Rhythm's oldest scheduled job is more than 15 seconds old
+        - alert: RhythmExecutionOutboxBacklog
+          expr: rhythm_execution_outbox_pending > 0
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm cannot drain its durable execution outbox
+        - alert: RhythmExecutionRedeliveryBacklog
+          expr: rhythm_redis_stream_pending > 0
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm has execution messages pending acknowledgement
+    - name: rhythm.control-plane
+      rules:
+        - alert: RhythmPostgresPoolSaturation
+          expr: |
+            rhythm_postgres_pool_connections{state="acquired"}
+              / rhythm_postgres_pool_max_connections > 0.8
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm is using more than 80 percent of its PostgreSQL pool
+        - alert: RhythmAPILatency
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (rate(rhythm_http_request_duration_seconds_bucket[5m]))
+            ) > 0.75
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm API p95 latency exceeds 750 milliseconds
+        - alert: RhythmAPIErrorRate
+          expr: |
+            sum(rate(rhythm_http_requests_total{status=~"5.."}[5m]))
+              / clamp_min(sum(rate(rhythm_http_requests_total[5m])), 0.001) > 0.01
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: Rhythm API error rate exceeds one percent
+

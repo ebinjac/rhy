@@ -7,11 +7,7 @@ import { PageContainer } from "@/components/page-container"
 
 export function RoutePendingState() {
   return (
-    <PageContainer
-      as="main"
-      aria-busy="true"
-      aria-label="Loading page"
-    >
+    <PageContainer as="main" aria-busy="true" aria-label="Loading page">
       <Skeleton className="h-7 w-52" />
       <Skeleton className="mt-3 h-4 w-full max-w-xl" />
       <div className="mt-8 grid gap-4 md:grid-cols-3">
@@ -83,5 +79,19 @@ function safeErrorMessage(error: Error) {
   if (/not found|404/i.test(error.message)) {
     return "The requested resource was not found. It may have been removed."
   }
-  return "Rhythm kept your previous data unchanged. Check the service connection and try again."
+  if (
+    /failed to fetch|fetch failed|network|econnrefused|connection|timed? ?out|timeout/i.test(
+      error.message
+    )
+  ) {
+    return "Rhythm could not reach the service. Your data was not changed. Check the connection and try again."
+  }
+  if (
+    error.name === "TypeError" ||
+    error.name === "ReferenceError" ||
+    /cannot read properties|is not a function/i.test(error.message)
+  ) {
+    return "Rhythm could not display this page correctly. Your data was not changed. Retry once, or reload the page if the problem continues."
+  }
+  return "Rhythm could not complete this page request. Your data was not changed. Try again."
 }

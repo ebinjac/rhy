@@ -10,6 +10,7 @@ import {
 } from "react"
 import type { ReactNode } from "react"
 import { Badge } from "@workspace/ui/components/badge"
+import { EditorLoading } from "@/components/editor-loading"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import {
@@ -660,7 +661,11 @@ export function RequestWorkbench({
                 tabIndex={-1}
                 value="pre-request"
               >
-                <Suspense fallback={<EditorLoading />}>
+                <Suspense
+                  fallback={
+                    <EditorLoading label="Loading JavaScript editor…" />
+                  }
+                >
                   <PreRequestWorkspace
                     script={request.preRequestScript}
                     onScriptChange={(preRequestScript) =>
@@ -692,7 +697,11 @@ export function RequestWorkbench({
                 tabIndex={-1}
                 value="assertions"
               >
-                <Suspense fallback={<EditorLoading />}>
+                <Suspense
+                  fallback={
+                    <EditorLoading label="Loading JavaScript editor…" />
+                  }
+                >
                   <TestsWorkspace
                     script={request.testScript}
                     onScriptChange={(testScript) =>
@@ -2357,16 +2366,6 @@ function TemplateValueInput({
   )
 }
 
-function EditorLoading() {
-  return (
-    <div
-      className="flex min-h-64 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"
-      role="status"
-    >
-      Loading JavaScript editor…
-    </div>
-  )
-}
 function LabeledNumber({
   label,
   value,

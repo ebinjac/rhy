@@ -1,7 +1,8 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { toast, Toaster as Sonner, type ToasterProps } from "sonner"
+import { toast, Toaster as Sonner  } from "sonner"
+import type {ToasterProps} from "sonner";
 import {
   CircleCheckIcon,
   InfoIcon,

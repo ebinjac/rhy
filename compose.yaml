@@ -3,6 +3,12 @@ name: rhythm
 services:
   postgres:
     image: postgres:17-alpine
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
     environment:
       POSTGRES_DB: rhythm
       POSTGRES_USER: rhythm
@@ -30,6 +36,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: rhythm
+      MINIO_ROOT_PASSWORD: rhythm-local-artifacts
+    ports:
+      - "${RHYTHM_MINIO_PORT:-19000}:9000"
+      - "${RHYTHM_MINIO_CONSOLE_PORT:-19001}:9001"
+    volumes:
+      - rhythm_minio_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 18
     restart: unless-stopped
 
   mailpit:
@@ -112,8 +136,15 @@ services:
     image: rhythm-api:local
     build:
       context: ./services/api
-    environment:
+    environment: &rhythm-api-environment
       RHYTHM_HTTP_ADDR: :8080
+      RHYTHM_ROLE: ${RHYTHM_API_ROLE:-all}
+      RHYTHM_WORKER_CONCURRENCY: ${RHYTHM_WORKER_CONCURRENCY:-32}
+      RHYTHM_SCHEDULER_BATCH_SIZE: ${RHYTHM_SCHEDULER_BATCH_SIZE:-1000}
+      RHYTHM_SCHEDULER_POLL_MS: ${RHYTHM_SCHEDULER_POLL_MS:-500}
+      RHYTHM_TARGET_HOST_CONCURRENCY: ${RHYTHM_TARGET_HOST_CONCURRENCY:-16}
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_DATABASE_MAX_CONNS:-20}
+      RHYTHM_DATABASE_MIN_CONNS: ${RHYTHM_DATABASE_MIN_CONNS:-2}
       RHYTHM_ALLOWED_ORIGIN: http://localhost:${RHYTHM_WEB_PORT:-3100}
       RHYTHM_DEVELOPMENT_ACTOR_ID: local-admin
       RHYTHM_STORAGE_MODE: postgres
@@ -121,6 +152,12 @@ services:
       RHYTHM_REDIS_URL: redis://redis:6379/0
       RHYTHM_SCRIPT_RUNNER_URL: http://script-runner:8090
       RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
+      RHYTHM_BROWSER_RUNNER_URL: http://browser-agent:8091
+      RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
+      RHYTHM_ARTIFACT_STORE_URL: http://minio:9000
+      RHYTHM_ARTIFACT_STORE_ACCESS_KEY: rhythm
+      RHYTHM_ARTIFACT_STORE_SECRET_KEY: rhythm-local-artifacts
+      RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
 
       RHYTHM_ALLOW_PRIVATE_TARGETS: "true"
       RHYTHM_ELF_BOOTSTRAP_URL: http://opensearch:9200
@@ -144,13 +181,152 @@ services:
         condition: service_started
       script-runner:
         condition: service_healthy
+      browser-agent:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
       elf-seed:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
       interval: 5s
       timeout: 3s
       retries: 12
+    init: true
+    restart: unless-stopped
+
+  # Opt-in single-host scale profile. Start with:
+  # RHYTHM_API_ROLE=api docker compose --profile scale up --scale api-worker=4
+  api-worker:
+    profiles: ["scale"]
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    environment:
+      <<: *rhythm-api-environment
+      RHYTHM_ROLE: worker
+      RHYTHM_HTTP_ADDR: :8080
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_WORKER_DATABASE_MAX_CONNS:-12}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      script-runner:
+        condition: service_healthy
+      browser-agent:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      elf-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    init: true
+    restart: unless-stopped
+
+  scheduler:
+    profiles: ["scale"]
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    environment:
+      <<: *rhythm-api-environment
+      RHYTHM_ROLE: scheduler
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_SCHEDULER_DATABASE_MAX_CONNS:-8}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      script-runner:
+        condition: service_healthy
+      browser-agent:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      elf-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    init: true
+    restart: unless-stopped
+
+  background-worker:
+    profiles: ["scale"]
+    image: rhythm-api:local
+    build:
+      context: ./services/api
+    environment:
+      <<: *rhythm-api-environment
+      RHYTHM_ROLE: background
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_BACKGROUND_DATABASE_MAX_CONNS:-8}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+      script-runner:
+        condition: service_healthy
+      browser-agent:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      elf-seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    init: true
+    restart: unless-stopped
+
+  browser-agent:
+    image: rhythm-browser-agent:local
+    build:
+      context: ./services/browser-agent
+    environment:
+      RHYTHM_BROWSER_AGENT_ADDR: 0.0.0.0
+      RHYTHM_BROWSER_AGENT_PORT: "8091"
+      RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
+      RHYTHM_BROWSER_ALLOW_PRIVATE_TARGETS: "true"
+      RHYTHM_BROWSER_MAX_CONCURRENCY: "2"
+      # Docker Desktop does not expose the user namespace required by
+      # Chromium's inner sandbox. The surrounding container remains locked
+      # down (non-root, read-only, cap-drop, no-new-privileges, PID/memory).
+      RHYTHM_CHROMIUM_SANDBOX: "false"
+    expose:
+      - "8091"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://localhost:8091/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,nosuid
+    shm_size: "1gb"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1536m
     init: true
     restart: unless-stopped
 
@@ -162,6 +338,7 @@ services:
     environment:
       RHYTHM_SCRIPT_RUNNER_ADDR: :8090
       RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
+      RHYTHM_SCRIPT_RUNNER_CONCURRENCY: ${RHYTHM_SCRIPT_RUNNER_CONCURRENCY:-8}
     expose:
       - "8090"
     healthcheck:
@@ -194,7 +371,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/monitors"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
       interval: 5s
       timeout: 5s
       retries: 18
@@ -206,3 +383,4 @@ volumes:
   rhythm_redis_data:
   rhythm_opensearch_data:
   rhythm_mailpit_data:
+  rhythm_minio_data:

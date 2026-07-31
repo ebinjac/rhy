@@ -41,6 +41,59 @@ func (s *Service) List(ctx context.Context) ([]Monitor, error) {
 	return s.repository.List(ctx)
 }
 
+func (s *Service) ListPage(ctx context.Context, query PageQuery) (PageResult, error) {
+	if repository, ok := s.repository.(PageRepository); ok {
+		return repository.ListPage(ctx, query)
+	}
+	items, err := s.repository.List(ctx)
+	if err != nil {
+		return PageResult{}, err
+	}
+	result := PageResult{Total: len(items)}
+	start := 0
+	if query.AfterID != "" {
+		for index, item := range items {
+			if item.ID == query.AfterID {
+				start = index + 1
+				break
+			}
+		}
+	}
+	end := min(start+query.Limit, len(items))
+	result.Items = items[start:end]
+	if end < len(items) && len(result.Items) > 0 {
+		last := result.Items[len(result.Items)-1]
+		result.NextName, result.NextID = last.Name, last.ID
+	}
+	return result, nil
+}
+
+func (s *Service) Overview(ctx context.Context, limit int) (OverviewResult, error) {
+	if repository, ok := s.repository.(OverviewRepository); ok {
+		return repository.Overview(ctx, limit)
+	}
+	items, err := s.repository.List(ctx)
+	if err != nil {
+		return OverviewResult{}, err
+	}
+	result := OverviewResult{Items: items, Counts: OverviewCounts{Total: len(items)}}
+	for _, item := range items {
+		if item.Enabled {
+			result.Counts.Enabled++
+		}
+		if item.Health == HealthHealthy {
+			result.Counts.Healthy++
+		}
+		if item.Health == HealthFailing || item.Health == HealthWarning {
+			result.Counts.Attention++
+		}
+	}
+	if len(result.Items) > limit {
+		result.Items = result.Items[:limit]
+	}
+	return result, nil
+}
+
 func (s *Service) Get(ctx context.Context, monitorID string) (Monitor, error) {
 	return s.repository.Get(ctx, monitorID)
 }

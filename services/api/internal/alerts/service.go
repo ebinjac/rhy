@@ -35,6 +35,8 @@ type Alert struct {
 	SourceType          string         `json:"sourceType"`
 	MonitorID           string         `json:"monitorId,omitempty"`
 	MonitorName         string         `json:"monitorName,omitempty"`
+	BrowserMonitorID    string         `json:"browserMonitorId,omitempty"`
+	BrowserMonitorName  string         `json:"browserMonitorName,omitempty"`
 	ApplicationID       string         `json:"applicationId,omitempty"`
 	ApplicationName     string         `json:"applicationName,omitempty"`
 	ApplicationCARID    string         `json:"applicationCarId,omitempty"`
@@ -81,6 +83,20 @@ type AlertEvent struct {
 
 type Filter struct {
 	State, SourceType, ApplicationID, ServiceID, Severity string
+	Query, ExternalMonitorType                            string
+}
+
+type Page struct {
+	Items   []Alert
+	Total   int
+	HasMore bool
+}
+
+type Summary struct {
+	ActiveCount           int `json:"activeCount"`
+	CriticalHighCount     int `json:"criticalHighCount"`
+	OpenSearchActiveCount int `json:"openSearchActiveCount"`
+	ResolvedCount         int `json:"resolvedCount"`
 }
 
 type ServiceAssignmentInput struct {
@@ -199,12 +215,14 @@ func New(pool *pgxpool.Pool, fetcher ...AlertingFetcher) *Service {
 	return s
 }
 
-const alertSelect = `SELECT a.id::text,a.source_type,COALESCE(a.monitor_id::text,''),COALESCE(m.name,''),COALESCE(a.application_id::text,''),COALESCE(ap.name,''),COALESCE(ap.car_id,''),COALESCE(a.service_id::text,''),COALESCE(s.name,''),COALESCE(a.receiver_id::text,''),a.state,COALESCE(a.upstream_state,''),a.severity,a.title,COALESCE(a.description,''),COALESCE(a.failure_category,''),COALESCE(a.failed_step_id,''),a.consecutive_failures,COALESCE(a.external_monitor_id,''),COALESCE(a.external_monitor_name,''),COALESCE(a.external_monitor_type,''),COALESCE(a.external_trigger_id,''),COALESCE(a.external_trigger_name,''),COALESCE(a.external_alert_id,''),COALESCE(a.bucket_key,''),a.hit_count,a.evidence,COALESCE(a.dashboard_url,''),a.first_triggered_at,a.last_triggered_at,a.last_received_at,a.last_reconciled_at,a.acknowledged_at,COALESCE(a.acknowledged_by,''),a.resolved_at,a.created_at,a.updated_at FROM alerts a LEFT JOIN monitors m ON m.id=a.monitor_id LEFT JOIN applications ap ON ap.id=a.application_id LEFT JOIN application_services s ON s.id=a.service_id`
+const alertSelect = `SELECT a.id::text,a.source_type,COALESCE(a.monitor_id::text,''),COALESCE(m.name,''),COALESCE(a.browser_monitor_id::text,''),COALESCE(bm.name,''),COALESCE(a.application_id::text,''),COALESCE(ap.name,''),COALESCE(ap.car_id,''),COALESCE(a.service_id::text,''),COALESCE(s.name,''),COALESCE(a.receiver_id::text,''),a.state,COALESCE(a.upstream_state,''),a.severity,a.title,COALESCE(a.description,''),COALESCE(a.failure_category,''),COALESCE(a.failed_step_id,''),a.consecutive_failures,COALESCE(a.external_monitor_id,''),COALESCE(a.external_monitor_name,''),COALESCE(a.external_monitor_type,''),COALESCE(a.external_trigger_id,''),COALESCE(a.external_trigger_name,''),COALESCE(a.external_alert_id,''),COALESCE(a.bucket_key,''),a.hit_count,a.evidence,COALESCE(a.dashboard_url,''),a.first_triggered_at,a.last_triggered_at,a.last_received_at,a.last_reconciled_at,a.acknowledged_at,COALESCE(a.acknowledged_by,''),a.resolved_at,a.created_at,a.updated_at FROM alerts a LEFT JOIN monitors m ON m.id=a.monitor_id LEFT JOIN browser_monitors bm ON bm.id=a.browser_monitor_id LEFT JOIN applications ap ON ap.id=a.application_id LEFT JOIN application_services s ON s.id=a.service_id`
+
+var alertSummarySelect = strings.Replace(alertSelect, "a.evidence", "'{}'::jsonb", 1)
 
 func scanAlert(row pgx.Row) (Alert, error) {
 	var a Alert
 	var evidence []byte
-	err := row.Scan(&a.ID, &a.SourceType, &a.MonitorID, &a.MonitorName, &a.ApplicationID, &a.ApplicationName, &a.ApplicationCARID, &a.ServiceID, &a.ServiceName, &a.ReceiverID, &a.State, &a.UpstreamState, &a.Severity, &a.Title, &a.Description, &a.FailureCategory, &a.FailedStepID, &a.ConsecutiveFailures, &a.ExternalMonitorID, &a.ExternalMonitorName, &a.ExternalMonitorType, &a.ExternalTriggerID, &a.ExternalTriggerName, &a.ExternalAlertID, &a.BucketKey, &a.HitCount, &evidence, &a.DashboardURL, &a.FirstTriggeredAt, &a.LastTriggeredAt, &a.LastReceivedAt, &a.LastReconciledAt, &a.AcknowledgedAt, &a.AcknowledgedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt)
+	err := row.Scan(&a.ID, &a.SourceType, &a.MonitorID, &a.MonitorName, &a.BrowserMonitorID, &a.BrowserMonitorName, &a.ApplicationID, &a.ApplicationName, &a.ApplicationCARID, &a.ServiceID, &a.ServiceName, &a.ReceiverID, &a.State, &a.UpstreamState, &a.Severity, &a.Title, &a.Description, &a.FailureCategory, &a.FailedStepID, &a.ConsecutiveFailures, &a.ExternalMonitorID, &a.ExternalMonitorName, &a.ExternalMonitorType, &a.ExternalTriggerID, &a.ExternalTriggerName, &a.ExternalAlertID, &a.BucketKey, &a.HitCount, &evidence, &a.DashboardURL, &a.FirstTriggeredAt, &a.LastTriggeredAt, &a.LastReceivedAt, &a.LastReconciledAt, &a.AcknowledgedAt, &a.AcknowledgedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt)
 	if err == nil {
 		a.Evidence = map[string]any{}
 		_ = json.Unmarshal(evidence, &a.Evidence)
@@ -216,21 +234,147 @@ func (s *Service) List(ctx context.Context, state string) ([]Alert, error) {
 	return s.ListFiltered(ctx, Filter{State: state})
 }
 
-func (s *Service) ListFiltered(ctx context.Context, filter Filter) ([]Alert, error) {
-	rows, err := s.pool.Query(ctx, alertSelect+` WHERE ($1='' OR a.state=$1) AND ($2='' OR a.source_type=$2) AND ($3='' OR a.application_id::text=$3) AND ($4='' OR a.service_id::text=$4) AND ($5='' OR a.severity=$5) ORDER BY a.updated_at DESC LIMIT 200`, filter.State, filter.SourceType, filter.ApplicationID, filter.ServiceID, filter.Severity)
+type Overview struct {
+	Items         []Alert
+	ActiveCount   int
+	CriticalCount int
+}
+
+func (s *Service) Overview(ctx context.Context, limit int) (Overview, error) {
+	if limit < 1 {
+		limit = 5
+	}
+	var result Overview
+	if err := s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*),
+			COUNT(*) FILTER (WHERE severity IN ('CRITICAL','HIGH'))
+		FROM alerts
+		WHERE state IN ('OPEN','ACKNOWLEDGED','ERROR')`).Scan(
+		&result.ActiveCount,
+		&result.CriticalCount,
+	); err != nil {
+		return Overview{}, err
+	}
+	rows, err := s.pool.Query(ctx, alertSummarySelect+`
+		WHERE a.state IN ('OPEN','ACKNOWLEDGED','ERROR')
+		ORDER BY
+			CASE a.severity
+				WHEN 'CRITICAL' THEN 0
+				WHEN 'HIGH' THEN 1
+				WHEN 'WARNING' THEN 2
+				ELSE 3
+			END,
+			a.updated_at DESC
+		LIMIT $1`, limit)
 	if err != nil {
-		return nil, err
+		return Overview{}, err
 	}
 	defer rows.Close()
-	items := make([]Alert, 0)
+	for rows.Next() {
+		item, scanErr := scanAlert(rows)
+		if scanErr != nil {
+			return Overview{}, scanErr
+		}
+		result.Items = append(result.Items, item)
+	}
+	return result, rows.Err()
+}
+
+func (s *Service) ListFiltered(ctx context.Context, filter Filter) ([]Alert, error) {
+	page, err := s.ListFilteredPage(ctx, filter, 200, time.Time{}, "")
+	return page.Items, err
+}
+
+func (s *Service) Summary(ctx context.Context) (Summary, error) {
+	var result Summary
+	err := s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE state IN ('OPEN','ACKNOWLEDGED','ERROR')),
+			COUNT(*) FILTER (
+				WHERE state IN ('OPEN','ACKNOWLEDGED','ERROR')
+				AND severity IN ('CRITICAL','HIGH')
+			),
+			COUNT(*) FILTER (
+				WHERE state IN ('OPEN','ACKNOWLEDGED','ERROR')
+				AND source_type='OPENSEARCH_ALERTING'
+			),
+			COUNT(*) FILTER (WHERE state='RESOLVED')
+		FROM alerts`).Scan(
+		&result.ActiveCount,
+		&result.CriticalHighCount,
+		&result.OpenSearchActiveCount,
+		&result.ResolvedCount,
+	)
+	return result, err
+}
+
+func (s *Service) ListFilteredPage(ctx context.Context, filter Filter, limit int, afterUpdatedAt time.Time, afterID string) (Page, error) {
+	if limit < 1 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	const predicates = ` WHERE
+		($1='' OR a.state=$1)
+		AND ($2='' OR a.source_type=$2)
+		AND ($3='' OR a.application_id::text=$3)
+		AND ($4='' OR a.service_id::text=$4)
+		AND ($5='' OR a.severity=$5)
+		AND ($6='' OR CONCAT_WS(' ',a.title,a.description,a.external_monitor_name,ap.name) ILIKE '%' || $6 || '%')
+		AND ($7='' OR a.external_monitor_type=$7)`
+	filterArguments := []any{
+		filter.State,
+		filter.SourceType,
+		filter.ApplicationID,
+		filter.ServiceID,
+		filter.Severity,
+		strings.TrimSpace(filter.Query),
+		filter.ExternalMonitorType,
+	}
+	var result Page
+	if err := s.pool.QueryRow(ctx, `
+			SELECT COUNT(*)
+			FROM alerts a
+			LEFT JOIN applications ap ON ap.id=a.application_id`+predicates, filterArguments...).Scan(&result.Total); err != nil {
+		return Page{}, err
+	}
+	var cursorTime any
+	var cursorID any
+	if !afterUpdatedAt.IsZero() && strings.TrimSpace(afterID) != "" {
+		cursorTime = afterUpdatedAt.UTC()
+		cursorID = afterID
+	}
+	// List views intentionally omit potentially large retained evidence. The
+	// alert detail endpoint remains the source for sanitized evidence.
+	rows, err := s.pool.Query(
+		ctx,
+		alertSummarySelect+predicates+`
+			AND ($8::timestamptz IS NULL OR (a.updated_at,a.id) < ($8,$9::uuid))
+			ORDER BY a.updated_at DESC,a.id DESC LIMIT $10`,
+		append(filterArguments, cursorTime, cursorID, limit+1)...,
+	)
+	if err != nil {
+		return Page{}, err
+	}
+	defer rows.Close()
+	result.Items = make([]Alert, 0, min(limit+1, result.Total))
 	for rows.Next() {
 		a, scanErr := scanAlert(rows)
 		if scanErr != nil {
-			return nil, scanErr
+			return Page{}, scanErr
 		}
-		items = append(items, a)
+		result.Items = append(result.Items, a)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Page{}, err
+	}
+	if len(result.Items) > limit {
+		result.Items = result.Items[:limit]
+		result.HasMore = true
+	}
+	return result, nil
 }
 
 // OpenSearchAlertMatch identifies OpenSearch Alerting notifications ingested via a receiver.

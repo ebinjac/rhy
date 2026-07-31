@@ -23,7 +23,7 @@ import {
 } from "lucide-react"
 
 import type {
-  DeploymentValidationRunContract,
+  DeploymentValidationRunSummaryContract,
   DeploymentBaselinePreviewContract,
   ELFApplicationContract,
   ValidationSuiteContract,
@@ -42,7 +42,7 @@ export function DeploymentWorkflow({
 }: {
   suites: ValidationSuiteContract[]
   applications: ELFApplicationContract[]
-  runs: DeploymentValidationRunContract[]
+  runs: DeploymentValidationRunSummaryContract[]
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -83,6 +83,17 @@ export function DeploymentWorkflow({
           stage.checks
             .filter((check) => check.kind === "MONITOR")
             .map((check) => check.monitorId)
+        ) ?? []
+      ).size,
+    [suite]
+  )
+  const browserMonitorCount = useMemo(
+    () =>
+      new Set(
+        suite?.stages.flatMap((stage) =>
+          stage.checks
+            .filter((check) => check.kind === "BROWSER_MONITOR")
+            .map((check) => check.browserMonitorId)
         ) ?? []
       ).size,
     [suite]
@@ -263,326 +274,391 @@ export function DeploymentWorkflow({
             onSubmit={(event) => {
               event.preventDefault()
               if (step < 4) {
-                if (suiteId && deploymentStart) setStep((current) => current + 1)
+                if (suiteId && deploymentStart)
+                  setStep((current) => current + 1)
                 return
               }
               if (!pending && suiteId) void start()
             }}
           >
-          <div className="min-h-52">
-            {step === 1 ? (
-              <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <Field label="Suite template">
-                  <Select
-                    value={suiteId || null}
-                    onValueChange={(value) => setSuiteId(value ?? "")}
-                    items={suites.map((item) => ({
-                      value: item.id,
-                      label: item.name,
-                    }))}
-                  >
-                    <SelectTrigger aria-label="Suite template" className="h-9 w-full">
-                      <SelectValue placeholder="Select suite" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {suites.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Application" hint="Optional">
-                  <Select
-                    value={applicationId || null}
-                    onValueChange={(value) => setApplicationId(value ?? "")}
-                    items={[
-                      { value: null, label: "No application filter" },
-                      ...applications.map((item) => ({
-                        value: item.id,
-                        label: `${item.name} · ${item.carId || "No CAR ID"}`,
-                      })),
-                    ]}
-                  >
-                    <SelectTrigger aria-label="Application" className="h-9 w-full">
-                      <SelectValue placeholder="No application filter" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value={null}>No application filter</SelectItem>
-                      {applications.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>
-                          {item.name} · {item.carId || "No CAR ID"}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Deployment ID" hint="Optional">
-                  <Input aria-label="Deployment ID"
-                    value={deploymentId}
-                    onChange={(event) => setDeploymentId(event.target.value)}
-                    placeholder="deploy-2026-07-22-143"
-                  />
-                </Field>
-                <Field label="Version" hint="Optional">
-                  <Input aria-label="Version"
-                    value={version}
-                    onChange={(event) => setVersion(event.target.value)}
-                    placeholder="v2.18.0"
-                  />
-                </Field>
-                <Field label="Commit" hint="Optional">
-                  <Input aria-label="Commit"
-                    className="font-mono"
-                    value={commit}
-                    onChange={(event) => setCommit(event.target.value)}
-                    placeholder="7f31c2a"
-                  />
-                </Field>
-                <Field label="Deployment start">
-                  <Input aria-label="Deployment start"
-                    type="datetime-local"
-                    value={deploymentStart}
-                    onChange={(event) => setDeploymentStart(event.target.value)}
-                  />
-                </Field>
-                {dynatraceCount ? (
-                  <Field
-                    label="Deployment completed"
-                    hint="Required for Dynatrace stabilization"
-                  >
-                    <Input
-                      aria-label="Deployment completed"
-                      type="datetime-local"
-                      value={deploymentCompletedAt}
-                      onChange={(event) =>
-                        setDeploymentCompletedAt(event.target.value)
-                      }
-                    />
-                  </Field>
-                ) : null}
-                <Field label="Release notes" hint="Optional" wide>
-                  <Textarea aria-label="Release notes"
-                    value={notes}
-                    onChange={(event) => setNotes(event.target.value)}
-                    placeholder="What changed in this deployment?"
-                  />
-                </Field>
-              </div>
-            ) : null}
-            {step === 2 ? (
-              <div className="grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
-                <div>
-                  <Field label="Historical baseline window">
+            <div className="min-h-52">
+              {step === 1 ? (
+                <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  <Field label="Suite template">
                     <Select
-                      value={baselineWindow}
-                      onValueChange={(value) => {
-                        if (value == null) return
-                        setBaselineWindow(value)
-                      }}
-                      items={[
-                        { value: "24h", label: "Previous 24 hours" },
-                        { value: "7d", label: "Previous 7 days" },
-                        { value: "30d", label: "Previous 30 days" },
-                      ]}
+                      value={suiteId || null}
+                      onValueChange={(value) => setSuiteId(value ?? "")}
+                      items={suites.map((item) => ({
+                        value: item.id,
+                        label: item.name,
+                      }))}
                     >
-                      <SelectTrigger aria-label="Historical baseline window" className="h-9 w-full">
-                        <SelectValue />
+                      <SelectTrigger
+                        aria-label="Suite template"
+                        className="h-9 w-full"
+                      >
+                        <SelectValue placeholder="Select suite" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="24h">Previous 24 hours</SelectItem>
-                        <SelectItem value="7d">Previous 7 days</SelectItem>
-                        <SelectItem value="30d">Previous 30 days</SelectItem>
+                        {suites.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.name}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </Field>
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    Rhythm uses successful runs from the same published revision
-                    and stops the window exactly at deployment start.
-                  </p>
+                  <Field label="Application" hint="Optional">
+                    <Select
+                      value={applicationId || null}
+                      onValueChange={(value) => setApplicationId(value ?? "")}
+                      items={[
+                        { value: null, label: "No application filter" },
+                        ...applications.map((item) => ({
+                          value: item.id,
+                          label: `${item.name} · ${item.carId || "No CAR ID"}`,
+                        })),
+                      ]}
+                    >
+                      <SelectTrigger
+                        aria-label="Application"
+                        className="h-9 w-full"
+                      >
+                        <SelectValue placeholder="No application filter" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={null}>
+                          No application filter
+                        </SelectItem>
+                        {applications.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            {item.name} · {item.carId || "No CAR ID"}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="Deployment ID" hint="Optional">
+                    <Input
+                      aria-label="Deployment ID"
+                      value={deploymentId}
+                      onChange={(event) => setDeploymentId(event.target.value)}
+                      placeholder="deploy-2026-07-22-143"
+                    />
+                  </Field>
+                  <Field label="Version" hint="Optional">
+                    <Input
+                      aria-label="Version"
+                      value={version}
+                      onChange={(event) => setVersion(event.target.value)}
+                      placeholder="v2.18.0"
+                    />
+                  </Field>
+                  <Field label="Commit" hint="Optional">
+                    <Input
+                      aria-label="Commit"
+                      className="font-mono"
+                      value={commit}
+                      onChange={(event) => setCommit(event.target.value)}
+                      placeholder="7f31c2a"
+                    />
+                  </Field>
+                  <Field label="Deployment start">
+                    <Input
+                      aria-label="Deployment start"
+                      type="datetime-local"
+                      value={deploymentStart}
+                      onChange={(event) =>
+                        setDeploymentStart(event.target.value)
+                      }
+                    />
+                  </Field>
+                  {dynatraceCount ? (
+                    <Field
+                      label="Deployment completed"
+                      hint="Required for Dynatrace stabilization"
+                    >
+                      <Input
+                        aria-label="Deployment completed"
+                        type="datetime-local"
+                        value={deploymentCompletedAt}
+                        onChange={(event) =>
+                          setDeploymentCompletedAt(event.target.value)
+                        }
+                      />
+                    </Field>
+                  ) : null}
+                  <Field label="Release notes" hint="Optional" wide>
+                    <Textarea
+                      aria-label="Release notes"
+                      value={notes}
+                      onChange={(event) => setNotes(event.target.value)}
+                      placeholder="What changed in this deployment?"
+                    />
+                  </Field>
                 </div>
-                <div>
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium">Baseline readiness</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        Successful API-timing samples from the current published
-                        revision only.
-                      </p>
-                    </div>
-                    {baselineLoading ? (
-                      <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
-                    ) : null}
-                  </div>
-                  {baselineError ? (
-                    <p className="mt-3 text-sm text-destructive" role="alert">
-                      {baselineError}
-                    </p>
-                  ) : baselinePreview ? (
-                    <div className="mt-3 divide-y border-y">
-                      {baselinePreview.monitors.map((monitor) => (
-                        <div
-                          className="flex items-start justify-between gap-4 py-3 text-sm"
-                          key={monitor.monitorId}
+              ) : null}
+              {step === 2 ? (
+                <div className="grid gap-5 lg:grid-cols-[.8fr_1.2fr]">
+                  <div>
+                    <Field label="Historical baseline window">
+                      <Select
+                        value={baselineWindow}
+                        onValueChange={(value) => {
+                          if (value == null) return
+                          setBaselineWindow(value)
+                        }}
+                        items={[
+                          { value: "24h", label: "Previous 24 hours" },
+                          { value: "7d", label: "Previous 7 days" },
+                          { value: "30d", label: "Previous 30 days" },
+                        ]}
+                      >
+                        <SelectTrigger
+                          aria-label="Historical baseline window"
+                          className="h-9 w-full"
                         >
-                          <div>
-                            <p className="font-medium">{monitor.monitorName}</p>
-                            <p className="mt-1 text-xs text-muted-foreground">
-                              {monitor.reason ||
-                                "Same-revision baseline is ready."}
-                            </p>
-                          </div>
-                          <Badge
-                            className={
-                              monitor.compatible
-                                ? "bg-success-soft text-success-foreground"
-                                : "bg-warning-soft text-warning-foreground"
-                            }
-                            variant="secondary"
-                          >
-                            {monitor.sampleCount} sample
-                            {monitor.sampleCount === 1 ? "" : "s"}
-                          </Badge>
-                        </div>
-                      ))}
-                      {!baselinePreview.monitors.length ? (
-                        <p className="py-8 text-center text-sm text-muted-foreground">
-                          This suite has no monitor checks.
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="24h">Previous 24 hours</SelectItem>
+                          <SelectItem value="7d">Previous 7 days</SelectItem>
+                          <SelectItem value="30d">Previous 30 days</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      Rhythm uses successful runs from the same published
+                      revision and stops the window exactly at deployment start.
+                    </p>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="font-medium">Baseline readiness</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Successful API timings and compatible browser journeys
+                          from each current published revision.
                         </p>
+                      </div>
+                      {baselineLoading ? (
+                        <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
                       ) : null}
                     </div>
-                  ) : null}
-                  <div className="mt-4 border-y py-3 text-sm">
-                    <p className="font-medium">Performance guardrail</p>
-                    <p className="mt-1 text-muted-foreground">
-                      Block when post-deployment p95 is both 25% and 100 ms
-                      slower than baseline p95. Fewer than five baseline samples
-                      produces a warning.
-                    </p>
-                    {baselinePreview?.blockingDependencies.length ? (
-                      <ul className="mt-3 list-disc space-y-1 pl-5 text-destructive">
-                        {baselinePreview.blockingDependencies.map((reason) => (
-                          <li key={reason}>{reason}</li>
+                    {baselineError ? (
+                      <p className="mt-3 text-sm text-destructive" role="alert">
+                        {baselineError}
+                      </p>
+                    ) : baselinePreview ? (
+                      <div className="mt-3 divide-y border-y">
+                        {baselinePreview.monitors.map((monitor) => (
+                          <div
+                            className="flex items-start justify-between gap-4 py-3 text-sm"
+                            key={monitor.monitorId}
+                          >
+                            <div>
+                              <p className="font-medium">
+                                {monitor.monitorName}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {monitor.reason ||
+                                  "Same-revision baseline is ready."}
+                              </p>
+                            </div>
+                            <Badge
+                              className={
+                                monitor.compatible
+                                  ? "bg-success-soft text-success-foreground"
+                                  : "bg-warning-soft text-warning-foreground"
+                              }
+                              variant="secondary"
+                            >
+                              {monitor.sampleCount} sample
+                              {monitor.sampleCount === 1 ? "" : "s"}
+                            </Badge>
+                          </div>
                         ))}
-                      </ul>
+                        {(baselinePreview.browserMonitors ?? []).map(
+                          (monitor) => (
+                            <div
+                              className="flex items-start justify-between gap-4 py-3 text-sm"
+                              key={`browser-${monitor.monitorId}`}
+                            >
+                              <div>
+                                <p className="font-medium">
+                                  {monitor.monitorName}
+                                </p>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  UI journey ·{" "}
+                                  {monitor.reason ||
+                                    "Compatible browser baseline is ready."}
+                                </p>
+                              </div>
+                              <Badge
+                                className={
+                                  monitor.compatible
+                                    ? "bg-success-soft text-success-foreground"
+                                    : "bg-warning-soft text-warning-foreground"
+                                }
+                                variant="secondary"
+                              >
+                                {monitor.sampleCount} sample
+                                {monitor.sampleCount === 1 ? "" : "s"}
+                              </Badge>
+                            </div>
+                          )
+                        )}
+                        {!baselinePreview.monitors.length &&
+                        !(baselinePreview.browserMonitors ?? []).length ? (
+                          <p className="py-8 text-center text-sm text-muted-foreground">
+                            This suite has no API or UI monitor checks.
+                          </p>
+                        ) : null}
+                      </div>
                     ) : null}
+                    <div className="mt-4 border-y py-3 text-sm">
+                      <p className="font-medium">Performance guardrail</p>
+                      <p className="mt-1 text-muted-foreground">
+                        Block when post-deployment p95 is both 25% and 100 ms
+                        slower than baseline p95. Fewer than five baseline
+                        samples produces a warning.
+                      </p>
+                      {baselinePreview?.blockingDependencies.length ? (
+                        <ul className="mt-3 list-disc space-y-1 pl-5 text-destructive">
+                          {baselinePreview.blockingDependencies.map(
+                            (reason) => (
+                              <li key={reason}>{reason}</li>
+                            )
+                          )}
+                        </ul>
+                      ) : null}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ) : null}
-            {step === 3 ? (
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Samples per monitor">
-                  <Input aria-label="Samples per monitor"
-                    type="number"
-                    min={3}
-                    max={50}
-                    value={sampleCount}
-                    onChange={(event) =>
-                      setSampleCount(Number(event.target.value))
-                    }
-                  />
-                </Field>
-                <Field label="Interval between samples (seconds)">
-                  <Input aria-label="Interval between samples (seconds)"
-                    type="number"
-                    min={1}
-                    max={300}
-                    value={sampleIntervalSeconds}
-                    onChange={(event) =>
-                      setSampleIntervalSeconds(Number(event.target.value))
-                    }
-                  />
-                </Field>
-                <div className="flex flex-wrap gap-x-6 gap-y-2 border-y py-4 text-sm md:col-span-2">
-                  <span>
-                    <strong>{monitorCount}</strong> monitors
-                  </span>
-                  <span>
-                    <strong>{sampleCount * monitorCount}</strong> executions
-                  </span>
-                  <span>
-                    <strong>{elfCount}</strong> ELF checks
-                  </span>
-                  <span>
-                    <strong>{alertCount}</strong> OpenSearch alerts
-                  </span>
-                  <span>
-                    <strong>{dynatraceCount}</strong> Dynatrace checks
-                  </span>
-                  <span>
-                    <strong>
-                      up to{" "}
-                      {Math.max(
-                        1,
-                        Math.ceil(
-                          (baselinePreview?.estimatedMaximumSeconds ??
-                            estimatedSeconds) / 60
-                        )
-                      )}{" "}
-                      min
-                    </strong>{" "}
-                    from monitor timeouts, intervals, and suite parallelism
-                  </span>
+              ) : null}
+              {step === 3 ? (
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Samples per monitor">
+                    <Input
+                      aria-label="Samples per monitor"
+                      type="number"
+                      min={3}
+                      max={50}
+                      value={sampleCount}
+                      onChange={(event) =>
+                        setSampleCount(Number(event.target.value))
+                      }
+                    />
+                  </Field>
+                  <Field label="Interval between samples (seconds)">
+                    <Input
+                      aria-label="Interval between samples (seconds)"
+                      type="number"
+                      min={1}
+                      max={300}
+                      value={sampleIntervalSeconds}
+                      onChange={(event) =>
+                        setSampleIntervalSeconds(Number(event.target.value))
+                      }
+                    />
+                  </Field>
+                  <div className="flex flex-wrap gap-x-6 gap-y-2 border-y py-4 text-sm md:col-span-2">
+                    <span>
+                      <strong>{monitorCount}</strong> monitors
+                    </span>
+                    <span>
+                      <strong>{sampleCount * monitorCount}</strong> executions
+                    </span>
+                    <span>
+                      <strong>{browserMonitorCount}</strong> UI monitors ·{" "}
+                      <strong>{browserMonitorCount * 5}</strong> browser
+                      journeys
+                    </span>
+                    <span>
+                      <strong>{elfCount}</strong> ELF checks
+                    </span>
+                    <span>
+                      <strong>{alertCount}</strong> OpenSearch alerts
+                    </span>
+                    <span>
+                      <strong>{dynatraceCount}</strong> Dynatrace checks
+                    </span>
+                    <span>
+                      <strong>
+                        up to{" "}
+                        {Math.max(
+                          1,
+                          Math.ceil(
+                            (baselinePreview?.estimatedMaximumSeconds ??
+                              estimatedSeconds) / 60
+                          )
+                        )}{" "}
+                        min
+                      </strong>{" "}
+                      from monitor timeouts, intervals, and suite parallelism
+                    </span>
+                  </div>
                 </div>
-              </div>
+              ) : null}
+              {step === 4 ? (
+                <div className="divide-y border-y text-sm">
+                  <ReviewRow
+                    label="Suite"
+                    value={suite?.name || "Not selected"}
+                    icon={ShieldCheck}
+                  />
+                  <ReviewRow
+                    label="Deployment"
+                    value={`${version || "Unversioned"} · ${new Date(deploymentStart).toLocaleString()}`}
+                    icon={GitCommit}
+                  />
+                  <ReviewRow
+                    label="Baseline"
+                    value={`${baselineWindow} before deployment · API response time only`}
+                    icon={Clock3}
+                  />
+                  <ReviewRow
+                    label="Post validation"
+                    value={`${sampleCount} samples per monitor · ${sampleIntervalSeconds}s interval · ELF then OpenSearch alerts`}
+                    icon={Play}
+                  />
+                </div>
+              ) : null}
+            </div>
+            {message ? (
+              <p
+                className="mt-4 inline-flex items-center gap-2 text-sm text-destructive"
+                role="alert"
+                aria-live="assertive"
+              >
+                <CircleAlert className="size-4" aria-hidden />
+                {message}
+              </p>
             ) : null}
-            {step === 4 ? (
-              <div className="divide-y border-y text-sm">
-                <ReviewRow
-                  label="Suite"
-                  value={suite?.name || "Not selected"}
-                  icon={ShieldCheck}
-                />
-                <ReviewRow
-                  label="Deployment"
-                  value={`${version || "Unversioned"} · ${new Date(deploymentStart).toLocaleString()}`}
-                  icon={GitCommit}
-                />
-                <ReviewRow
-                  label="Baseline"
-                  value={`${baselineWindow} before deployment · API response time only`}
-                  icon={Clock3}
-                />
-                <ReviewRow
-                  label="Post validation"
-                  value={`${sampleCount} samples per monitor · ${sampleIntervalSeconds}s interval · ELF then OpenSearch alerts`}
-                  icon={Play}
-                />
-              </div>
-            ) : null}
-          </div>
-          {message ? (
-            <p
-              className="mt-4 inline-flex items-center gap-2 text-sm text-destructive"
-              role="alert"
-              aria-live="assertive"
-            >
-              <CircleAlert className="size-4" aria-hidden />
-              {message}
-            </p>
-          ) : null}
-          <div className="mt-5 flex justify-between border-t pt-4">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={step === 1 || pending}
-              onClick={() => setStep((current) => current - 1)}
-            >
-              Back
-            </Button>
-            {step < 4 ? (
-              <Button type="submit" disabled={!suiteId || !deploymentStart}>
-                Continue <ArrowRight />
+            <div className="mt-5 flex justify-between border-t pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={step === 1 || pending}
+                onClick={() => setStep((current) => current - 1)}
+              >
+                Back
               </Button>
-            ) : (
-              <Button type="submit" disabled={pending || !suiteId}>
-                {pending ? <LoaderCircle className="animate-spin" /> : <Play />}
-                Start validation
-              </Button>
-            )}
-          </div>
+              {step < 4 ? (
+                <Button type="submit" disabled={!suiteId || !deploymentStart}>
+                  Continue <ArrowRight />
+                </Button>
+              ) : (
+                <Button type="submit" disabled={pending || !suiteId}>
+                  {pending ? (
+                    <LoaderCircle className="animate-spin" />
+                  ) : (
+                    <Play />
+                  )}
+                  Start validation
+                </Button>
+              )}
+            </div>
           </form>
         </section>
       ) : null}
@@ -621,7 +697,11 @@ export function DeploymentWorkflow({
   )
 }
 
-function DeploymentRunRow({ run }: { run: DeploymentValidationRunContract }) {
+function DeploymentRunRow({
+  run,
+}: {
+  run: DeploymentValidationRunSummaryContract
+}) {
   const percent = run.progress.total
     ? Math.round((run.progress.completed / run.progress.total) * 100)
     : 0
@@ -650,7 +730,9 @@ function DeploymentRunRow({ run }: { run: DeploymentValidationRunContract }) {
               aria-valuemin={0}
               aria-valuemax={100}
               aria-valuenow={percent}
-              aria-label={run.progress.message || "Deployment validation progress"}
+              aria-label={
+                run.progress.message || "Deployment validation progress"
+              }
               className="h-1.5 overflow-hidden rounded-full bg-muted"
             >
               <div

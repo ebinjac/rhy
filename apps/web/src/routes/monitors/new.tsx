@@ -53,6 +53,7 @@ import {
 import { createMonitorSchema } from "@/features/monitors/schema"
 import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
 import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
+import { EditorLoading } from "@/components/editor-loading"
 import { PageContainer } from "@/components/page-container"
 import {
   initialRequestDefinition,
@@ -1188,13 +1189,7 @@ function NewMonitorPage() {
 
         <Suspense
           fallback={
-            <div
-              className="flex min-h-96 items-center justify-center rounded-xl border text-sm text-muted-foreground"
-              role="status"
-            >
-              <LoaderCircle className="mr-2 size-4 animate-spin" />
-              Loading request workbench…
-            </div>
+            <EditorLoading label="Loading request workbench…" />
           }
         >
           <RequestWorkbench

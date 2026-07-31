@@ -10,13 +10,13 @@ import {
 import { cn } from "@workspace/ui/lib/utils"
 
 import { PageContainer } from "@/components/page-container"
-import { listMonitors } from "@/lib/api-client/monitors"
+import { getMonitorSummary } from "@/lib/api-client/monitors"
 
 export const Route = createFileRoute("/monitors/$monitorId")({
   loader: async ({ params }) => {
-    const { monitors } = await listMonitors()
-    const monitor = monitors.find((item) => item.id === params.monitorId)
-    if (!monitor) throw new Error("Monitor not found")
+    const monitor = await getMonitorSummary({
+      data: { monitorId: params.monitorId },
+    })
     return { monitor }
   },
   component: MonitorWorkspace,

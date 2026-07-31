@@ -39,61 +39,13 @@ import type { MonitorSummary } from "@/features/monitors/seed-data"
 import type {
   AlertContract,
   DeploymentValidationRunContract,
-  ELFApplicationContract,
   RunContract,
 } from "@/lib/api-client/contracts"
-import {
-  getELFSettings,
-  listELFApplications,
-  listELFQueries,
-} from "@/lib/api-client/elf"
-import { listMonitors, listRecentRuns } from "@/lib/api-client/monitors"
-import { listUnifiedAlerts } from "@/lib/api-client/opensearch-alerts"
-import { listDeploymentValidations, listSuites } from "@/lib/api-client/suites"
+import { getOperationalOverview } from "@/lib/api-client/overview"
 import { formatDateTime, formatFullDate } from "@/lib/format-date"
 
 export const Route = createFileRoute("/")({
-  loader: async () => {
-    const [
-      monitors,
-      alerts,
-      runs,
-      deployments,
-      applications,
-      elfQueries,
-      elfSettings,
-      suites,
-    ] = await Promise.all([
-      listMonitors(),
-      listUnifiedAlerts({
-        data: {
-          state: "",
-          sourceType: "",
-          applicationId: "",
-          serviceId: "",
-          severity: "",
-        },
-      }),
-      listRecentRuns(),
-      listDeploymentValidations().catch(
-        () => [] as DeploymentValidationRunContract[]
-      ),
-      listELFApplications().catch(() => [] as ELFApplicationContract[]),
-      listELFQueries().catch(() => []),
-      getELFSettings().catch(() => null),
-      listSuites().catch(() => []),
-    ])
-    return {
-      monitors,
-      alerts,
-      runs,
-      deployments,
-      applications,
-      elfQueries,
-      elfSettings,
-      suites,
-    }
-  },
+  loader: () => getOperationalOverview(),
   component: OverviewPage,
 })
 
@@ -113,31 +65,22 @@ const ACTIVE_ALERT_STATES = new Set<AlertContract["state"]>([
 
 function OverviewPage() {
   const {
-    monitors: monitorResult,
+    monitors,
     alerts,
     runs,
     deployments,
     applications,
-    elfQueries,
-    elfSettings,
-    suites,
+    elfConfigured,
+    counts,
   } = Route.useLoaderData()
-  const { monitors } = monitorResult
   const [focus, setFocus] = useState<FocusFilter>("attention")
 
   const activeAlerts = useMemo(
     () => alerts.filter((alert) => ACTIVE_ALERT_STATES.has(alert.state)),
     [alerts]
   )
-  const criticalAlerts = activeAlerts.filter(
-    (alert) => alert.severity === "CRITICAL" || alert.severity === "HIGH"
-  )
-  const enabled = monitors.filter((monitor) => monitor.enabled)
   const listStatusOf = (monitor: MonitorSummary) =>
     effectiveMonitorListStatus(monitor.status, monitor.successRate)
-  const healthy = enabled.filter(
-    (monitor) => listStatusOf(monitor) === "healthy"
-  )
   const attentionMonitors = monitors
     .filter((monitor) => {
       const listStatus = listStatusOf(monitor)
@@ -157,12 +100,12 @@ function OverviewPage() {
     .slice(0, 4)
 
   const posture = derivePosture({
-    monitorCount: monitors.length,
-    enabledCount: enabled.length,
-    healthyCount: healthy.length,
-    attentionCount: attentionMonitors.length,
-    alertCount: activeAlerts.length,
-    criticalCount: criticalAlerts.length,
+    monitorCount: counts.monitors,
+    enabledCount: counts.enabledMonitors,
+    healthyCount: counts.healthyMonitors,
+    attentionCount: counts.attentionMonitors,
+    alertCount: counts.activeAlerts,
+    criticalCount: counts.criticalAlerts,
   })
 
   const visibleMonitors = useMemo(() => {
@@ -204,49 +147,49 @@ function OverviewPage() {
       id: "configuration",
       label: "Configure credentials and integrations",
       description: "Add the profiles your monitors and log queries depend on.",
-      complete: Boolean(elfSettings),
+      complete: elfConfigured,
       to: "/configuration",
     },
     {
       id: "application",
       label: "Register an application",
       description: "Assign ownership, CAR ID, environment, and services.",
-      complete: applications.length > 0,
+      complete: counts.applications > 0,
       to: "/applications",
     },
     {
       id: "monitor",
       label: "Create and test a monitor",
       description: "Build a request workflow and verify its checks.",
-      complete: monitors.length > 0,
+      complete: counts.monitors > 0,
       to: "/monitors/new",
     },
     {
       id: "schedule",
       label: "Enable a schedule",
       description: "Publish a monitor and establish a continuous signal.",
-      complete: monitors.some((monitor) => monitor.enabled),
+      complete: counts.enabledMonitors > 0,
       to: "/monitors",
     },
     {
       id: "elf",
       label: "Create an ELF query",
       description: "Probe OpenSearch logs and define the deployment condition.",
-      complete: elfQueries.length > 0,
-      to: elfSettings ? "/elf" : "/elf/settings",
+      complete: counts.elfQueries > 0,
+      to: elfConfigured ? "/elf" : "/elf/settings",
     },
     {
       id: "suite",
       label: "Build a validation suite",
       description: "Combine monitors and log checks into a release workflow.",
-      complete: suites.length > 0 || deployments.length > 0,
+      complete: counts.suites > 0 || counts.deployments > 0,
       to: "/suites",
     },
   ]
 
   return (
     <>
-      <SystemNotice alert={activeAlerts[0]} alertCount={activeAlerts.length} />
+      <SystemNotice alert={activeAlerts[0]} alertCount={counts.activeAlerts} />
       <PageContainer>
         <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
           <div>
@@ -296,42 +239,45 @@ function OverviewPage() {
               </p>
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 lg:gap-x-8">
-              <Stat label="Enabled" value={String(enabled.length)} />
+              <Stat label="Enabled" value={String(counts.enabledMonitors)} />
               <Stat
                 label="Healthy"
                 value={
-                  enabled.length ? `${healthy.length}/${enabled.length}` : "—"
+                  counts.enabledMonitors
+                    ? `${counts.healthyMonitors}/${counts.enabledMonitors}`
+                    : "—"
                 }
                 tone={
                   attentionMonitors.some(
                     (m) => listStatusOf(m) === "failing"
                   )
                     ? "danger"
-                    : attentionMonitors.length
+                    : counts.attentionMonitors
                       ? "warning"
-                      : healthy.length === enabled.length && enabled.length
+                      : counts.healthyMonitors === counts.enabledMonitors &&
+                          counts.enabledMonitors
                         ? "success"
                         : "default"
                 }
               />
               <Stat
                 label="Open alerts"
-                value={String(activeAlerts.length)}
+                value={String(counts.activeAlerts)}
                 tone={
-                  criticalAlerts.length
+                  counts.criticalAlerts
                     ? "danger"
-                    : activeAlerts.length
+                    : counts.activeAlerts
                       ? "warning"
                       : "default"
                 }
               />
-              <Stat label="Applications" value={String(applications.length)} />
+              <Stat label="Applications" value={String(counts.applications)} />
             </dl>
           </div>
         </section>
 
         {!hasMonitors ? (
-          <EmptyWorkspace applicationCount={applications.length} />
+          <EmptyWorkspace applicationCount={counts.applications} />
         ) : (
           <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(0,1.55fr)_minmax(280px,0.9fr)] lg:items-start">
             <div className="min-w-0 space-y-8">
@@ -760,8 +706,8 @@ function OverviewPage() {
                     icon={AppWindow}
                     label="Applications"
                     detail={
-                      applications.length
-                        ? `${applications.length} configured`
+                      counts.applications
+                        ? `${counts.applications} configured`
                         : "Map monitors to services"
                     }
                   />

@@ -12,6 +12,7 @@ import {
 import { listELFRuns } from "@/lib/api-client/elf"
 import { formatDateTime } from "@/lib/format-date"
 import { PageContainer } from "@/components/page-container"
+import { PageEmptyState } from "@/components/page-empty-state"
 
 export const Route = createFileRoute("/elf/runs")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -199,20 +200,21 @@ function RunsPage() {
           ))}
         </div>
         {!runs.length ? (
-          <div className="py-16 text-center">
-            <Database className="mx-auto size-7 text-muted-foreground" />
-            <h2 className="mt-3 font-medium">No ELF executions</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Probe a saved query to create normalized evidence.
-            </p>
-            <Link
-              className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
-              to="/elf"
-            >
-              <Clock3 className="size-4" />
-              Open query library
-            </Link>
-          </div>
+          <PageEmptyState
+            className="mt-0 border-0"
+            icon={<Database aria-hidden="true" />}
+            title="No ELF executions"
+            description="Probe a saved query to create normalized evidence."
+            action={
+              <Link
+                className="inline-flex items-center gap-2 text-sm font-medium text-primary hover:underline"
+                to="/elf"
+              >
+                <Clock3 className="size-4" />
+                Open query library
+              </Link>
+            }
+          />
         ) : null}
       </div>
       {filtered.length > pageSize ? (

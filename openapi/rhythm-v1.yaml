@@ -16,8 +16,26 @@ tags:
   - name: Alerts
   - name: Dynatrace
   - name: ELF
+  - name: Validation suites
   - name: Deployment validation
 paths:
+  /livez:
+    get:
+      tags: [Health]
+      security: []
+      operationId: getLiveness
+      summary: Check process liveness without querying dependencies
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /readyz:
+    get:
+      tags: [Health]
+      security: []
+      operationId: getReadiness
+      summary: Inspect cached, parallel dependency readiness
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Error" }
   /healthz:
     get:
       tags: [Health]
@@ -33,6 +51,13 @@ paths:
                 $ref: "#/components/schemas/SuccessEnvelope"
         "503":
           description: One or more required dependencies are unavailable
+  /api/v1/overview:
+    get:
+      tags: [Health]
+      operationId: getOperationalOverview
+      summary: Get bounded operational counts, incidents, recent runs, and readiness
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
   /api/v1/monitors:
     get:
       tags: [Monitors]
@@ -62,6 +87,26 @@ paths:
           $ref: "#/components/responses/Success"
         "400":
           $ref: "#/components/responses/Error"
+  /api/v1/monitors/{monitorId}/metrics/summary:
+    get:
+      tags: [Monitors]
+      operationId: getMonitorMetricsSummary
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+        - { name: window, in: query, schema: { type: string, default: 24h } }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/monitors/{monitorId}/metrics/series:
+    get:
+      tags: [Monitors]
+      operationId: getMonitorMetricsSeries
+      parameters:
+        - $ref: "#/components/parameters/MonitorId"
+        - { name: window, in: query, schema: { type: string, default: 24h } }
+        - { name: resolution, in: query, schema: { type: string, default: auto } }
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
   /api/v1/monitors/{monitorId}/runs:
     post:
       tags: [Runs]
@@ -91,6 +136,61 @@ paths:
           $ref: "#/components/responses/Success"
         "404":
           $ref: "#/components/responses/Error"
+  /api/v1/runs/{runId}/diagnostics/summary:
+    get:
+      tags: [Runs]
+      operationId: getRunDiagnosticsSummary
+      summary: Get the bounded operational run summary
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/runs/{runId}/events:
+    get:
+      tags: [Runs]
+      operationId: listRunEvents
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/runs/{runId}/steps/{stepRunId}:
+    get:
+      tags: [Runs]
+      operationId: getRunStepDiagnostics
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+        - name: stepRunId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/alerts:
+    get:
+      tags: [Alerts]
+      operationId: listAlerts
+      summary: List lightweight alert summaries with database-backed filters
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - { name: query, in: query, schema: { type: string } }
+        - { name: sourceType, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: severity, in: query, schema: { type: string } }
+        - { name: applicationId, in: query, schema: { type: string, format: uuid } }
+        - { name: serviceId, in: query, schema: { type: string, format: uuid } }
+        - { name: monitorType, in: query, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+  /api/v1/alerts/summary:
+    get:
+      tags: [Alerts]
+      operationId: getAlertSummary
+      summary: Get compact inbox totals without loading alert evidence
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
   /api/v1/applications:
     get:
       tags: [Applications]
@@ -113,6 +213,68 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/Success"
+  /api/v1/suites/{suiteId}/runs:
+    post:
+      tags: [Validation suites]
+      operationId: createValidationSuiteRun
+      summary: Queue a validation-suite execution
+      parameters:
+        - name: suiteId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                triggerType: { type: string, default: MANUAL }
+                deployment:
+                  type: object
+                  properties:
+                    deploymentId: { type: string }
+                    version: { type: string }
+                    commit: { type: string }
+                    deploymentStart: { type: string, format: date-time }
+      responses:
+        "202":
+          description: Validation suite run queued
+          headers:
+            Location:
+              schema: { type: string }
+              description: Pollable suite-run resource.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/suite-runs/{suiteRunId}:
+    get:
+      tags: [Validation suites]
+      operationId: getValidationSuiteRun
+      summary: Get queued or completed validation-suite evidence
+      parameters:
+        - name: suiteRunId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/suite-runs/{suiteRunId}/cancel:
+    post:
+      tags: [Validation suites]
+      operationId: cancelValidationSuiteRun
+      summary: Request persistent cancellation of a queued or active suite run
+      parameters:
+        - name: suiteRunId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "202": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/suites/{suiteId}/deployment-runs:
     post:
       tags: [Deployment validation]

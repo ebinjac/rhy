@@ -3,6 +3,7 @@ package api
 import (
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestPaginatePreservesLegacyUnpagedResponses(t *testing.T) {
@@ -61,5 +62,47 @@ func TestPaginateBoundsLargeOperationalLists(t *testing.T) {
 	}
 	if len(firstPage) != 100 || page == nil || page.Total != 1_250 || page.NextCursor == "" {
 		t.Fatalf("large list was not bounded correctly: items=%d page=%+v", len(firstPage), page)
+	}
+}
+
+func TestTimeIDCursorRoundTrip(t *testing.T) {
+	timestamp := time.Date(2026, time.July, 31, 4, 45, 12, 987654321, time.FixedZone("IST", 5*60*60+30*60))
+	cursor := encodeTimeIDCursor("alert", timestamp, "7882db98-7e0d-4604-81b3-d4914a192130")
+	decodedTimestamp, decodedID, err := decodeTimeIDCursor(cursor, "alert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decodedTimestamp.Equal(timestamp) || decodedID != "7882db98-7e0d-4604-81b3-d4914a192130" {
+		t.Fatalf("unexpected cursor values: timestamp=%s id=%s", decodedTimestamp, decodedID)
+	}
+}
+
+func TestTimeIDCursorRejectsWrongKindAndMalformedValues(t *testing.T) {
+	valid := encodeTimeIDCursor("deployment", time.Now(), "7882db98-7e0d-4604-81b3-d4914a192130")
+	for _, test := range []struct {
+		cursor string
+		kind   string
+	}{
+		{cursor: valid, kind: "alert"},
+		{cursor: "not-base64", kind: "deployment"},
+		{cursor: encodeTimeIDCursor("deployment", time.Now(), ""), kind: "deployment"},
+	} {
+		if _, _, err := decodeTimeIDCursor(test.cursor, test.kind); err == nil {
+			t.Fatalf("expected cursor to be rejected: kind=%s cursor=%s", test.kind, test.cursor)
+		}
+	}
+}
+
+func TestSequenceCursorRoundTrip(t *testing.T) {
+	cursor := encodeSequenceCursor("run-event", 42)
+	sequence, err := decodeSequenceCursor(cursor, "run-event")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence != 42 {
+		t.Fatalf("expected sequence 42, got %d", sequence)
+	}
+	if _, err := decodeSequenceCursor(cursor, "another-kind"); err == nil {
+		t.Fatal("expected cursor kind mismatch to be rejected")
 	}
 }

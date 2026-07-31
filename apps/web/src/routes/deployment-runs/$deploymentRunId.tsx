@@ -1,15 +1,7 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
-import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@workspace/ui/components/chart"
-import type { ChartConfig } from "@workspace/ui/components/chart"
 import {
   ArrowLeft,
   ArrowRight,
@@ -24,16 +16,8 @@ import {
   LoaderCircle,
   ShieldCheck,
 } from "lucide-react"
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  XAxis,
-  YAxis,
-} from "recharts"
 
+import { MetricsSkeleton } from "@/components/metrics-skeleton"
 import { PageContainer } from "@/components/page-container"
 
 import type {
@@ -46,13 +30,14 @@ import {
   getDeploymentValidation,
 } from "@/lib/api-client/suites"
 
-const comparisonChartConfig = {
-  before: {
-    label: "Before",
-    color: "color-mix(in oklch, var(--muted-foreground) 45%, transparent)",
-  },
-  after: { label: "After", color: "var(--primary)" },
-} satisfies ChartConfig
+const ComparisonChart = lazy(async () => ({
+  default: (await import("@/features/suites/deployment-run-charts"))
+    .ComparisonChart,
+}))
+const TimeSeriesChart = lazy(async () => ({
+  default: (await import("@/features/suites/deployment-run-charts"))
+    .TimeSeriesChart,
+}))
 
 export const Route = createFileRoute("/deployment-runs/$deploymentRunId")({
   loader: ({ params }) =>
@@ -64,19 +49,43 @@ const terminal = new Set(["COMPLETED", "FAILED", "CANCELLED"])
 
 function DeploymentRunPage() {
   const initial = Route.useLoaderData()
+  const { deploymentRunId } = Route.useParams()
   const [run, setRun] = useState(initial)
   const [pending, setPending] = useState("")
   const [message, setMessage] = useState("")
+  const active = !terminal.has(run.status)
 
   useEffect(() => {
-    if (terminal.has(run.status)) return
-    const timer = window.setInterval(() => {
-      void getDeploymentValidation({ data: { runId: run.id } })
-        .then(setRun)
-        .catch(() => setMessage("Live progress is temporarily unavailable."))
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [run.id, run.status])
+    setRun(initial)
+    setMessage("")
+  }, [initial, deploymentRunId])
+
+  useEffect(() => {
+    if (!active) return
+    let disposed = false
+    let loading = false
+    const refresh = async () => {
+      if (loading) return
+      if (document.visibilityState !== "visible") return
+      loading = true
+      try {
+        const next = await getDeploymentValidation({
+          data: { runId: deploymentRunId },
+        })
+        if (!disposed) setRun(next)
+      } catch {
+        if (!disposed)
+          setMessage("Live progress is temporarily unavailable.")
+      } finally {
+        loading = false
+      }
+    }
+    const timer = window.setInterval(() => void refresh(), 1000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [active, deploymentRunId])
 
   async function cancel() {
     if (
@@ -232,7 +241,7 @@ function DeploymentRunPage() {
           <MetricInfo text="Latency uses API response time only. Preparation, scripts, extraction, assertions, queue delay, and post-processing do not affect the performance gate." />
         </div>
         <div className="mt-4 overflow-hidden border-y">
-          <div className="grid grid-cols-2 divide-x sm:grid-cols-3 lg:grid-cols-10">
+          <div className="grid grid-cols-2 divide-x sm:grid-cols-3 xl:grid-cols-11">
             <Metric
               label="Baseline window"
               value={run.configuration.baselineWindow}
@@ -256,6 +265,11 @@ function DeploymentRunPage() {
             <Metric
               label="Monitors"
               value={String(report.monitors?.length ?? 0)}
+            />
+            <Metric
+              label="UI monitors"
+              value={String(report.browserMonitors?.length ?? 0)}
+              help="Browser journeys compare controlled synthetic page and interaction duration."
             />
             <Metric
               label="ELF checks"
@@ -303,6 +317,34 @@ function DeploymentRunPage() {
         </div>
       </section>
 
+      <section className="mt-8" aria-labelledby="browser-comparisons-heading">
+        <h2
+          id="browser-comparisons-heading"
+          className="font-heading text-lg font-semibold"
+        >
+          UI journey validation
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Functional browser outcomes and controlled synthetic journey
+          performance. These measurements are lab evidence, not real-user field
+          data.
+        </p>
+        <div className="mt-4 divide-y border-y">
+          {(report.browserMonitors ?? []).map((monitor) => (
+            <BrowserMonitorResult
+              key={monitor.browserMonitorId}
+              monitor={monitor}
+            />
+          ))}
+          {!report.browserMonitors?.length ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              This suite has no UI monitor checks, or browser evidence has not
+              been captured yet.
+            </p>
+          ) : null}
+        </div>
+      </section>
+
       <section className="mt-8" aria-labelledby="dynatrace-heading">
         <h2
           id="dynatrace-heading"
@@ -317,7 +359,10 @@ function DeploymentRunPage() {
         </p>
         <div className="mt-4 divide-y border-y">
           {(report.dynatraceResults ?? []).map((result, index) => (
-            <div className="py-5" key={`${result.checkId}-${result.serviceId ?? index}`}>
+            <div
+              className="py-5"
+              key={`${result.checkId}-${result.serviceId ?? index}`}
+            >
               <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
                 <div>
                   <p className="font-medium">{result.name}</p>
@@ -395,7 +440,9 @@ function DeploymentRunPage() {
                           {rule.reason}
                         </span>
                       </span>
-                      <Badge variant="outline">{rule.status.toLowerCase()}</Badge>
+                      <Badge variant="outline">
+                        {rule.status.toLowerCase()}
+                      </Badge>
                     </div>
                   ))}
                 </div>
@@ -546,6 +593,9 @@ function Progress({
 type MonitorResultType = NonNullable<
   DeploymentValidationRunContract["report"]["monitors"]
 >[number]
+type BrowserMonitorResultType = NonNullable<
+  DeploymentValidationRunContract["report"]["browserMonitors"]
+>[number]
 function formatMilliseconds(value?: number) {
   return value === undefined || value === null
     ? "Not recorded"
@@ -581,9 +631,13 @@ function MonitorResult({ monitor }: { monitor: MonitorResultType }) {
       <div className="mt-5 border-t pt-5">
         <div className="grid gap-5 xl:grid-cols-[1fr_1fr]">
           <DistributionTable baseline={monitor.baseline} post={monitor.post} />
-          <ComparisonChart baseline={monitor.baseline} post={monitor.post} />
+          <Suspense fallback={<MetricsSkeleton chartsOnly />}>
+            <ComparisonChart baseline={monitor.baseline} post={monitor.post} />
+          </Suspense>
         </div>
-        <TimeSeriesChart baseline={monitor.baseline} post={monitor.post} />
+        <Suspense fallback={<MetricsSkeleton chartsOnly />}>
+          <TimeSeriesChart baseline={monitor.baseline} post={monitor.post} />
+        </Suspense>
         {(monitor.steps ?? []).length ? (
           <div className="mt-6">
             <h3 className="text-sm font-medium">HTTP-step comparison</h3>
@@ -644,6 +698,88 @@ function MonitorResult({ monitor }: { monitor: MonitorResultType }) {
                   className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs"
                 >
                   <StatusDot status={sample.status} /> Sample{" "}
+                  {sample.sampleNumber}
+                </span>
+              )
+            )}
+          </div>
+        </div>
+        {(monitor.reasons ?? []).length ? (
+          <ul className="mt-5 list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+            {(monitor.reasons ?? []).map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    </details>
+  )
+}
+
+function BrowserMonitorResult({
+  monitor,
+}: {
+  monitor: BrowserMonitorResultType
+}) {
+  return (
+    <details className="group py-4">
+      <summary className="flex cursor-pointer list-none flex-col justify-between gap-3 sm:flex-row sm:items-center">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-medium">{monitor.monitorName}</p>
+            <ClassificationBadge value={monitor.classification} />
+            <Badge variant="outline">
+              {monitor.required ? "Required" : "Optional"}
+            </Badge>
+            <Badge variant="secondary">Synthetic browser</Badge>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Journey p95 {formatMilliseconds(monitor.baseline.p95Ms)} →{" "}
+            {formatMilliseconds(monitor.post.p95Ms)} ·{" "}
+            {monitor.deltaPercent > 0 ? "+" : ""}
+            {monitor.deltaPercent}%
+          </p>
+        </div>
+        <div className="flex items-center gap-4">
+          <span className="text-sm text-muted-foreground">
+            {monitor.post.successRate}% post success
+          </span>
+          <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+        </div>
+      </summary>
+      <div className="mt-5 border-t pt-5">
+        <div className="grid gap-5 xl:grid-cols-2">
+          <DistributionTable baseline={monitor.baseline} post={monitor.post} />
+          <Suspense fallback={<MetricsSkeleton chartsOnly />}>
+            <ComparisonChart baseline={monitor.baseline} post={monitor.post} />
+          </Suspense>
+        </div>
+        <Suspense fallback={<MetricsSkeleton chartsOnly />}>
+          <TimeSeriesChart baseline={monitor.baseline} post={monitor.post} />
+        </Suspense>
+        <div className="mt-6">
+          <h3 className="text-sm font-medium">Post-deployment journeys</h3>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {(monitor.samples ?? []).map((sample) =>
+              sample.browserRunId ? (
+                <Link
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs hover:bg-muted"
+                  key={sample.id}
+                  params={{
+                    monitorId: monitor.browserMonitorId,
+                    runId: sample.browserRunId,
+                  }}
+                  to="/ui-monitoring/$monitorId/runs/$runId"
+                >
+                  <StatusDot status={sample.status} /> Journey{" "}
+                  {sample.sampleNumber}
+                </Link>
+              ) : (
+                <span
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs"
+                  key={sample.id}
+                >
+                  <StatusDot status={sample.status} /> Journey{" "}
                   {sample.sampleNumber}
                 </span>
               )
@@ -729,228 +865,6 @@ function DistributionTable({
       ))}
     </div>
   )
-}
-function ComparisonChart({
-  baseline,
-  post,
-}: {
-  baseline: DeploymentDistributionContract
-  post: DeploymentDistributionContract
-}) {
-  const data = [
-    { percentile: "p50", before: baseline.p50Ms, after: post.p50Ms },
-    { percentile: "p95", before: baseline.p95Ms, after: post.p95Ms },
-    { percentile: "p99", before: baseline.p99Ms, after: post.p99Ms },
-  ]
-  const hasData = data.some(
-    (item) => item.before !== undefined || item.after !== undefined
-  )
-  return (
-    <figure className="rounded-lg border p-4">
-      <figcaption className="text-sm font-medium">
-        Latency distribution
-      </figcaption>
-      {hasData ? (
-        <ChartContainer
-          className="mt-3 aspect-auto h-[240px] w-full"
-          config={comparisonChartConfig}
-          initialDimension={{ width: 420, height: 240 }}
-        >
-          <BarChart
-            data={data}
-            margin={{ left: 4, right: 8, top: 8, bottom: 0 }}
-          >
-            <CartesianGrid vertical={false} />
-            <XAxis
-              dataKey="percentile"
-              tickLine={false}
-              axisLine={false}
-              tickMargin={8}
-            />
-            <YAxis
-              width={52}
-              tickFormatter={compactLatency}
-              tickLine={false}
-              axisLine={false}
-            />
-            <ChartTooltip
-              content={
-                <ChartTooltipContent
-                  formatter={(value, name) => (
-                    <>
-                      <span className="text-muted-foreground">
-                        {name === "before" ? "Before" : "After"}
-                      </span>
-                      <span className="ml-auto font-mono font-medium">
-                        {formatLatencyMs(Number(value))}
-                      </span>
-                    </>
-                  )}
-                />
-              }
-            />
-            <Bar
-              dataKey="before"
-              fill="var(--color-before)"
-              radius={[4, 4, 0, 0]}
-              maxBarSize={28}
-            />
-            <Bar
-              dataKey="after"
-              fill="var(--color-after)"
-              radius={[4, 4, 0, 0]}
-              maxBarSize={28}
-            />
-            <ChartLegend content={<ChartLegendContent />} />
-          </BarChart>
-        </ChartContainer>
-      ) : (
-        <p className="mt-8 text-sm text-muted-foreground">
-          Latency was not recorded for either period.
-        </p>
-      )}
-    </figure>
-  )
-}
-
-function TimeSeriesChart({
-  baseline,
-  post,
-}: {
-  baseline: DeploymentDistributionContract
-  post: DeploymentDistributionContract
-}) {
-  // In-progress runs can omit post series until sampling finishes (API may send null).
-  const baselineSeries = baseline.series ?? []
-  const postSeries = post.series ?? []
-  const data = [
-    ...baselineSeries.map((point, index) => ({
-      sequence: index + 1,
-      timestamp: point.createdAt,
-      before: point.valueMs,
-      after: undefined as number | undefined,
-      period: "Before",
-    })),
-    ...postSeries.map((point, index) => ({
-      sequence: baselineSeries.length + index + 1,
-      timestamp: point.createdAt,
-      before: undefined as number | undefined,
-      after: point.valueMs,
-      period: "After",
-    })),
-  ]
-  if (!data.length) return null
-  return (
-    <figure className="mt-5 rounded-lg border p-4">
-      <figcaption>
-        <span className="text-sm font-medium">
-          Measured executions over time
-        </span>
-        <span className="mt-1 block text-xs text-muted-foreground">
-          Each point is API-only response time. The gap marks the deployment
-          boundary.
-        </span>
-      </figcaption>
-      <ChartContainer
-        className="mt-3 aspect-auto h-[260px] w-full"
-        config={comparisonChartConfig}
-        initialDimension={{ width: 900, height: 260 }}
-      >
-        <LineChart
-          data={data}
-          margin={{ left: 4, right: 10, top: 8, bottom: 0 }}
-        >
-          <CartesianGrid vertical={false} />
-          <XAxis dataKey="sequence" tickLine={false} axisLine={false} />
-          <YAxis
-            width={52}
-            tickFormatter={compactLatency}
-            tickLine={false}
-            axisLine={false}
-          />
-          <ChartTooltip
-            content={
-              <ChartTooltipContent
-                labelFormatter={(_, payload) => {
-                  const point = payload?.[0]?.payload as
-                    { timestamp?: string; period?: string } | undefined
-                  return point?.timestamp
-                    ? `${point.period} · ${new Date(point.timestamp).toLocaleString()}`
-                    : "Execution"
-                }}
-                formatter={(value, name) => (
-                  <>
-                    <span className="text-muted-foreground">
-                      {name === "before" ? "Before" : "After"}
-                    </span>
-                    <span className="ml-auto font-mono font-medium">
-                      {formatLatencyMs(Number(value))}
-                    </span>
-                  </>
-                )}
-              />
-            }
-          />
-          <Line
-            dataKey="before"
-            stroke="var(--color-before)"
-            strokeWidth={2}
-            dot={false}
-            connectNulls={false}
-          />
-          <Line
-            dataKey="after"
-            stroke="var(--color-after)"
-            strokeWidth={2}
-            dot={false}
-            connectNulls={false}
-          />
-          <ChartLegend content={<ChartLegendContent />} />
-        </LineChart>
-      </ChartContainer>
-      <details className="mt-3">
-        <summary className="cursor-pointer text-xs font-medium text-primary">
-          View accessible chart data
-        </summary>
-        <div className="mt-3 max-h-64 overflow-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="text-muted-foreground">
-              <tr className="border-b">
-                <th className="py-2 font-medium">Period</th>
-                <th className="py-2 font-medium">Recorded at</th>
-                <th className="py-2 text-right font-medium">API response</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((point) => (
-                <tr className="border-b last:border-0" key={point.sequence}>
-                  <td className="py-2">{point.period}</td>
-                  <td className="py-2">
-                    {new Date(point.timestamp).toLocaleString()}
-                  </td>
-                  <td className="py-2 text-right font-mono">
-                    {formatMilliseconds(point.before ?? point.after)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </details>
-    </figure>
-  )
-}
-
-function formatLatencyMs(value: number) {
-  if (Number.isNaN(value)) return "—"
-  if (value < 1) return "<1 ms"
-  if (value >= 1000)
-    return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} s`
-  return `${Math.round(value).toLocaleString()} ms`
-}
-
-function compactLatency(value: number) {
-  return value >= 1000 ? `${Number((value / 1000).toFixed(1))}s` : `${value}ms`
 }
 function Metric({
   label,

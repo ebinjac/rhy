@@ -1,22 +1,23 @@
 import { createFileRoute, Link } from "@tanstack/react-router"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Button } from "@workspace/ui/components/button"
-import {
-  AlertCircle,
-  ArrowLeft,
-  History,
-  LoaderCircle,
-  RefreshCw,
-} from "lucide-react"
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { ArrowLeft, History, LoaderCircle, RefreshCw } from "lucide-react"
+import { lazy, Suspense } from "react"
 
 import type {
   RunContract,
   RunHistoryMetricsContract,
 } from "@/lib/api-client/contracts"
-import { getMonitorMetrics, listMonitorRuns } from "@/lib/api-client/monitors"
+import {
+  getMonitorMetricSeries,
+  getMonitorMetricsSummary,
+  listMonitorRuns,
+} from "@/lib/api-client/monitors"
 
 import type { MetricsWindow } from "@/features/monitors/monitor-metrics-dashboard"
+import { MetricsSkeleton } from "@/components/metrics-skeleton"
 import { PageContainer } from "@/components/page-container"
+import { ProductQueryProvider } from "@/components/product-query-provider"
 
 const windows = ["24h", "7d", "30d", "90d"] as const
 const MonitorMetricsDashboard = lazy(
@@ -27,6 +28,32 @@ type MetricsData = {
   metrics: RunHistoryMetricsContract
   runs: RunContract[]
   window: MetricsWindow
+  complete: boolean
+}
+
+async function loadMetricsSummary(
+  monitorId: string,
+  window: MetricsWindow
+): Promise<MetricsData> {
+  const metrics = await getMonitorMetricsSummary({
+    data: { monitorId, window },
+  })
+  return { runs: [], metrics, window, complete: false }
+}
+
+async function loadMetricsDetails(
+  monitorId: string,
+  window: MetricsWindow,
+  summary?: RunHistoryMetricsContract
+): Promise<MetricsData> {
+  const [runs, points] = await Promise.all([
+    listMonitorRuns({ data: { monitorId } }),
+    getMonitorMetricSeries({ data: { monitorId, window, maxPoints: 400 } }),
+  ])
+  const metrics =
+    summary ??
+    (await getMonitorMetricsSummary({ data: { monitorId, window } }))
+  return { runs, metrics: { ...metrics, points }, window, complete: true }
 }
 
 export const Route = createFileRoute("/monitors/$monitorId/metrics")({
@@ -39,64 +66,56 @@ export const Route = createFileRoute("/monitors/$monitorId/metrics")({
     if (typeof search.run === "string") validated.run = search.run
     return validated
   },
+  loader: async ({ params, location }) => {
+    const search = location.search as { window?: MetricsWindow }
+    const window = search.window ?? "30d"
+    return loadMetricsSummary(params.monitorId, window)
+  },
   component: MonitorMetricsPage,
 })
 
 function MonitorMetricsPage() {
+  return (
+    <ProductQueryProvider>
+      <MonitorMetricsContent />
+    </ProductQueryProvider>
+  )
+}
+
+function MonitorMetricsContent() {
+  const initial = Route.useLoaderData()
   const { monitorId } = Route.useParams()
   const { window: selectedWindow } = Route.useSearch()
   const window = selectedWindow ?? "30d"
   const navigate = Route.useNavigate()
-  const cache = useRef(new Map<string, MetricsData>())
-  const [data, setData] = useState<MetricsData | null>(null)
-  const [error, setError] = useState("")
-  const [refreshKey, setRefreshKey] = useState(0)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    let active = true
-    const cacheKey = `${monitorId}:${window}`
-    const cached = cache.current.get(cacheKey)
-    if (cached) {
-      setData(cached)
-      setLoading(false)
-      setError("")
-      return () => {
-        active = false
-      }
-    }
-
-    setLoading(true)
-    setError("")
-    void Promise.all([
-      listMonitorRuns({ data: { monitorId } }),
-      getMonitorMetrics({ data: { monitorId, window } }),
-    ])
-      .then(([runs, metrics]) => {
-        if (!active) return
-        const next = { runs, metrics, window }
-        cache.current.set(cacheKey, next)
-        setData(next)
-        setLoading(false)
-      })
-      .catch((reason: unknown) => {
-        if (!active) return
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : "Run analytics could not be loaded."
-        )
-        setLoading(false)
-      })
-
-    return () => {
-      active = false
-    }
-  }, [monitorId, refreshKey, window])
+  const query = useQuery({
+    queryKey: ["monitor-metrics", monitorId, window],
+    queryFn: () =>
+      loadMetricsDetails(
+        monitorId,
+        window,
+        initial.window === window ? initial.metrics : undefined
+      ),
+    initialData: initial.window === window ? initial : undefined,
+    // The route loader intentionally returns summary-only data so the page can
+    // paint before run history and chart series arrive. Mark that partial
+    // snapshot stale immediately; otherwise React Query's stale window would
+    // suppress the detail request and render a misleading empty run history.
+    initialDataUpdatedAt: initial.window === window ? 0 : undefined,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  })
+  const data = query.data ?? initial
+  const loading = query.isFetching
+  const error =
+    query.error instanceof Error
+      ? query.error.message
+      : query.error
+        ? "Run analytics could not be loaded."
+        : ""
 
   function retry() {
-    cache.current.delete(`${monitorId}:${window}`)
-    setRefreshKey((current) => current + 1)
+    void query.refetch()
   }
 
   return (
@@ -131,7 +150,7 @@ function MonitorMetricsPage() {
         </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
           <div className="flex h-5 items-center gap-2">
-            {loading && data ? (
+            {loading ? (
               <>
                 <LoaderCircle
                   aria-hidden="true"
@@ -177,94 +196,38 @@ function MonitorMetricsPage() {
             : "Run analytics loaded."}
       </div>
 
-      {error && !data ? (
-        <MetricsError message={error} onRetry={retry} />
-      ) : data ? (
-        <>
-          {error ? (
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm">
-              <span>
-                {data.window === window
-                  ? "Refresh failed. Showing the last loaded analytics."
-                  : `${window} analytics could not be loaded. Showing ${data.window}.`}
-              </span>
-              <Button onClick={retry} size="sm" variant="outline">
-                <RefreshCw /> Retry
-              </Button>
-            </div>
-          ) : null}
-          <div
-            aria-busy={loading}
-            className={loading ? "opacity-70 transition-opacity" : undefined}
-          >
-            <Suspense fallback={<MetricsSkeleton chartsOnly />}>
-              <MonitorMetricsDashboard
-                metrics={data.metrics}
-                monitorId={monitorId}
-                runs={data.runs}
-                window={data.window}
-              />
-            </Suspense>
-          </div>
-        </>
-      ) : (
-        <MetricsSkeleton />
-      )}
-    </PageContainer>
-  )
-}
-
-function MetricsError({
-  message,
-  onRetry,
-}: {
-  message: string
-  onRetry: () => void
-}) {
-  return (
-    <div
-      className="mt-6 flex flex-col items-start gap-4 rounded-xl border border-destructive/30 bg-destructive/5 p-5"
-      role="alert"
-    >
-      <div className="flex items-start gap-3">
-        <AlertCircle className="mt-0.5 size-5 shrink-0 text-destructive" />
-        <div>
-          <h2 className="font-medium">Run analytics could not be loaded</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{message}</p>
-        </div>
-      </div>
-      <Button onClick={onRetry} variant="outline">
-        <RefreshCw /> Try again
-      </Button>
-    </div>
-  )
-}
-
-function MetricsSkeleton({ chartsOnly = false }: { chartsOnly?: boolean }) {
-  return (
-    <div aria-hidden="true" className="mt-6 animate-pulse">
-      {!chartsOnly ? (
-        <div className="grid overflow-hidden rounded-xl border sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 8 }).map((_, index) => (
-            <div className="h-[108px] border-b p-4 lg:border-r" key={index}>
-              <div className="h-3 w-24 rounded bg-muted" />
-              <div className="mt-5 h-7 w-28 rounded bg-muted" />
-              <div className="mt-2 h-3 w-20 rounded bg-muted" />
-            </div>
-          ))}
+      {error && data.window !== window && !loading ? (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm">
+          <span>
+            {`${window} analytics could not be loaded. Showing ${data.window}.`}
+          </span>
+          <Button onClick={retry} size="sm" variant="outline">
+            <RefreshCw /> Retry
+          </Button>
         </div>
       ) : null}
-      <div className={chartsOnly ? "" : "mt-8"}>
-        <div className="h-[390px] rounded-xl border p-5">
-          <div className="h-4 w-44 rounded bg-muted" />
-          <div className="mt-2 h-3 w-72 max-w-full rounded bg-muted" />
-          <div className="mt-6 h-[300px] rounded-lg bg-muted/70" />
+      {error && data.window === window ? (
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm">
+          <span>Refresh failed. Showing the last loaded analytics.</span>
+          <Button onClick={retry} size="sm" variant="outline">
+            <RefreshCw /> Retry
+          </Button>
         </div>
-        <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(330px,0.75fr)]">
-          <div className="h-[360px] rounded-xl border bg-muted/25" />
-          <div className="h-[360px] rounded-xl border bg-muted/25" />
-        </div>
+      ) : null}
+
+      <div
+        aria-busy={loading}
+        className={loading ? "opacity-70 transition-opacity" : undefined}
+      >
+        <Suspense fallback={<MetricsSkeleton chartsOnly />}>
+          <MonitorMetricsDashboard
+            metrics={data.metrics}
+            monitorId={monitorId}
+            runs={data.runs}
+            window={data.window}
+          />
+        </Suspense>
       </div>
-    </div>
+    </PageContainer>
   )
 }

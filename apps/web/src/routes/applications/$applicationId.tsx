@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import {
   createFileRoute,
   Link,
@@ -32,6 +32,7 @@ import {
   FilePenLine,
   Layers3,
   LoaderCircle,
+  MonitorCheck,
   Plus,
   RadioTower,
   Save,
@@ -44,8 +45,6 @@ import { z } from "zod"
 import { PageContainer } from "@/components/page-container"
 import { OperationalStatusBadge } from "@/components/operational-status"
 import { EditField } from "@/features/applications/form-field"
-import { OpenSearchReceivers } from "@/features/applications/opensearch-receivers"
-import { DynatraceWorkspace } from "@/features/applications/dynatrace-workspace"
 import type {
   ELFApplicationContract,
   ELFServiceContract,
@@ -66,6 +65,7 @@ import {
   listConfigurationProfiles,
   listMonitors,
 } from "@/lib/api-client/monitors"
+import { listBrowserMonitors } from "@/lib/api-client/browser-monitoring"
 import {
   listOpenSearchAlertReceivers,
   listUnifiedAlerts,
@@ -73,10 +73,20 @@ import {
 import { listDeploymentValidations } from "@/lib/api-client/suites"
 import { formatDateTime } from "@/lib/format-date"
 
+const OpenSearchReceivers = lazy(async () => ({
+  default: (await import("@/features/applications/opensearch-receivers"))
+    .OpenSearchReceivers,
+}))
+const DynatraceWorkspace = lazy(async () => ({
+  default: (await import("@/features/applications/dynatrace-workspace"))
+    .DynatraceWorkspace,
+}))
+
 const sectionValues = [
   "overview",
   "services",
   "monitors",
+  "ui-monitors",
   "queries",
   "alerts",
   "receivers",
@@ -93,14 +103,20 @@ export const Route = createFileRoute("/applications/$applicationId")({
       ...(edit ? { edit: true as const } : {}),
     }
   },
-  loader: async ({ params }) => {
+  loaderDeps: ({ search }) => ({
+    section: search.section ?? "overview",
+  }),
+  loader: async ({ params, deps }) => {
     const application = await getELFApplication({
       data: { applicationId: params.applicationId },
     })
     if (!application) throw notFound()
 
+    const loadDynatrace = deps.section === "dynatrace"
+
     const [
       monitorResult,
+      browserMonitors,
       queries,
       alerts,
       receivers,
@@ -110,6 +126,7 @@ export const Route = createFileRoute("/applications/$applicationId")({
       dynatraceRuns,
     ] = await Promise.all([
       listMonitors(),
+      listBrowserMonitors(),
       listELFQueries(),
       listUnifiedAlerts({
         data: {
@@ -124,36 +141,47 @@ export const Route = createFileRoute("/applications/$applicationId")({
         data: { applicationId: params.applicationId },
       }),
       listDeploymentValidations(),
-      listApplicationEnvironments({
-        data: { applicationId: params.applicationId },
-      }).catch(() => []),
-      listConfigurationProfiles({ data: { kind: "telemetry" } }),
-      listDynatraceRuns({
-        data: {
-          applicationId: params.applicationId,
-          environmentBindingId: "",
-        },
-      }).catch(() => []),
-    ])
-
-    const dynatraceConfigurations = Object.fromEntries(
-      await Promise.all(
-        dynatraceBindings.map(async (binding) => [
-          binding.id,
-          await getDynatraceConfiguration({
+      loadDynatrace
+        ? listApplicationEnvironments({
+            data: { applicationId: params.applicationId },
+          }).catch(() => [])
+        : Promise.resolve([]),
+      loadDynatrace
+        ? listConfigurationProfiles({ data: { kind: "telemetry" } })
+        : Promise.resolve([]),
+      loadDynatrace
+        ? listDynatraceRuns({
             data: {
               applicationId: params.applicationId,
-              environmentBindingId: binding.id,
+              environmentBindingId: "",
             },
-          }).catch(() => null),
-        ])
-      )
-    )
+          }).catch(() => [])
+        : Promise.resolve([]),
+    ])
+
+    const dynatraceConfigurations = loadDynatrace
+      ? Object.fromEntries(
+          await Promise.all(
+            dynatraceBindings.map(async (binding) => [
+              binding.id,
+              await getDynatraceConfiguration({
+                data: {
+                  applicationId: params.applicationId,
+                  environmentBindingId: binding.id,
+                },
+              }).catch(() => null),
+            ])
+          )
+        )
+      : {}
 
     return {
       application,
       monitors: monitorResult.monitors.filter((monitor) =>
         application.monitorIds.includes(monitor.id)
+      ),
+      browserMonitors: browserMonitors.filter(
+        (monitor) => monitor.applicationId === application.id
       ),
       queries: queries.filter(
         (query) => query.applicationId === application.id
@@ -177,6 +205,7 @@ const tabs = [
   { value: "overview", label: "Overview", icon: AppWindow },
   { value: "services", label: "Services", icon: Server },
   { value: "monitors", label: "Monitors", icon: Activity },
+  { value: "ui-monitors", label: "UI monitors", icon: MonitorCheck },
   { value: "queries", label: "Log queries", icon: Braces },
   { value: "alerts", label: "Alerts", icon: BellRing },
   { value: "receivers", label: "Receivers", icon: RadioTower },
@@ -207,6 +236,7 @@ function ApplicationWorkspace() {
   const {
     application,
     monitors,
+    browserMonitors,
     queries,
     alerts,
     receivers,
@@ -230,14 +260,20 @@ function ApplicationWorkspace() {
     ["OPEN", "ACKNOWLEDGED", "ERROR"].includes(alert.state)
   )
   const status =
+    browserMonitors.some(
+      (monitor) => monitor.enabled && monitor.health === "FAILING"
+    ) ||
     activeAlerts.some((alert) =>
       ["CRITICAL", "HIGH"].includes(alert.severity)
-    ) || deployments[0]?.gateDecision === "BLOCK"
+    ) ||
+    deployments[0]?.gateDecision === "BLOCK"
       ? "CRITICAL"
       : activeAlerts.length ||
           deployments[0]?.gateDecision === "ALLOW_WITH_WARNINGS"
         ? "ATTENTION"
-        : monitors.length === 0 && queries.length === 0
+        : monitors.length === 0 &&
+            browserMonitors.length === 0 &&
+            queries.length === 0
           ? "UNMONITORED"
           : "HEALTHY"
 
@@ -395,6 +431,48 @@ function ApplicationWorkspace() {
             ))}
           </CollectionSection>
         ) : null}
+        {activeSection === "ui-monitors" ? (
+          <CollectionSection
+            description="Real-browser journeys linked to this application and its services."
+            emptyAction={
+              <Button
+                nativeButton={false}
+                render={
+                  <Link
+                    aria-label="Create UI monitor"
+                    to="/ui-monitoring/new"
+                  />
+                }
+                size="sm"
+              >
+                <Plus data-icon="inline-start" /> Create UI monitor
+              </Button>
+            }
+            emptyDescription="Create a UI monitor and select this application to add browser, graph, visual, and accessibility coverage."
+            emptyTitle="No UI monitors linked"
+            title="Linked UI monitors"
+          >
+            {browserMonitors.map((monitor) => (
+              <Link
+                className="flex min-h-14 items-center justify-between gap-4 py-3 hover:text-primary"
+                key={monitor.id}
+                params={{ monitorId: monitor.id }}
+                to="/ui-monitoring/$monitorId"
+              >
+                <div>
+                  <p className="font-medium">{monitor.name}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {monitor.serviceName || "All services"} ·{" "}
+                    {monitor.enabled
+                      ? monitor.health.toLowerCase().replaceAll("_", " ")
+                      : "paused"}
+                  </p>
+                </div>
+                <ChevronRight aria-hidden="true" className="size-4" />
+              </Link>
+            ))}
+          </CollectionSection>
+        ) : null}
         {activeSection === "queries" ? (
           <CollectionSection
             description="Governed OpenSearch queries tagged to this application."
@@ -481,21 +559,25 @@ function ApplicationWorkspace() {
           </CollectionSection>
         ) : null}
         {activeSection === "receivers" ? (
-          <OpenSearchReceivers
-            alerts={alerts}
-            application={application}
-            receivers={receivers}
-            refresh={() => router.invalidate()}
-          />
+          <Suspense fallback={<SectionLoading label="Loading receivers…" />}>
+            <OpenSearchReceivers
+              alerts={alerts}
+              application={application}
+              receivers={receivers}
+              refresh={() => router.invalidate()}
+            />
+          </Suspense>
         ) : null}
         {activeSection === "dynatrace" ? (
-          <DynatraceWorkspace
-            application={application}
-            bindings={dynatraceBindings}
-            configurations={dynatraceConfigurations}
-            telemetryProfiles={telemetryProfiles}
-            runs={dynatraceRuns}
-          />
+          <Suspense fallback={<SectionLoading label="Loading Dynatrace…" />}>
+            <DynatraceWorkspace
+              application={application}
+              bindings={dynatraceBindings}
+              configurations={dynatraceConfigurations}
+              telemetryProfiles={telemetryProfiles}
+              runs={dynatraceRuns}
+            />
+          </Suspense>
         ) : null}
       </PageContainer>
     </div>
@@ -1095,4 +1177,18 @@ function Definition({ label, value }: { label: string; value: string }) {
 
 function countLabel(count: number, singular: string, plural: string) {
   return `${count} ${count === 1 ? singular : plural}`
+}
+
+function SectionLoading({ label }: { label: string }) {
+  return (
+    <div
+      aria-busy="true"
+      aria-label={label}
+      className="flex min-h-64 items-center justify-center gap-2 rounded-xl border text-sm text-muted-foreground"
+      role="status"
+    >
+      <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+      {label}
+    </div>
+  )
 }

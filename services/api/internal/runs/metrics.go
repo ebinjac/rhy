@@ -78,6 +78,11 @@ type MetricsRepository interface {
 	MetricPoints(context.Context, string, time.Time, int) ([]HistoryMetricPoint, error)
 }
 
+type MetricsProjectionRepository interface {
+	MetricSummary(context.Context, string, time.Time, time.Duration) (HistoryMetrics, error)
+	MetricSeries(context.Context, string, time.Time, time.Duration, int) ([]HistoryMetricPoint, error)
+}
+
 type DeploymentMetricsRepository interface {
 	MetricPointsBetween(context.Context, string, string, time.Time, time.Time, int) ([]HistoryMetricPoint, error)
 }
@@ -101,6 +106,22 @@ type MetricsValidationError struct{ Message string }
 func (e MetricsValidationError) Error() string { return e.Message }
 
 func (s *Service) Metrics(ctx context.Context, monitorID, window string) (HistoryMetrics, error) {
+	result, err := s.MetricsSummary(ctx, monitorID, window)
+	if err != nil {
+		return HistoryMetrics{}, err
+	}
+	if _, projected := s.repository.(MetricsProjectionRepository); !projected {
+		return result, nil
+	}
+	points, err := s.MetricSeries(ctx, monitorID, window, 1000)
+	if err != nil {
+		return HistoryMetrics{}, err
+	}
+	result.Points = points
+	return result, nil
+}
+
+func (s *Service) MetricsSummary(ctx context.Context, monitorID, window string) (HistoryMetrics, error) {
 	if _, err := s.monitors.Get(ctx, monitorID); err != nil {
 		return HistoryMetrics{}, err
 	}
@@ -115,7 +136,10 @@ func (s *Service) Metrics(ctx context.Context, monitorID, window string) (Histor
 	}
 	end := s.now()
 	start := end.Add(-duration)
-	points, err := repository.MetricPoints(ctx, monitorID, start, 1000)
+	if projection, ok := s.repository.(MetricsProjectionRepository); ok {
+		return projection.MetricSummary(ctx, monitorID, start, duration)
+	}
+	points, err := repository.MetricPoints(ctx, monitorID, start, 50000)
 	if err != nil {
 		return HistoryMetrics{}, err
 	}
@@ -201,6 +225,37 @@ func (s *Service) Metrics(ctx context.Context, monitorID, window string) (Histor
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) MetricSeries(ctx context.Context, monitorID, window string, maxPoints int) ([]HistoryMetricPoint, error) {
+	if _, err := s.monitors.Get(ctx, monitorID); err != nil {
+		return nil, err
+	}
+	durations := map[string]time.Duration{"24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour, "30d": 30 * 24 * time.Hour, "90d": 90 * 24 * time.Hour}
+	duration, ok := durations[strings.ToLower(window)]
+	if !ok {
+		return nil, MetricsValidationError{Message: "Metrics window must be 24h, 7d, 30d, or 90d."}
+	}
+	if maxPoints < 50 {
+		maxPoints = 50
+	}
+	if maxPoints > 1000 {
+		maxPoints = 1000
+	}
+	start := s.now().Add(-duration)
+	if projection, ok := s.repository.(MetricsProjectionRepository); ok {
+		return projection.MetricSeries(ctx, monitorID, start, duration, maxPoints)
+	}
+	repository, ok := s.repository.(MetricsRepository)
+	if !ok {
+		return nil, MetricsValidationError{Message: "Run metrics are unavailable."}
+	}
+	points, err := repository.MetricPoints(ctx, monitorID, start, 50000)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].CreatedAt.Before(points[j].CreatedAt) })
+	return SampleHistoryMetricPoints(points, maxPoints), nil
 }
 
 func roundedPercent(value, total int) float64 {

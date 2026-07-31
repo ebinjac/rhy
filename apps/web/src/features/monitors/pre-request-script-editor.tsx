@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import type { OnMount } from "@monaco-editor/react"
 import type * as Monaco from "monaco-editor"
 import { Badge } from "@workspace/ui/components/badge"
+import { EditorLoading } from "@/components/editor-loading"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import {
@@ -557,7 +558,7 @@ export function PreRequestScriptEditor({
       ) : null}
       <div className="relative min-h-[360px] bg-muted/25">
         {mounted && desktop ? (
-          <Suspense fallback={<EditorLoading />}>
+          <Suspense fallback={<EditorLoading label="Loading editor…" />}>
             <MonacoEditor
               height="420px"
               language="javascript"
@@ -1070,15 +1071,6 @@ function Empty({ text }: { text: string }) {
     </p>
   )
 }
-function EditorLoading() {
-  return (
-    <div className="grid h-[420px] place-items-center text-sm text-muted-foreground">
-      <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-      Loading editor…
-    </div>
-  )
-}
-
 const pmTypes = `declare const pm: {
   variables: VariableScope; environment: VariableScope; collectionVariables: VariableScope; globals: VariableScope;
   iterationData: ReadonlyVariableScope;

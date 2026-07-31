@@ -15,6 +15,7 @@ import {
 import { RhythmDocsLayout } from "@/components/docs/docs-layout"
 import { getMdxComponents } from "@/components/docs/mdx-components"
 import { docsSource } from "@/lib/docs/source"
+import docsStylesheetUrl from "@/styles/docs.css?url"
 
 export const Route = createFileRoute("/docs/$")({
   loader: async ({ params }) => {
@@ -38,6 +39,7 @@ export const Route = createFileRoute("/docs/$")({
         content: loaderData?.description ?? "",
       },
     ],
+    links: [{ rel: "stylesheet", href: docsStylesheetUrl }],
   }),
   component: DocumentationPage,
   notFoundComponent: DocumentationNotFound,

@@ -3,9 +3,10 @@
 import { useEffect } from "react"
 import {
   ThemeProvider as NextThemesProvider,
-  useTheme,
-  type ThemeProviderProps,
+  useTheme
+  
 } from "next-themes"
+import type {ThemeProviderProps} from "next-themes";
 
 function ThemeHotkey() {
   const { resolvedTheme, setTheme } = useTheme()

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
+import { EditorLoading } from "@/components/editor-loading"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import {
@@ -460,7 +461,9 @@ function ELFWorkbench() {
                 </Button>
               </div>
               {desktop ? (
-                <Suspense fallback={<EditorLoading />}>
+                <Suspense
+                  fallback={<EditorLoading label="Loading query editor…" />}
+                >
                   <MonacoEditor
                     height="520px"
                     language="json"
@@ -1134,15 +1137,5 @@ function JSONBlock({ value, empty }: { value: unknown; empty?: string }) {
     <pre className="max-h-[560px] overflow-auto bg-muted/20 p-4 text-xs leading-5">
       {JSON.stringify(value, null, 2)}
     </pre>
-  )
-}
-function EditorLoading() {
-  return (
-    <div className="grid h-[520px] place-items-center bg-muted text-sm text-muted-foreground">
-      <span className="inline-flex items-center gap-2">
-        <LoaderCircle className="size-4 animate-spin" />
-        Loading query editor…
-      </span>
-    </div>
   )
 }

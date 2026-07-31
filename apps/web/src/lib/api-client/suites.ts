@@ -8,6 +8,7 @@ import type {
   ValidationSuiteContract,
   ValidationSuiteRunContract,
   DeploymentValidationRunContract,
+  DeploymentValidationRunSummaryContract,
 } from "@/lib/api-client/contracts"
 
 const checkSchema = z
@@ -15,11 +16,15 @@ const checkSchema = z
     id: z.string(),
     kind: z.enum([
       "MONITOR",
+      "BROWSER_MONITOR",
       "ELF_QUERY",
       "OPENSEARCH_ALERT",
       "DYNATRACE_INFRASTRUCTURE",
     ]),
     monitorId: z.string(),
+    browserMonitorId: z.string().default(""),
+    checkpointIds: z.array(z.string()).default([]),
+    performanceBudgetIds: z.array(z.string()).default([]),
     queryId: z.string(),
     receiverId: z.string().default(""),
     externalMonitorId: z.string().default(""),
@@ -37,6 +42,7 @@ const checkSchema = z
   .refine(
     (value) => {
       if (value.kind === "MONITOR") return !!value.monitorId
+      if (value.kind === "BROWSER_MONITOR") return !!value.browserMonitorId
       if (value.kind === "ELF_QUERY") return !!value.queryId
       if (value.kind === "DYNATRACE_INFRASTRUCTURE") {
         return !!value.applicationId && !!value.environmentBindingId
@@ -86,7 +92,10 @@ export const previewDeploymentBaseline = createServerFn({ method: "POST" })
       `${baseURL()}/api/v1/suites/${encodeURIComponent(data.suiteId)}/deployment-baseline-preview`,
       {
         method: "POST",
-        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           deploymentStart: data.deploymentStart,
           baselineWindow: data.baselineWindow,
@@ -98,7 +107,9 @@ export const previewDeploymentBaseline = createServerFn({ method: "POST" })
     )
     if (!response.ok) {
       const failure = (await response.json()) as ApiErrorResponse
-      throw new Error(failure.error.message || "Unable to preview the baseline.")
+      throw new Error(
+        failure.error.message || "Unable to preview the baseline."
+      )
     }
     return (
       (await response.json()) as ApiSuccess<DeploymentBaselinePreviewContract>
@@ -284,6 +295,42 @@ export const runSuite = createServerFn({ method: "POST" })
     }
   )
 
+export const getValidationSuiteRun = createServerFn({ method: "GET" })
+  .validator(z.object({ runId: z.string().min(1) }))
+  .handler(
+    async ({
+      data,
+    }): Promise<
+      | { ok: true; run: ValidationSuiteRunContract }
+      | { ok: false; message: string }
+    > => {
+      try {
+        const response = await fetch(
+          `${baseURL()}/api/v1/suite-runs/${encodeURIComponent(data.runId)}`,
+          {
+            headers: { Accept: "application/json" },
+            signal: AbortSignal.timeout(10000),
+          }
+        )
+        if (!response.ok) {
+          const failure = (await response.json()) as ApiErrorResponse
+          return { ok: false, message: failure.error.message }
+        }
+        return {
+          ok: true,
+          run: (
+            (await response.json()) as ApiSuccess<ValidationSuiteRunContract>
+          ).data,
+        }
+      } catch {
+        return {
+          ok: false,
+          message: "Unable to refresh the validation suite run.",
+        }
+      }
+    }
+  )
+
 const deploymentInputSchema = z.object({
   suiteId: z.string().min(1),
   deploymentId: z.string(),
@@ -351,14 +398,16 @@ export const startDeploymentValidation = createServerFn({ method: "POST" })
 
 export const listDeploymentValidations = createServerFn({
   method: "GET",
-}).handler(async (): Promise<DeploymentValidationRunContract[]> => {
+}).handler(async (): Promise<DeploymentValidationRunSummaryContract[]> => {
   const response = await fetch(`${baseURL()}/api/v1/deployment-runs`, {
     headers: { Accept: "application/json" },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) throw new Error("Unable to load deployment validations")
   return (
-    (await response.json()) as ApiSuccess<DeploymentValidationRunContract[]>
+    (await response.json()) as ApiSuccess<
+      DeploymentValidationRunSummaryContract[]
+    >
   ).data
 })
 

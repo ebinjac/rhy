@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -16,20 +17,23 @@ type webhookRateWindow struct {
 	count   int
 }
 
-func (s *server) allowWebhook(receiverID string) bool {
+func (s *server) allowWebhook(ctx context.Context, receiverID string) (bool, error) {
+	if s.webhookRateLimiter != nil {
+		return s.webhookRateLimiter(ctx, receiverID)
+	}
 	s.webhookMu.Lock()
 	defer s.webhookMu.Unlock()
 	now := time.Now()
 	window := s.webhookLimits[receiverID]
 	if window == nil || now.Sub(window.started) >= time.Minute {
 		s.webhookLimits[receiverID] = &webhookRateWindow{started: now, count: 1}
-		return true
+		return true, nil
 	}
 	if window.count >= 120 {
-		return false
+		return false, nil
 	}
 	window.count++
-	return true
+	return true, nil
 }
 
 func (s *server) listOpenSearchAlertReceivers(w http.ResponseWriter, r *http.Request) {
@@ -254,7 +258,12 @@ func (s *server) receiveOpenSearchAlert(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	receiverID := r.PathValue("receiverId")
-	if !s.allowWebhook(receiverID) {
+	allowed, limitErr := s.allowWebhook(r.Context(), receiverID)
+	if limitErr != nil {
+		s.writeError(w, r, http.StatusServiceUnavailable, "RECEIVER_UNAVAILABLE", "Receiver capacity is temporarily unavailable.", nil)
+		return
+	}
+	if !allowed {
 		s.writeError(w, r, http.StatusTooManyRequests, "RATE_LIMITED", "Receiver rate limit exceeded.", nil)
 		return
 	}

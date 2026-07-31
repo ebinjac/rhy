@@ -10,7 +10,9 @@
     "test:api": "cd services/api && go test ./...",
     "lint": "turbo lint",
     "format": "turbo format",
-    "typecheck": "turbo typecheck"
+    "typecheck": "turbo typecheck",
+    "perf:budgets": "npm run build --workspace=web && node scripts/check-web-budgets.mjs",
+    "perf:scale": "k6 run tests/performance/rhythm-scale.js"
   },
   "devDependencies": {
     "prettier": "^3.8.3",

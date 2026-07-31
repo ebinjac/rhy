@@ -148,19 +148,33 @@ const phaseHelp: Record<
   },
 }
 
+function defaultSelectedStepId(
+  diagnostics: Awaited<ReturnType<typeof getRunDiagnostics>>
+) {
+  return (
+    diagnostics.primaryFailure?.stepId ??
+    diagnostics.analysis.slowestStepId ??
+    diagnostics.run.steps?.[0]?.stepDefinitionId ??
+    ""
+  )
+}
+
 function RunDiagnosticsPage() {
   const initial = Route.useLoaderData()
   const { runId } = Route.useParams()
   const [diagnostics, setDiagnostics] = useState(initial)
-  const [selectedStepID, setSelectedStepID] = useState(
-    initial.primaryFailure?.stepId ??
-      initial.analysis.slowestStepId ??
-      initial.run.steps?.[0]?.stepDefinitionId ??
-      ""
+  const [selectedStepID, setSelectedStepID] = useState(() =>
+    defaultSelectedStepId(initial)
   )
   const [cancelling, setCancelling] = useState(false)
   const [cancelMessage, setCancelMessage] = useState("")
   const active = activeStatuses.has(diagnostics.run.status)
+
+  useEffect(() => {
+    setDiagnostics(initial)
+    setSelectedStepID(defaultSelectedStepId(initial))
+    setCancelMessage("")
+  }, [initial, runId])
 
   useEffect(() => {
     if (!active) return
@@ -168,13 +182,15 @@ function RunDiagnosticsPage() {
     let loading = false
     const refresh = async () => {
       if (loading) return
+      if (document.visibilityState !== "visible") return
       loading = true
       try {
         const next = await getRunDiagnostics({ data: { runId } })
         if (!disposed) {
           setDiagnostics(next)
-          if (!selectedStepID && next.run.steps?.[0])
-            setSelectedStepID(next.run.steps[0].stepDefinitionId)
+          setSelectedStepID((current) =>
+            current || next.run.steps?.[0]?.stepDefinitionId || ""
+          )
         }
       } finally {
         loading = false
@@ -185,7 +201,7 @@ function RunDiagnosticsPage() {
       disposed = true
       window.clearInterval(timer)
     }
-  }, [active, runId, selectedStepID])
+  }, [active, runId])
 
   const selectedStep =
     diagnostics.run.steps?.find(

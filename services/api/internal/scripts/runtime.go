@@ -44,12 +44,15 @@ type Runtime struct {
 	client       *http.Client
 	packageMu    sync.RWMutex
 	packageCache map[string]string
+	programMu    sync.RWMutex
+	programCache map[string]*goja.Program
 }
 
 func NewRuntime() *Runtime {
 	return &Runtime{
 		client:       &http.Client{Timeout: 10 * time.Second},
 		packageCache: make(map[string]string),
+		programCache: make(map[string]*goja.Program),
 	}
 }
 
@@ -59,7 +62,7 @@ func (r *Runtime) Validate(code string) Validation {
 		problems = append(problems, Problem{Severity: "error", Message: "Script exceeds the 64 KB source limit.", Line: 1, Column: 1, Code: "SCRIPT_SOURCE_LIMIT"})
 		return Validation{Valid: false, Problems: problems}
 	}
-	_, err := goja.Compile("pre-request.js", "(async function(){\n"+code+"\n})()", false)
+	_, err := r.compiledProgram(code)
 	if err != nil {
 		line, column := errorPosition(err.Error())
 		problems = append(problems, Problem{Severity: "error", Message: safeError(err.Error(), nil), Line: line, Column: column, Code: "SCRIPT_SYNTAX_ERROR"})
@@ -246,7 +249,11 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 
 	cpuTimer := time.AfterFunc(defaultCPUTime, func() { vm.Interrupt("JavaScript CPU time limit exceeded") })
 	defer cpuTimer.Stop()
-	value, err := vm.RunString("(async function(){\n" + input.Script.Code + "\n;await Promise.all(globalThis.__pendingTests || []);\n})()")
+	program, err := r.compiledProgram(input.Script.Code)
+	if err != nil {
+		return failed(result, started, "SCRIPT_SYNTAX_ERROR", safeError(err.Error(), secretValues)), nil
+	}
+	value, err := vm.RunProgram(program)
 	if err == nil {
 		if promise, ok := value.Export().(*goja.Promise); ok {
 			switch promise.State() {
@@ -317,6 +324,35 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 	}
 	result.DurationMS = time.Since(started).Milliseconds()
 	return result, nil
+}
+
+func (r *Runtime) compiledProgram(code string) (*goja.Program, error) {
+	source := "(async function(){\n" + code + "\n;await Promise.all(globalThis.__pendingTests || []);\n})()"
+	hash := sha256.Sum256([]byte(RuntimeVersion + "\x00" + source))
+	key := hex.EncodeToString(hash[:])
+	r.programMu.RLock()
+	program := r.programCache[key]
+	r.programMu.RUnlock()
+	if program != nil {
+		return program, nil
+	}
+	compiled, err := goja.Compile("pre-request.js", source, false)
+	if err != nil {
+		return nil, err
+	}
+	r.programMu.Lock()
+	if len(r.programCache) >= 256 {
+		// Programs contain no runtime state. A bounded whole-cache reset keeps
+		// memory predictable without adding hot-path LRU bookkeeping.
+		r.programCache = make(map[string]*goja.Program)
+	}
+	if existing := r.programCache[key]; existing != nil {
+		compiled = existing
+	} else {
+		r.programCache[key] = compiled
+	}
+	r.programMu.Unlock()
+	return compiled, nil
 }
 
 func genericJSON(value any) any {

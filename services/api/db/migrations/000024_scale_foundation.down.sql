@@ -1,0 +1,20 @@
+DROP INDEX IF EXISTS run_events_time_idx;
+DROP INDEX IF EXISTS monitor_step_runs_definition_time_idx;
+DROP INDEX IF EXISTS monitor_runs_terminal_time_idx;
+DROP INDEX IF EXISTS monitor_runs_revision_created_idx;
+DROP INDEX IF EXISTS monitor_runs_status_created_idx;
+DROP TABLE IF EXISTS warm_evidence_manifests;
+DROP TABLE IF EXISTS monitor_metric_rollups_daily;
+DROP TABLE IF EXISTS monitor_metric_rollups_hourly;
+DROP TABLE IF EXISTS monitor_current_health;
+DROP TABLE IF EXISTS execution_job_outbox;
+DROP TABLE IF EXISTS execution_jobs;
+ALTER TABLE monitor_runs
+    DROP COLUMN IF EXISTS retry_count,
+    DROP COLUMN IF EXISTS retry_backoff_time_ms,
+    DROP COLUMN IF EXISTS network_time_ms,
+    DROP COLUMN IF EXISTS post_processing_time_ms,
+    DROP COLUMN IF EXISTS preparation_time_ms,
+    DROP COLUMN IF EXISTS api_response_time_ms,
+    DROP COLUMN IF EXISTS terminal_processed_at,
+    DROP COLUMN IF EXISTS cancel_requested_at;

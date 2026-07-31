@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Alert, AlertDescription } from "@workspace/ui/components/alert"
 import { Badge } from "@workspace/ui/components/badge"
@@ -18,10 +18,10 @@ import {
   Save,
 } from "lucide-react"
 
+import { EditorLoading } from "@/components/editor-loading"
+import { PageContainer } from "@/components/page-container"
 import { normalizeDefinitionScripts } from "@/features/monitors/request-definition"
 import type { RequestDefinition } from "@/features/monitors/request-definition"
-import { RequestWorkbench } from "@/features/monitors/request-workbench"
-import { PageContainer } from "@/components/page-container"
 import type { ScheduleContract } from "@/lib/api-client/contracts"
 import {
   listELFApplications,
@@ -36,6 +36,11 @@ import {
   saveMonitorSchedule,
 } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+
+const RequestWorkbench = lazy(async () => ({
+  default: (await import("@/features/monitors/request-workbench"))
+    .RequestWorkbench,
+}))
 
 export const Route = createFileRoute("/monitors/$monitorId/edit")({
   loader: async ({ params }) => {
@@ -305,13 +310,15 @@ function EditMonitorPage() {
             templates.
           </p>
         </div>
-        <RequestWorkbench
-          value={definition}
-          onChange={change}
-          monitorId={loaded.monitor.id}
-          revisionId={loaded.revision.id}
-          secrets={loaded.secrets}
-        />
+        <Suspense fallback={<EditorLoading label="Loading request workbench…" />}>
+          <RequestWorkbench
+            value={definition}
+            onChange={change}
+            monitorId={loaded.monitor.id}
+            revisionId={loaded.revision.id}
+            secrets={loaded.secrets}
+          />
+        </Suspense>
         <section className="mt-6 rounded-xl border p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
             <div className="min-w-56 flex-1">

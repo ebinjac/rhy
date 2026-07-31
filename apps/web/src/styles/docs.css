@@ -1,0 +1,5 @@
+@reference "../../../../packages/ui/src/styles/globals.css";
+@source "../components/docs/**/*.{ts,tsx}";
+@source "../routes/docs/**/*.{ts,tsx}";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";

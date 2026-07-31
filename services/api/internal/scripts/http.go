@@ -15,13 +15,21 @@ import (
 type HTTPServer struct {
 	runtime *Runtime
 	token   string
+	slots   chan struct{}
 }
 
 func NewHTTPHandler(runtime *Runtime, token string) http.Handler {
-	server := &HTTPServer{runtime: runtime, token: strings.TrimSpace(token)}
+	return NewHTTPHandlerWithConcurrency(runtime, token, 8)
+}
+
+func NewHTTPHandlerWithConcurrency(runtime *Runtime, token string, concurrency int) http.Handler {
+	if concurrency <= 0 {
+		concurrency = 8
+	}
+	server := &HTTPServer{runtime: runtime, token: strings.TrimSpace(token), slots: make(chan struct{}, concurrency)}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "runtimeVersion": RuntimeVersion})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "runtimeVersion": RuntimeVersion, "capacity": cap(server.slots), "active": len(server.slots)})
 	})
 	mux.HandleFunc("POST /v1/validate", server.authorize(server.validate))
 	mux.HandleFunc("POST /v1/execute", server.authorize(server.execute))
@@ -50,6 +58,14 @@ func (s *HTTPServer) validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPServer) execute(w http.ResponseWriter, r *http.Request) {
+	select {
+	case s.slots <- struct{}{}:
+		defer func() { <-s.slots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "script runner is at capacity"})
+		return
+	}
 	var input Input
 	if !decodeBody(w, r, &input) {
 		return

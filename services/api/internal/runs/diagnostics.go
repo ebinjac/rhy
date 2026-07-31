@@ -71,8 +71,104 @@ type FailureDetail struct {
 	HelpCode      string `json:"helpCode"`
 }
 
+type StepDiagnostics struct {
+	Run     Run          `json:"run"`
+	Step    StepRun      `json:"step"`
+	Insight *StepInsight `json:"insight,omitempty"`
+}
+
 type BaselineRepository interface {
 	StepDurations(context.Context, string, string, string, string, int, bool) ([]int64, error)
+}
+
+func (s *Service) DiagnosticsSummary(ctx context.Context, runID string) (Diagnostics, error) {
+	if repository, ok := s.repository.(DiagnosticsSummaryRepository); ok {
+		run, analysis, err := repository.GetDiagnosticsSummary(ctx, runID)
+		if err != nil {
+			return Diagnostics{}, err
+		}
+		return Diagnostics{
+			Run:            run,
+			Analysis:       analysis,
+			PrimaryFailure: primaryFailure(run),
+			Steps:          []StepInsight{},
+			Events:         []RunEvent{},
+		}, nil
+	}
+	diagnostics, err := s.Diagnostics(ctx, runID)
+	if err != nil {
+		return Diagnostics{}, err
+	}
+	diagnostics.Run.Steps = nil
+	diagnostics.Run.Events = nil
+	diagnostics.Events = nil
+	diagnostics.Steps = nil
+	return diagnostics, nil
+}
+
+func (s *Service) StepDiagnostics(ctx context.Context, runID, stepRunID string) (StepDiagnostics, error) {
+	repository, ok := s.repository.(StepRepository)
+	if !ok {
+		diagnostics, err := s.Diagnostics(ctx, runID)
+		if err != nil {
+			return StepDiagnostics{}, err
+		}
+		for _, step := range diagnostics.Run.Steps {
+			if step.ID != stepRunID {
+				continue
+			}
+			var insight *StepInsight
+			for index := range diagnostics.Steps {
+				if diagnostics.Steps[index].StepRunID == stepRunID {
+					value := diagnostics.Steps[index]
+					insight = &value
+					break
+				}
+			}
+			return StepDiagnostics{Run: diagnostics.Run, Step: step, Insight: insight}, nil
+		}
+		return StepDiagnostics{}, ErrNotFound
+	}
+	var run Run
+	var err error
+	if summaryRepository, summaryOK := s.repository.(SummaryRepository); summaryOK {
+		run, err = summaryRepository.GetSummary(ctx, runID)
+	} else {
+		run, err = s.repository.Get(ctx, runID)
+	}
+	if err != nil {
+		return StepDiagnostics{}, err
+	}
+	step, err := repository.GetStep(ctx, runID, stepRunID)
+	if err != nil {
+		return StepDiagnostics{}, err
+	}
+	apiResponseMS := timingMilliseconds(step.Timing, "apiResponseTimeMs")
+	phase, phaseMS := slowestTimingPhase(step.Timing)
+	insight := &StepInsight{
+		StepDefinitionID:  step.StepDefinitionID,
+		StepRunID:         step.ID,
+		DurationMS:        step.DurationMS,
+		APIResponseTimeMS: apiResponseMS,
+		SlowestPhase:      phase,
+		SlowestPhaseMS:    phaseMS,
+		Baseline:          StepBaseline{Classification: "INSUFFICIENT_HISTORY"},
+	}
+	if run.DurationMS > 0 {
+		insight.DurationShare = math.Round((float64(step.DurationMS)/float64(run.DurationMS))*1000) / 10
+	}
+	if baselineRepository, baselineOK := s.repository.(BaselineRepository); baselineOK && apiResponseMS > 0 {
+		values, baselineErr := baselineRepository.StepDurations(ctx, run.MonitorID, run.RevisionID, step.StepDefinitionID, run.ID, 20, false)
+		mixed := false
+		if baselineErr == nil && len(values) < 5 {
+			values, baselineErr = baselineRepository.StepDurations(ctx, run.MonitorID, "", step.StepDefinitionID, run.ID, 50, true)
+			mixed = true
+		}
+		if baselineErr == nil {
+			insight.Baseline = calculateBaseline(values, apiResponseMS, mixed)
+		}
+	}
+	return StepDiagnostics{Run: run, Step: step, Insight: insight}, nil
 }
 
 func (s *Service) Diagnostics(ctx context.Context, runID string) (Diagnostics, error) {

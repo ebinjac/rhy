@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -12,8 +13,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
+	"github.com/rhythm-monitoring/rhythm/internal/browsermonitors"
 	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
@@ -26,6 +29,9 @@ type Check struct {
 	ID                   string   `json:"id"`
 	Kind                 string   `json:"kind"`
 	MonitorID            string   `json:"monitorId,omitempty"`
+	BrowserMonitorID     string   `json:"browserMonitorId,omitempty"`
+	CheckpointIDs        []string `json:"checkpointIds,omitempty"`
+	PerformanceBudgetIDs []string `json:"performanceBudgetIds,omitempty"`
 	QueryID              string   `json:"queryId,omitempty"`
 	ReceiverID           string   `json:"receiverId,omitempty"`
 	ExternalMonitorID    string   `json:"externalMonitorId,omitempty"`
@@ -82,6 +88,7 @@ type CheckResult struct {
 	StageName           string     `json:"stageName"`
 	CheckID             string     `json:"checkId"`
 	MonitorID           string     `json:"monitorId,omitempty"`
+	BrowserMonitorID    string     `json:"browserMonitorId,omitempty"`
 	Kind                string     `json:"kind"`
 	QueryID             string     `json:"queryId,omitempty"`
 	QueryRevisionID     string     `json:"queryRevisionId,omitempty"`
@@ -106,6 +113,7 @@ type CheckResult struct {
 	Required            bool       `json:"required"`
 	Status              string     `json:"status"`
 	MonitorRunID        string     `json:"monitorRunId,omitempty"`
+	BrowserRunID        string     `json:"browserRunId,omitempty"`
 	FailureCategory     string     `json:"failureCategory,omitempty"`
 	FailureReason       string     `json:"failureReason,omitempty"`
 	DurationMS          int64      `json:"durationMs"`
@@ -159,9 +167,15 @@ type Service struct {
 	elf        *elf.Service
 	alerts     OpenSearchAlertSource
 	dynatrace  *dynatrace.Service
+	browser    *browsermonitors.Service
 	now        func() time.Time
 	mu         sync.Mutex
 	cancels    map[string]context.CancelFunc
+	queueRedis *redis.Client
+	queueLog   *slog.Logger
+	workerID   string
+	queueSlots chan struct{}
+	queueOnce  sync.Once
 }
 
 func New(repository Repository, runService *runs.Service) *Service {
@@ -170,6 +184,9 @@ func New(repository Repository, runService *runs.Service) *Service {
 func (s *Service) SetELF(service *elf.Service)             { s.elf = service }
 func (s *Service) SetAlerts(source OpenSearchAlertSource)  { s.alerts = source }
 func (s *Service) SetDynatrace(service *dynatrace.Service) { s.dynatrace = service }
+func (s *Service) SetBrowser(service *browsermonitors.Service) {
+	s.browser = service
+}
 
 func (s *Service) List(ctx context.Context) ([]Suite, error) { return s.repository.List(ctx) }
 func (s *Service) Get(ctx context.Context, suiteID string) (Suite, error) {
@@ -254,11 +271,14 @@ func suiteFromInput(input Input, actor string, now time.Time) (Suite, error) {
 			if check.ID == "" {
 				check.ID = fmt.Sprintf("%s-check-%d", stage.ID, checkIndex+1)
 			}
-			if check.Kind != "MONITOR" && check.Kind != "ELF_QUERY" && check.Kind != "OPENSEARCH_ALERT" && check.Kind != "DYNATRACE_INFRASTRUCTURE" {
-				return Suite{}, errors.New("suite check kind must be MONITOR, ELF_QUERY, OPENSEARCH_ALERT, or DYNATRACE_INFRASTRUCTURE")
+			if check.Kind != "MONITOR" && check.Kind != "BROWSER_MONITOR" && check.Kind != "ELF_QUERY" && check.Kind != "OPENSEARCH_ALERT" && check.Kind != "DYNATRACE_INFRASTRUCTURE" {
+				return Suite{}, errors.New("suite check kind must be MONITOR, BROWSER_MONITOR, ELF_QUERY, OPENSEARCH_ALERT, or DYNATRACE_INFRASTRUCTURE")
 			}
 			if check.Kind == "MONITOR" && strings.TrimSpace(check.MonitorID) == "" {
 				return Suite{}, errors.New("monitor checks require monitorId")
+			}
+			if check.Kind == "BROWSER_MONITOR" && strings.TrimSpace(check.BrowserMonitorID) == "" {
+				return Suite{}, errors.New("browser monitor checks require browserMonitorId")
 			}
 			if check.Kind == "ELF_QUERY" && strings.TrimSpace(check.QueryID) == "" {
 				return Suite{}, errors.New("ELF query checks require queryId")
@@ -322,11 +342,22 @@ func (s *Service) RunWithInput(ctx context.Context, suiteID, actor string, input
 		input.TriggerType = "MANUAL"
 	}
 	run := SuiteRun{ID: runID, SuiteID: suite.ID, Status: "RUNNING", GateDecision: "PENDING", TriggerType: input.TriggerType, TriggerSource: actor, Results: []CheckResult{}, StartedAt: started, CreatedAt: started}
+	return s.executeSuiteRun(ctx, suite, actor, input, run)
+}
+
+func (s *Service) executeSuiteRun(ctx context.Context, suite Suite, actor string, input RunInput, run SuiteRun) (SuiteRun, error) {
+	started := s.now()
+	run.Status = "RUNNING"
+	run.GateDecision = "PENDING"
+	run.StartedAt = started
+	run.EndedAt = nil
+	run.DurationMS = 0
+	run.Results = []CheckResult{}
 	runContext, cancel := context.WithTimeout(ctx, time.Duration(suite.TimeoutSeconds)*time.Second)
 	s.mu.Lock()
-	s.cancels[runID] = cancel
+	s.cancels[run.ID] = cancel
 	s.mu.Unlock()
-	defer func() { cancel(); s.mu.Lock(); delete(s.cancels, runID); s.mu.Unlock() }()
+	defer func() { cancel(); s.mu.Lock(); delete(s.cancels, run.ID); s.mu.Unlock() }()
 	requiredFailure, optionalFailure := false, false
 	for _, stage := range suite.Stages {
 		stageResults := s.runStage(runContext, suite, stage, actor, input.Deployment)
@@ -379,11 +410,42 @@ func (s *Service) runStage(ctx context.Context, suite Suite, stage Stage, actor 
 				result := CheckResult{
 					StageID: stage.ID, StageName: stage.Name, CheckID: check.ID, Kind: check.Kind,
 					MonitorID: check.MonitorID, QueryID: check.QueryID, ReceiverID: check.ReceiverID,
+					BrowserMonitorID:  check.BrowserMonitorID,
 					ExternalMonitorID: check.ExternalMonitorID, ExternalTriggerID: check.ExternalTriggerID,
 					ExternalMonitorName: check.ExternalMonitorName, ExternalTriggerName: check.ExternalTriggerName,
 					Name: check.Name, Required: check.Required, Status: "FAILED",
 				}
 				switch check.Kind {
+				case "BROWSER_MONITOR":
+					if s.browser == nil {
+						result.FailureCategory, result.FailureReason = "BROWSER_MONITORING_UNAVAILABLE", "Browser-monitor execution is unavailable."
+					} else {
+						browserRun, err := s.browser.StartRun(ctx, check.BrowserMonitorID, actor, "published", "VALIDATION_SUITE")
+						if err != nil {
+							result.FailureCategory, result.FailureReason = "BROWSER_EXECUTION_ERROR", safeError(err)
+						} else {
+							browserRun, err = s.waitForBrowserRun(ctx, browserRun.ID)
+							result.BrowserRunID = browserRun.ID
+							if err != nil {
+								result.FailureCategory, result.FailureReason = "BROWSER_EXECUTION_ERROR", safeError(err)
+							} else {
+								result.Status = browserRun.Status
+								result.FailureCategory = browserRun.FailureCategory
+								result.FailureReason = browserRun.FailureReason
+								if browserRun.Status == browsermonitors.StatusSuccess {
+									result.Status = "SUCCESS"
+								} else if browserRun.Status == browsermonitors.StatusSuccessWithWarnings {
+									if check.Required {
+										result.Status = "FAILED"
+										result.FailureCategory = "BROWSER_WARNING_BLOCKED"
+										result.FailureReason = "The required browser journey completed with warnings."
+									} else {
+										result.Status = "WARNING"
+									}
+								}
+							}
+						}
+					}
 				case "ELF_QUERY":
 					if s.elf == nil {
 						result.FailureCategory, result.FailureReason = "ELF_UNAVAILABLE", "ELF execution is unavailable."
@@ -460,6 +522,29 @@ func (s *Service) runStage(ctx context.Context, suite Suite, stage Stage, actor 
 		}
 	}
 	return results
+}
+
+func (s *Service) waitForBrowserRun(ctx context.Context, runID string) (browsermonitors.Run, error) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		run, err := s.browser.GetRun(ctx, runID)
+		if err != nil {
+			return browsermonitors.Run{}, err
+		}
+		switch run.Status {
+		case browsermonitors.StatusSuccess, browsermonitors.StatusSuccessWithWarnings,
+			browsermonitors.StatusFailed, browsermonitors.StatusTimedOut,
+			browsermonitors.StatusCancelled, browsermonitors.StatusAborted:
+			return run, nil
+		}
+		select {
+		case <-ctx.Done():
+			_, _ = s.browser.CancelRun(context.Background(), runID)
+			return run, ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *Service) Cancel(runID string) bool {
@@ -713,7 +798,18 @@ func (r *PostgresRepository) Delete(ctx context.Context, id string) error {
 }
 func (r *PostgresRepository) SaveRun(ctx context.Context, v SuiteRun) error {
 	results, _ := json.Marshal(v.Results)
-	_, err := r.pool.Exec(ctx, `INSERT INTO validation_suite_runs(id,suite_id,status,gate_decision,trigger_type,trigger_source,results_json,started_at,ended_at,duration_ms,created_at)VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11)`, v.ID, v.SuiteID, v.Status, v.GateDecision, v.TriggerType, v.TriggerSource, results, v.StartedAt, v.EndedAt, v.DurationMS, v.CreatedAt)
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO validation_suite_runs(
+			id,suite_id,status,gate_decision,trigger_type,trigger_source,
+			results_json,started_at,ended_at,duration_ms,created_at
+		) VALUES($1,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11)
+		ON CONFLICT(id) DO UPDATE SET
+			status=EXCLUDED.status,gate_decision=EXCLUDED.gate_decision,
+			trigger_type=EXCLUDED.trigger_type,trigger_source=EXCLUDED.trigger_source,
+			results_json=EXCLUDED.results_json,started_at=EXCLUDED.started_at,
+			ended_at=EXCLUDED.ended_at,duration_ms=EXCLUDED.duration_ms`,
+		v.ID, v.SuiteID, v.Status, v.GateDecision, v.TriggerType, v.TriggerSource,
+		results, v.StartedAt, v.EndedAt, v.DurationMS, v.CreatedAt)
 	return err
 }
 func (r *PostgresRepository) GetRun(ctx context.Context, id string) (SuiteRun, error) {

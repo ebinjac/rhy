@@ -22,3 +22,23 @@ func OpenRedis(ctx context.Context, redisURL string) (*redis.Client, error) {
 	}
 	return client, nil
 }
+
+// AcknowledgeAndDelete keeps Redis Streams as a delivery transport rather than
+// a second run-history store. PostgreSQL remains the durable source of truth.
+func AcknowledgeAndDelete(
+	ctx context.Context,
+	client *redis.Client,
+	stream string,
+	group string,
+	messageIDs ...string,
+) error {
+	if client == nil || len(messageIDs) == 0 {
+		return nil
+	}
+	_, err := client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.XAck(ctx, stream, group, messageIDs...)
+		pipe.XDel(ctx, stream, messageIDs...)
+		return nil
+	})
+	return err
+}

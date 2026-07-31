@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   Clock3,
   ExternalLink,
+  MonitorCheck,
   ShieldCheck,
 } from "lucide-react"
 
@@ -31,6 +32,7 @@ export const Route = createFileRoute("/alerts/$alertId")({
 function AlertDetail() {
   const { alert, events } = Route.useLoaderData()
   const external = alert.sourceType === "OPENSEARCH_ALERTING"
+  const browser = alert.sourceType === "RHYTHM_BROWSER_MONITOR"
   return (
     <PageContainer as="main">
       <Button
@@ -52,7 +54,11 @@ function AlertDetail() {
             </Badge>
             <Badge variant="outline">{alert.state}</Badge>
             <Badge variant="secondary">
-              {external ? "OpenSearch Alerting" : "Rhythm monitor"}
+              {external
+                ? "OpenSearch Alerting"
+                : browser
+                  ? "Rhythm UI monitor"
+                  : "Rhythm API monitor"}
             </Badge>
           </div>
           <h1 className="mt-3 text-2xl font-semibold">{alert.title}</h1>
@@ -80,6 +86,21 @@ function AlertDetail() {
               View application
             </Button>
           ) : null}
+          {browser && alert.browserMonitorId ? (
+            <Button
+              nativeButton={false}
+              render={
+                <Link
+                  params={{ monitorId: alert.browserMonitorId }}
+                  to="/ui-monitoring/$monitorId/runs"
+                />
+              }
+              variant="outline"
+            >
+              <MonitorCheck />
+              View browser runs
+            </Button>
+          ) : null}
           {alert.dashboardUrl ? (
             <Button
               nativeButton={false}
@@ -100,7 +121,10 @@ function AlertDetail() {
       </header>
 
       <section className="mt-7 grid divide-y rounded-lg border sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
-        <Metric label="Application" value={alert.applicationName || "Not linked"} />
+        <Metric
+          label="Application"
+          value={alert.applicationName || "Not linked"}
+        />
         <Metric label="Service" value={alert.serviceName || "All services"} />
         <Metric
           label={external ? "Upstream state" : "Consecutive failures"}
@@ -130,7 +154,12 @@ function AlertDetail() {
           <dl className="mt-4 divide-y border-y text-sm">
             <Definition
               label="Monitor"
-              value={alert.externalMonitorName || alert.monitorName || "Not recorded"}
+              value={
+                alert.externalMonitorName ||
+                alert.browserMonitorName ||
+                alert.monitorName ||
+                "Not recorded"
+              }
             />
             <Definition
               label="Trigger"
@@ -212,8 +241,7 @@ function AlertDetail() {
 function severityClass(severity: string) {
   if (severity === "CRITICAL" || severity === "HIGH")
     return "bg-destructive/10 text-destructive"
-  if (severity === "WARNING")
-    return "bg-warning-soft text-warning-foreground"
+  if (severity === "WARNING") return "bg-warning-soft text-warning-foreground"
   return "bg-muted text-muted-foreground"
 }
 
@@ -221,7 +249,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 p-4">
       <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="mt-1 break-words font-semibold capitalize">{value}</p>
+      <p className="mt-1 font-semibold break-words capitalize">{value}</p>
     </div>
   )
 }

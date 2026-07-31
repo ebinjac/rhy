@@ -19,6 +19,7 @@ import {
   CircleAlert,
   Clock3,
   LoaderCircle,
+  MonitorCheck,
   Search,
   Settings2,
   X,
@@ -220,7 +221,12 @@ export function GlobalSearch() {
       return
     }
     const resource = item.resource
-    if (resource.kind === "APPLICATION" || resource.kind === "SERVICE") {
+    if (resource.kind === "BROWSER_MONITOR") {
+      await navigate({
+        to: "/ui-monitoring/$monitorId",
+        params: { monitorId: resource.id },
+      })
+    } else if (resource.kind === "APPLICATION" || resource.kind === "SERVICE") {
       await navigate({
         to: "/applications/$applicationId",
         params: { applicationId: resource.applicationId || resource.id },
@@ -446,7 +452,9 @@ function ResourceResult({
   onSelect: (item: RecentItem) => void
 }) {
   const Icon =
-    resource.kind === "APPLICATION" || resource.kind === "SERVICE"
+    resource.kind === "BROWSER_MONITOR"
+      ? MonitorCheck
+      : resource.kind === "APPLICATION" || resource.kind === "SERVICE"
       ? AppWindow
       : resource.kind === "ELF_QUERY" || resource.kind === "ELF_RUN"
         ? Braces

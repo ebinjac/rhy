@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/rhythm-monitoring/rhythm/internal/browsermonitors"
 	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
@@ -48,6 +49,8 @@ type DeploymentConfiguration struct {
 	MonitorRevisionIDs       map[string]string `json:"monitorRevisionIds"`
 	ELFRevisionIDs           map[string]string `json:"elfRevisionIds"`
 	DynatraceRevisionNumbers map[string]int    `json:"dynatraceRevisionNumbers"`
+	BrowserRevisionIDs       map[string]string `json:"browserRevisionIds"`
+	BrowserSampleCount       int               `json:"browserSampleCount"`
 }
 
 type DeploymentProgress struct {
@@ -121,6 +124,32 @@ type MonitorComparison struct {
 	Reasons        []string           `json:"reasons"`
 }
 
+type BrowserSample struct {
+	ID               string    `json:"id"`
+	BrowserMonitorID string    `json:"browserMonitorId"`
+	BrowserRunID     string    `json:"browserRunId,omitempty"`
+	SampleNumber     int       `json:"sampleNumber"`
+	Status           string    `json:"status"`
+	DurationMS       int64     `json:"durationMs"`
+	FailureCategory  string    `json:"failureCategory,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+type BrowserComparison struct {
+	CheckID          string          `json:"checkId"`
+	BrowserMonitorID string          `json:"browserMonitorId"`
+	MonitorName      string          `json:"monitorName"`
+	RevisionID       string          `json:"revisionId"`
+	Required         bool            `json:"required"`
+	Baseline         Distribution    `json:"baseline"`
+	Post             Distribution    `json:"post"`
+	Classification   string          `json:"classification"`
+	DeltaMS          int64           `json:"deltaMs"`
+	DeltaPercent     float64         `json:"deltaPercent"`
+	Samples          []BrowserSample `json:"samples"`
+	Reasons          []string        `json:"reasons"`
+}
+
 type DynatraceComparison struct {
 	CheckID               string                          `json:"checkId"`
 	Name                  string                          `json:"name"`
@@ -165,6 +194,7 @@ type DeploymentReport struct {
 	PostFrom         *time.Time              `json:"postFrom,omitempty"`
 	PostTo           *time.Time              `json:"postTo,omitempty"`
 	Monitors         []MonitorComparison     `json:"monitors"`
+	BrowserMonitors  []BrowserComparison     `json:"browserMonitors"`
 	DynatraceResults []DynatraceComparison   `json:"dynatraceResults"`
 	ELFResults       []CheckResult           `json:"elfResults"`
 	AlertResults     []CheckResult           `json:"alertResults"`
@@ -196,6 +226,53 @@ type DeploymentRun struct {
 	UpdatedAt         time.Time               `json:"updatedAt"`
 }
 
+type DeploymentRunSummary struct {
+	ID            string             `json:"id"`
+	SuiteID       string             `json:"suiteId"`
+	Status        string             `json:"status"`
+	Phase         string             `json:"phase"`
+	GateDecision  string             `json:"gateDecision"`
+	Progress      DeploymentProgress `json:"progress"`
+	Deployment    DeploymentDetails  `json:"deployment"`
+	SuiteSnapshot struct {
+		Name string `json:"name"`
+	} `json:"suiteSnapshot"`
+	FailureReason string     `json:"failureReason,omitempty"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	EndedAt       *time.Time `json:"endedAt,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+}
+
+func deploymentRunSummary(run DeploymentRun) DeploymentRunSummary {
+	normalizeDeploymentCancellation(&run)
+	summary := DeploymentRunSummary{
+		ID: run.ID, SuiteID: run.SuiteID, Status: run.Status, Phase: run.Phase,
+		GateDecision: run.GateDecision, Progress: run.Progress, Deployment: run.Deployment,
+		FailureReason: run.FailureReason, StartedAt: run.StartedAt, EndedAt: run.EndedAt,
+		CreatedAt: run.CreatedAt, UpdatedAt: run.UpdatedAt,
+	}
+	summary.SuiteSnapshot.Name = run.SuiteSnapshot.Name
+	return summary
+}
+
+func normalizeDeploymentCancellation(run *DeploymentRun) {
+	if run.Status != "CANCELLED" {
+		return
+	}
+	if run.GateDecision == "" || run.GateDecision == "PENDING" {
+		run.GateDecision = "BLOCK"
+	}
+	if strings.TrimSpace(run.FailureReason) == "" {
+		run.FailureReason = "Validation was cancelled before completion."
+	}
+	run.Report.Status = "CANCELLED"
+	run.Report.GateDecision = "BLOCK"
+	if strings.TrimSpace(run.Report.Recommendation) == "" {
+		run.Report.Recommendation = "Validation was cancelled before a complete release decision could be produced."
+	}
+}
+
 type DeploymentFilter struct {
 	SuiteID, ApplicationID, Environment, Status, Decision string
 }
@@ -221,6 +298,7 @@ type BaselineMonitorPreview struct {
 
 type BaselinePreview struct {
 	Monitors                []BaselineMonitorPreview `json:"monitors"`
+	BrowserMonitors         []BaselineMonitorPreview `json:"browserMonitors"`
 	TotalAvailableSamples   int                      `json:"totalAvailableSamples"`
 	EstimatedExecutions     int                      `json:"estimatedExecutions"`
 	EstimatedMaximumSeconds int                      `json:"estimatedMaximumSeconds"`
@@ -248,7 +326,11 @@ func (s *Service) PreviewDeploymentBaseline(ctx context.Context, suiteID string,
 	}
 	from, to := input.DeploymentStart.Add(-duration), input.DeploymentStart
 	seen := map[string]bool{}
-	preview := BaselinePreview{Monitors: []BaselineMonitorPreview{}, BlockingDependencies: []string{}}
+	preview := BaselinePreview{
+		Monitors:             []BaselineMonitorPreview{},
+		BrowserMonitors:      []BaselineMonitorPreview{},
+		BlockingDependencies: []string{},
+	}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
 			if check.Kind != "MONITOR" || seen[check.MonitorID] {
@@ -281,12 +363,54 @@ func (s *Service) PreviewDeploymentBaseline(ctx context.Context, suiteID string,
 			preview.Monitors = append(preview.Monitors, item)
 		}
 	}
+	seenBrowser := map[string]bool{}
+	for _, stage := range suite.Stages {
+		for _, check := range stage.Checks {
+			if check.Kind != "BROWSER_MONITOR" || seenBrowser[check.BrowserMonitorID] {
+				continue
+			}
+			seenBrowser[check.BrowserMonitorID] = true
+			if s.browser == nil {
+				preview.BlockingDependencies = append(preview.BlockingDependencies, "Browser-monitor execution is unavailable.")
+				continue
+			}
+			monitor, monitorErr := s.browser.Get(ctx, check.BrowserMonitorID)
+			if monitorErr != nil {
+				preview.BlockingDependencies = append(preview.BlockingDependencies, "A selected UI monitor could not be loaded.")
+				continue
+			}
+			item := BaselineMonitorPreview{
+				MonitorID: monitor.ID, MonitorName: monitor.Name,
+				RevisionID:   monitor.LatestPublishedRevisionID,
+				BaselineFrom: from, BaselineTo: to, MinimumSamples: 10,
+			}
+			if item.RevisionID == "" {
+				item.Reason = "No published browser journey is available."
+				preview.BlockingDependencies = append(preview.BlockingDependencies, monitor.Name+" must be published.")
+			} else {
+				history, historyErr := s.browser.ListRunsBetween(ctx, monitor.ID, item.RevisionID, from, to, 5000)
+				if historyErr != nil {
+					item.Reason = "Browser baseline history could not be loaded."
+				} else {
+					item.SampleCount = summarizeBrowserRuns(history).SampleCount
+					item.Compatible = item.SampleCount >= item.MinimumSamples
+					if !item.Compatible {
+						item.Reason = "Fewer than ten successful same-revision browser journeys are available for percentile gating."
+					}
+					preview.TotalAvailableSamples += item.SampleCount
+				}
+			}
+			preview.BrowserMonitors = append(preview.BrowserMonitors, item)
+		}
+	}
 	monitorCount := len(preview.Monitors)
-	preview.EstimatedExecutions = monitorCount * input.SampleCount
-	parallelism := max(1, min(suite.Parallelism, monitorCount))
+	browserCount := len(preview.BrowserMonitors)
+	preview.EstimatedExecutions = monitorCount*input.SampleCount + browserCount*5
+	allMonitorCount := monitorCount + browserCount
+	parallelism := max(1, min(suite.Parallelism, allMonitorCount))
 	waves := 0
-	if monitorCount > 0 {
-		waves = (monitorCount + parallelism - 1) / parallelism
+	if allMonitorCount > 0 {
+		waves = (allMonitorCount + parallelism - 1) / parallelism
 	}
 	perMonitor := input.SampleCount*suite.TimeoutSeconds + max(0, input.SampleCount-1)*input.SampleIntervalSeconds
 	preview.EstimatedMaximumSeconds = waves * perMonitor
@@ -299,6 +423,26 @@ type DeploymentRepository interface {
 	GetDeploymentRun(context.Context, string) (DeploymentRun, error)
 	ListDeploymentRuns(context.Context, DeploymentFilter) ([]DeploymentRun, error)
 	SaveDeploymentSample(context.Context, string, DeploymentSample) error
+}
+
+type DeploymentOverview struct {
+	Runs            []DeploymentRunSummary
+	DeploymentCount int
+	SuiteCount      int
+}
+
+type DeploymentOverviewRepository interface {
+	DeploymentOverview(context.Context, int) (DeploymentOverview, error)
+}
+
+type DeploymentPage struct {
+	Items   []DeploymentRunSummary
+	Total   int
+	HasMore bool
+}
+
+type DeploymentPageRepository interface {
+	ListDeploymentRunsPage(context.Context, DeploymentFilter, int, time.Time, string) (DeploymentPage, error)
 }
 
 func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string, input DeploymentRunInput) (DeploymentRun, error) {
@@ -338,7 +482,7 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 		return DeploymentRun{}, err
 	}
 	now := s.now()
-	monitorCount, elfCount, alertCount, dynatraceCount := deploymentCheckCounts(suite)
+	monitorCount, browserCount, elfCount, alertCount, dynatraceCount := deploymentCheckCounts(suite)
 	if dynatraceCount > 0 {
 		if input.Deployment.DeploymentCompletedAt.IsZero() {
 			return DeploymentRun{}, errors.New("deployment.deploymentCompletedAt is required for Dynatrace infrastructure validation")
@@ -347,10 +491,28 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 			return DeploymentRun{}, errors.New("deployment.deploymentCompletedAt must not be before deploymentStart")
 		}
 	}
-	configuration := DeploymentConfiguration{BaselineWindow: window, SampleCount: input.SampleCount, SampleIntervalSeconds: input.SampleInterval, MinimumSamples: 5, RegressionPercent: 25, RegressionMinimumMS: 100, MonitorRevisionIDs: map[string]string{}, ELFRevisionIDs: map[string]string{}, DynatraceRevisionNumbers: map[string]int{}}
+	configuration := DeploymentConfiguration{
+		BaselineWindow: window, SampleCount: input.SampleCount, BrowserSampleCount: 5,
+		SampleIntervalSeconds: input.SampleInterval, MinimumSamples: 5,
+		RegressionPercent: 25, RegressionMinimumMS: 100,
+		MonitorRevisionIDs: map[string]string{}, BrowserRevisionIDs: map[string]string{},
+		ELFRevisionIDs: map[string]string{}, DynatraceRevisionNumbers: map[string]int{},
+	}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
 			switch check.Kind {
+			case "BROWSER_MONITOR":
+				if s.browser == nil {
+					return DeploymentRun{}, errors.New("suite contains UI monitor checks but browser execution is unavailable")
+				}
+				monitor, monitorErr := s.browser.Get(ctx, check.BrowserMonitorID)
+				if monitorErr != nil {
+					return DeploymentRun{}, monitorErr
+				}
+				if monitor.LatestPublishedRevisionID == "" {
+					return DeploymentRun{}, fmt.Errorf("UI monitor %s has no published journey", monitor.Name)
+				}
+				configuration.BrowserRevisionIDs[check.BrowserMonitorID] = monitor.LatestPublishedRevisionID
 			case "ELF_QUERY":
 				if s.elf == nil {
 					return DeploymentRun{}, errors.New("suite contains ELF checks but ELF execution is unavailable")
@@ -388,7 +550,13 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 			}
 		}
 	}
-	run := DeploymentRun{ID: runID, SuiteID: suiteID, Status: "QUEUED", Phase: "QUEUED", GateDecision: "PENDING", Progress: DeploymentProgress{Total: monitorCount*input.SampleCount + elfCount + alertCount + dynatraceCount*2, Message: "Waiting for a validation worker."}, Deployment: input.Deployment, Configuration: configuration, SuiteSnapshot: suite, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	run := DeploymentRun{ID: runID, SuiteID: suiteID, Status: "QUEUED", Phase: "QUEUED", GateDecision: "PENDING", Progress: DeploymentProgress{Total: monitorCount*input.SampleCount + browserCount*configuration.BrowserSampleCount + elfCount + alertCount + dynatraceCount*2, Message: "Waiting for a validation worker."}, Deployment: input.Deployment, Configuration: configuration, SuiteSnapshot: suite, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
+	if queuedRepository, ok := s.repository.(*PostgresRepository); ok && s.queueRedis != nil {
+		if err := queuedRepository.CreateQueuedDeploymentRun(ctx, run); err != nil {
+			return DeploymentRun{}, err
+		}
+		return run, nil
+	}
 	if err := repository.CreateDeploymentRun(ctx, run); err != nil {
 		return DeploymentRun{}, err
 	}
@@ -403,11 +571,13 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 	return run, nil
 }
 
-func deploymentCheckCounts(suite Suite) (int, int, int, int) {
-	monitors, queries, alertKeys, dynatraceKeys := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+func deploymentCheckCounts(suite Suite) (int, int, int, int, int) {
+	monitors, browserMonitors, queries, alertKeys, dynatraceKeys := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
 			switch check.Kind {
+			case "BROWSER_MONITOR":
+				browserMonitors[check.BrowserMonitorID] = true
 			case "ELF_QUERY":
 				queries[check.QueryID] = true
 			case "OPENSEARCH_ALERT":
@@ -425,7 +595,7 @@ func deploymentCheckCounts(suite Suite) (int, int, int, int) {
 			}
 		}
 	}
-	return len(monitors), len(queries), len(alertKeys), len(dynatraceKeys)
+	return len(monitors), len(browserMonitors), len(queries), len(alertKeys), len(dynatraceKeys)
 }
 
 func (s *Service) GetDeploymentRun(ctx context.Context, id string) (DeploymentRun, error) {
@@ -454,10 +624,64 @@ func (s *Service) ListDeploymentRuns(ctx context.Context, filter DeploymentFilte
 	}
 	return runs, nil
 }
+
+func (s *Service) ListDeploymentRunsPage(ctx context.Context, filter DeploymentFilter, limit int, afterCreatedAt time.Time, afterID string) (DeploymentPage, error) {
+	if repository, ok := s.repository.(DeploymentPageRepository); ok {
+		return repository.ListDeploymentRunsPage(ctx, filter, limit, afterCreatedAt, afterID)
+	}
+	items, err := s.ListDeploymentRuns(ctx, filter)
+	if err != nil {
+		return DeploymentPage{}, err
+	}
+	total := len(items)
+	start := 0
+	if !afterCreatedAt.IsZero() && afterID != "" {
+		start = total
+		for index, item := range items {
+			if item.CreatedAt.Before(afterCreatedAt) ||
+				(item.CreatedAt.Equal(afterCreatedAt) && item.ID < afterID) {
+				start = index
+				break
+			}
+		}
+	}
+	end := min(total, start+limit)
+	summaries := make([]DeploymentRunSummary, 0, end-start)
+	for _, item := range items[start:end] {
+		summaries = append(summaries, deploymentRunSummary(item))
+	}
+	return DeploymentPage{Items: summaries, Total: total, HasMore: end < total}, nil
+}
+
+func (s *Service) DeploymentOverview(ctx context.Context, limit int) (DeploymentOverview, error) {
+	if repository, ok := s.repository.(DeploymentOverviewRepository); ok {
+		return repository.DeploymentOverview(ctx, limit)
+	}
+	runs, err := s.ListDeploymentRuns(ctx, DeploymentFilter{})
+	if err != nil {
+		return DeploymentOverview{}, err
+	}
+	templates, err := s.List(ctx)
+	if err != nil {
+		return DeploymentOverview{}, err
+	}
+	result := DeploymentOverview{DeploymentCount: len(runs), SuiteCount: len(templates)}
+	for index, run := range runs {
+		if index >= limit {
+			break
+		}
+		result.Runs = append(result.Runs, deploymentRunSummary(run))
+	}
+	return result, nil
+}
+
 func (s *Service) CancelDeploymentRun(ctx context.Context, id string) (DeploymentRun, error) {
 	run, err := s.GetDeploymentRun(ctx, id)
 	if err != nil {
 		return run, err
+	}
+	if s.queueRedis != nil {
+		return s.cancelQueuedDeployment(ctx, id)
 	}
 	s.mu.Lock()
 	cancel := s.cancels[id]
@@ -524,6 +748,35 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 			comparisons[index].Reasons = append(comparisons[index].Reasons, "Fewer than five successful baseline samples were recorded.")
 		}
 	}
+	browserComparisons := deploymentBrowserComparisons(run.SuiteSnapshot)
+	for index := range browserComparisons {
+		if s.browser == nil {
+			failed(errors.New("browser-monitor execution is unavailable"))
+			return
+		}
+		monitor, monitorErr := s.browser.Get(ctx, browserComparisons[index].BrowserMonitorID)
+		if monitorErr != nil {
+			failed(monitorErr)
+			return
+		}
+		browserComparisons[index].MonitorName = monitor.Name
+		browserComparisons[index].RevisionID = run.Configuration.BrowserRevisionIDs[monitor.ID]
+		history, historyErr := s.browser.ListRunsBetween(
+			ctx, monitor.ID, browserComparisons[index].RevisionID,
+			baselineFrom, baselineTo, 5000,
+		)
+		if historyErr != nil {
+			failed(historyErr)
+			return
+		}
+		browserComparisons[index].Baseline = summarizeBrowserRuns(history)
+		if browserComparisons[index].Baseline.SampleCount < 10 {
+			browserComparisons[index].Reasons = append(
+				browserComparisons[index].Reasons,
+				"Fewer than ten successful compatible browser journeys were recorded in the baseline window.",
+			)
+		}
+	}
 	dynatraceComparisons := s.deploymentDynatraceComparisons(ctx, run, baselineFrom, baselineTo)
 	for index := range dynatraceComparisons {
 		comparison := &dynatraceComparisons[index]
@@ -546,7 +799,13 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 	}
 	baselineEnded := s.now()
 	run.BaselineEndedAt = &baselineEnded
-	run.Report = DeploymentReport{RunID: run.ID, SuiteID: run.SuiteID, SuiteName: run.SuiteSnapshot.Name, Status: run.Status, GateDecision: "PENDING", Deployment: run.Deployment, Configuration: run.Configuration, BaselineFrom: baselineFrom, BaselineTo: baselineTo, Monitors: comparisons, DynatraceResults: dynatraceComparisons}
+	run.Report = DeploymentReport{
+		RunID: run.ID, SuiteID: run.SuiteID, SuiteName: run.SuiteSnapshot.Name,
+		Status: run.Status, GateDecision: "PENDING", Deployment: run.Deployment,
+		Configuration: run.Configuration, BaselineFrom: baselineFrom, BaselineTo: baselineTo,
+		Monitors: comparisons, BrowserMonitors: browserComparisons,
+		DynatraceResults: dynatraceComparisons,
+	}
 	_ = s.saveDeployment(ctx, run)
 	if ctx.Err() != nil {
 		s.finishCancelled(run)
@@ -633,6 +892,102 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 		comparisons[index].Post = summarize(points)
 		comparisons[index].Steps = completeSteps(comparisons[index].Steps, points, run.Configuration)
 		classifyMonitor(&comparisons[index], run.Configuration)
+	}
+	if len(browserComparisons) > 0 {
+		run.Phase = "SAMPLING_BROWSER_MONITORS"
+		run.Progress.Message = "Running post-deployment browser journeys."
+		run.Report.BrowserMonitors = browserComparisons
+		_ = s.saveDeployment(ctx, run)
+		browserJobs := make(chan int)
+		browserWorkers := min(run.SuiteSnapshot.Parallelism, len(browserComparisons))
+		var browserGroup sync.WaitGroup
+		for range browserWorkers {
+			browserGroup.Add(1)
+			go func() {
+				defer browserGroup.Done()
+				for index := range browserJobs {
+					for number := 1; number <= run.Configuration.BrowserSampleCount; number++ {
+						if ctx.Err() != nil {
+							return
+						}
+						startedRun, startErr := s.browser.StartRun(
+							ctx, browserComparisons[index].BrowserMonitorID,
+							run.CreatedBy, "published", "DEPLOYMENT_VALIDATION",
+						)
+						sampleID, _ := id.NewUUID()
+						sample := BrowserSample{
+							ID: sampleID, BrowserMonitorID: browserComparisons[index].BrowserMonitorID,
+							SampleNumber: number, CreatedAt: s.now(),
+						}
+						if startErr != nil {
+							sample.Status = browsermonitors.StatusFailed
+							sample.FailureCategory = "BROWSER_EXECUTION_ERROR"
+						} else {
+							completedRun, waitErr := s.waitForBrowserRun(ctx, startedRun.ID)
+							sample.BrowserRunID = startedRun.ID
+							if waitErr != nil {
+								sample.Status = browsermonitors.StatusFailed
+								sample.FailureCategory = "BROWSER_EXECUTION_ERROR"
+							} else {
+								sample.Status = completedRun.Status
+								sample.DurationMS = completedRun.DurationMS
+								sample.FailureCategory = completedRun.FailureCategory
+								if completedRun.RevisionID != browserComparisons[index].RevisionID {
+									sample.Status = browsermonitors.StatusFailed
+									sample.FailureCategory = "BROWSER_REVISION_CHANGED"
+								}
+							}
+						}
+						mu.Lock()
+						browserComparisons[index].Samples = append(browserComparisons[index].Samples, sample)
+						run.Report.BrowserMonitors = browserComparisons
+						run.Progress.Completed++
+						run.Progress.Message = fmt.Sprintf(
+							"Collected browser sample %d of %d for %s.",
+							number, run.Configuration.BrowserSampleCount,
+							browserComparisons[index].MonitorName,
+						)
+						_ = s.saveDeployment(context.Background(), run)
+						mu.Unlock()
+						if number < run.Configuration.BrowserSampleCount {
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(time.Duration(run.Configuration.SampleIntervalSeconds) * time.Second):
+							}
+						}
+					}
+				}
+			}()
+		}
+		for index := range browserComparisons {
+			select {
+			case browserJobs <- index:
+			case <-ctx.Done():
+				break
+			}
+		}
+		close(browserJobs)
+		browserGroup.Wait()
+		if ctx.Err() != nil {
+			s.finishCancelled(run)
+			return
+		}
+		for index := range browserComparisons {
+			postRuns := make([]browsermonitors.Run, 0, len(browserComparisons[index].Samples))
+			for _, sample := range browserComparisons[index].Samples {
+				if sample.BrowserRunID == "" {
+					continue
+				}
+				execution, getErr := s.browser.GetRun(ctx, sample.BrowserRunID)
+				if getErr == nil {
+					postRuns = append(postRuns, execution)
+				}
+			}
+			browserComparisons[index].Post = summarizeBrowserRuns(postRuns)
+			classifyBrowser(&browserComparisons[index], run.Configuration)
+		}
+		run.Report.BrowserMonitors = browserComparisons
 	}
 	samplingEnded := s.now()
 	run.SamplingEndedAt = &samplingEnded
@@ -746,7 +1101,10 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 	run.Phase = "ANALYZING"
 	run.Progress.Message = "Calculating the deployment decision."
 	_ = s.saveDeployment(ctx, run)
-	decision, warnings, reasons := deploymentDecisionWithDynatrace(comparisons, run.Report.DynatraceResults, run.Report.ELFResults, run.Report.AlertResults)
+	decision, warnings, reasons := deploymentDecisionWithBrowser(
+		comparisons, browserComparisons, run.Report.DynatraceResults,
+		run.Report.ELFResults, run.Report.AlertResults,
+	)
 	now := s.now()
 	run.Status = "COMPLETED"
 	run.Phase = "COMPLETED"
@@ -775,6 +1133,7 @@ func (s *Service) finishCancelled(run DeploymentRun) {
 	run.Status = "CANCELLED"
 	run.Phase = "CANCELLED"
 	run.GateDecision = "BLOCK"
+	run.FailureReason = "Validation was cancelled before completion."
 	run.EndedAt = &now
 	run.Report.Status = run.Status
 	run.Report.GateDecision = run.GateDecision
@@ -787,7 +1146,7 @@ func deploymentMonitorComparisons(suite Suite) []MonitorComparison {
 	out := []MonitorComparison{}
 	for _, stage := range suite.Stages {
 		for _, check := range stage.Checks {
-			if check.Kind == "ELF_QUERY" || check.Kind == "OPENSEARCH_ALERT" || check.Kind == "DYNATRACE_INFRASTRUCTURE" {
+			if check.Kind != "MONITOR" {
 				continue
 			}
 			if index, ok := byID[check.MonitorID]; ok {
@@ -796,6 +1155,30 @@ func deploymentMonitorComparisons(suite Suite) []MonitorComparison {
 			}
 			byID[check.MonitorID] = len(out)
 			out = append(out, MonitorComparison{CheckID: check.ID, MonitorID: check.MonitorID, MonitorName: check.Name, Required: check.Required, Baseline: emptyDistribution(), Post: emptyDistribution(), Steps: []StepComparison{}, Samples: []DeploymentSample{}, Reasons: []string{}})
+		}
+	}
+	return out
+}
+
+func deploymentBrowserComparisons(suite Suite) []BrowserComparison {
+	byID := map[string]int{}
+	out := []BrowserComparison{}
+	for _, stage := range suite.Stages {
+		for _, check := range stage.Checks {
+			if check.Kind != "BROWSER_MONITOR" {
+				continue
+			}
+			if index, ok := byID[check.BrowserMonitorID]; ok {
+				out[index].Required = out[index].Required || check.Required
+				continue
+			}
+			byID[check.BrowserMonitorID] = len(out)
+			out = append(out, BrowserComparison{
+				CheckID: check.ID, BrowserMonitorID: check.BrowserMonitorID,
+				MonitorName: check.Name, Required: check.Required,
+				Baseline: emptyDistribution(), Post: emptyDistribution(),
+				Samples: []BrowserSample{}, Reasons: []string{},
+			})
 		}
 	}
 	return out
@@ -910,6 +1293,9 @@ func normalizeDeploymentReport(report *DeploymentReport) {
 	if report.Monitors == nil {
 		report.Monitors = []MonitorComparison{}
 	}
+	if report.BrowserMonitors == nil {
+		report.BrowserMonitors = []BrowserComparison{}
+	}
 	if report.DynatraceResults == nil {
 		report.DynatraceResults = []DynatraceComparison{}
 	}
@@ -940,6 +1326,16 @@ func normalizeDeploymentReport(report *DeploymentReport) {
 		for stepIndex := range report.Monitors[index].Steps {
 			normalizeDistribution(&report.Monitors[index].Steps[stepIndex].Baseline)
 			normalizeDistribution(&report.Monitors[index].Steps[stepIndex].Post)
+		}
+	}
+	for index := range report.BrowserMonitors {
+		normalizeDistribution(&report.BrowserMonitors[index].Baseline)
+		normalizeDistribution(&report.BrowserMonitors[index].Post)
+		if report.BrowserMonitors[index].Samples == nil {
+			report.BrowserMonitors[index].Samples = []BrowserSample{}
+		}
+		if report.BrowserMonitors[index].Reasons == nil {
+			report.BrowserMonitors[index].Reasons = []string{}
 		}
 	}
 }
@@ -996,6 +1392,86 @@ func summarize(points []runs.HistoryMetricPoint) Distribution {
 	result.StandardDeviationMS = math.Round(math.Sqrt(sum/float64(len(values)))*10) / 10
 	return result
 }
+
+func summarizeBrowserRuns(items []browsermonitors.Run) Distribution {
+	result := emptyDistribution()
+	values := []int64{}
+	for _, run := range items {
+		switch run.Status {
+		case browsermonitors.StatusQueued, browsermonitors.StatusStarting,
+			browsermonitors.StatusRunning, browsermonitors.StatusAnalyzing,
+			browsermonitors.StatusCancelled:
+			continue
+		}
+		result.CompletedCount++
+		if run.Status == browsermonitors.StatusSuccess ||
+			run.Status == browsermonitors.StatusSuccessWithWarnings {
+			result.SuccessCount++
+			if run.DurationMS > 0 {
+				values = append(values, run.DurationMS)
+				result.Series = append(result.Series, MetricSeriesPoint{
+					RunID: run.ID, ValueMS: run.DurationMS, CreatedAt: run.CreatedAt,
+				})
+			}
+		} else {
+			result.FailureCount++
+			category := defaultString(run.FailureCategory, "BROWSER_FAILURE")
+			result.FailureCategories[category]++
+			if run.Status == browsermonitors.StatusTimedOut {
+				result.TimeoutCount++
+			}
+		}
+	}
+	result.SampleCount = len(values)
+	if result.CompletedCount > 0 {
+		result.SuccessRate = percent(result.SuccessCount, result.CompletedCount)
+		result.ErrorRate = percent(result.FailureCount, result.CompletedCount)
+		result.TimeoutRate = percent(result.TimeoutCount, result.CompletedCount)
+	}
+	if len(values) == 0 {
+		return result
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
+	var total int64
+	for _, value := range values {
+		total += value
+	}
+	result.MinMS = values[0]
+	result.MaxMS = values[len(values)-1]
+	result.AverageMS = total / int64(len(values))
+	result.P50MS = deploymentPercentile(values, .5)
+	result.P75MS = deploymentPercentile(values, .75)
+	result.P90MS = deploymentPercentile(values, .9)
+	result.P95MS = deploymentPercentile(values, .95)
+	result.P99MS = deploymentPercentile(values, .99)
+	var sum float64
+	for _, value := range values {
+		delta := float64(value - result.AverageMS)
+		sum += delta * delta
+	}
+	result.StandardDeviationMS = math.Round(math.Sqrt(sum/float64(len(values)))*10) / 10
+	return result
+}
+
+func classifyBrowser(comparison *BrowserComparison, config DeploymentConfiguration) {
+	browserConfig := config
+	browserConfig.MinimumSamples = 10
+	comparison.Classification, comparison.DeltaMS, comparison.DeltaPercent =
+		classify(comparison.Baseline, comparison.Post, browserConfig)
+	if comparison.Classification == "REGRESSED" {
+		comparison.Reasons = append(
+			comparison.Reasons,
+			"The browser journey exceeded its p95 synthetic-performance regression guardrail.",
+		)
+	}
+	if comparison.Post.FailureCount > 0 {
+		comparison.Reasons = append(
+			comparison.Reasons,
+			fmt.Sprintf("%d post-deployment browser samples failed.", comparison.Post.FailureCount),
+		)
+	}
+}
+
 func percent(value, total int) float64 {
 	return math.Round((float64(value)/float64(total)*100)*10) / 10
 }
@@ -1104,6 +1580,16 @@ func deploymentDecision(monitors []MonitorComparison, elfResults []CheckResult, 
 }
 
 func deploymentDecisionWithDynatrace(monitors []MonitorComparison, dynatraceResults []DynatraceComparison, elfResults []CheckResult, alertResults ...[]CheckResult) (string, []string, []string) {
+	return deploymentDecisionWithBrowser(monitors, nil, dynatraceResults, elfResults, alertResults...)
+}
+
+func deploymentDecisionWithBrowser(
+	monitors []MonitorComparison,
+	browserMonitors []BrowserComparison,
+	dynatraceResults []DynatraceComparison,
+	elfResults []CheckResult,
+	alertResults ...[]CheckResult,
+) (string, []string, []string) {
 	block, warn := false, false
 	warnings, reasons := []string{}, []string{}
 	for _, monitor := range monitors {
@@ -1119,6 +1605,27 @@ func deploymentDecisionWithDynatrace(monitors []MonitorComparison, dynatraceResu
 		}
 		if failed || regressed {
 			message := monitor.MonitorName + " failed functional or performance validation."
+			if monitor.Required {
+				block = true
+				reasons = append(reasons, message)
+			} else {
+				warn = true
+				warnings = append(warnings, message)
+			}
+		}
+	}
+	for _, monitor := range browserMonitors {
+		failed := monitor.Post.FailureCount > 0
+		regressed := monitor.Classification == "REGRESSED"
+		if monitor.Classification == "INSUFFICIENT_HISTORY" {
+			warn = true
+			warnings = append(
+				warnings,
+				monitor.MonitorName+" has insufficient compatible browser history for percentile gating.",
+			)
+		}
+		if failed || regressed {
+			message := monitor.MonitorName + " failed browser journey or synthetic performance validation."
 			if monitor.Required {
 				block = true
 				reasons = append(reasons, message)
@@ -1219,6 +1726,23 @@ func renderDeploymentPDF(report DeploymentReport) []byte {
 	for _, monitor := range report.Monitors {
 		lines = append(lines, fmt.Sprintf("%s — %s", monitor.MonitorName, monitor.Classification), fmt.Sprintf("  p95 before %d ms | after %d ms | change %.1f%%", monitor.Baseline.P95MS, monitor.Post.P95MS, monitor.DeltaPercent), fmt.Sprintf("  success before %.1f%% | after %.1f%%", monitor.Baseline.SuccessRate, monitor.Post.SuccessRate))
 	}
+	if len(report.BrowserMonitors) > 0 {
+		lines = append(lines, "", "UI journey validation (controlled synthetic measurements)")
+		for _, monitor := range report.BrowserMonitors {
+			lines = append(
+				lines,
+				fmt.Sprintf("%s — %s", monitor.MonitorName, monitor.Classification),
+				fmt.Sprintf(
+					"  journey p95 before %s | after %s | change %.1f%%",
+					reportDuration(monitor.Baseline), reportDuration(monitor.Post), monitor.DeltaPercent,
+				),
+				fmt.Sprintf(
+					"  success before %.1f%% | after %.1f%%",
+					monitor.Baseline.SuccessRate, monitor.Post.SuccessRate,
+				),
+			)
+		}
+	}
 	if len(report.ELFResults) > 0 {
 		lines = append(lines, "", "ELF log checks")
 		for _, result := range report.ELFResults {
@@ -1263,6 +1787,14 @@ func renderDeploymentPDF(report DeploymentReport) []byte {
 	fmt.Fprintf(&out, "trailer << /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF", len(objects)+1, xref)
 	return out.Bytes()
 }
+
+func reportDuration(distribution Distribution) string {
+	if distribution.SampleCount == 0 {
+		return "Not recorded"
+	}
+	return fmt.Sprintf("%d ms", distribution.P95MS)
+}
+
 func pdfEscape(value string) string {
 	value = strings.Map(func(r rune) rune {
 		if r > 126 {
@@ -1352,6 +1884,97 @@ func (r *PostgresRepository) ListDeploymentRuns(ctx context.Context, filter Depl
 	return out, rows.Err()
 }
 
+func (r *PostgresRepository) ListDeploymentRunsPage(ctx context.Context, filter DeploymentFilter, limit int, afterCreatedAt time.Time, afterID string) (DeploymentPage, error) {
+	if limit < 1 {
+		limit = 25
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	const predicates = ` WHERE
+		($1='' OR suite_id::text=$1)
+		AND ($2='' OR deployment_json->>'applicationId'=$2)
+		AND ($3='' OR deployment_json->>'environment'=$3)
+		AND ($4='' OR status=$4)
+		AND ($5='' OR gate_decision=$5)`
+	arguments := []any{filter.SuiteID, filter.ApplicationID, filter.Environment, filter.Status, filter.Decision}
+	var result DeploymentPage
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM deployment_validation_runs`+predicates, arguments...).Scan(&result.Total); err != nil {
+		return DeploymentPage{}, err
+	}
+	var cursorTime any
+	var cursorID any
+	if !afterCreatedAt.IsZero() && strings.TrimSpace(afterID) != "" {
+		cursorTime = afterCreatedAt.UTC()
+		cursorID = afterID
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text,suite_id::text,status,phase,gate_decision,
+			progress_json,deployment_json,
+			COALESCE(suite_snapshot_json->>'name','Validation suite'),
+			failure_reason,started_at,ended_at,created_at,updated_at
+			FROM deployment_validation_runs`+predicates+`
+			AND ($6::timestamptz IS NULL OR (created_at,id) < ($6,$7::uuid))
+			ORDER BY created_at DESC,id DESC LIMIT $8`,
+		append(arguments, cursorTime, cursorID, limit+1)...)
+	if err != nil {
+		return DeploymentPage{}, err
+	}
+	defer rows.Close()
+	result.Items = make([]DeploymentRunSummary, 0, min(limit+1, result.Total))
+	for rows.Next() {
+		item, scanErr := scanDeploymentRunSummary(rows)
+		if scanErr != nil {
+			return DeploymentPage{}, scanErr
+		}
+		result.Items = append(result.Items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return DeploymentPage{}, err
+	}
+	if len(result.Items) > limit {
+		result.Items = result.Items[:limit]
+		result.HasMore = true
+	}
+	return result, nil
+}
+
+func (r *PostgresRepository) DeploymentOverview(ctx context.Context, limit int) (DeploymentOverview, error) {
+	if limit < 1 {
+		limit = 4
+	}
+	var result DeploymentOverview
+	if err := r.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM deployment_validation_runs),
+			(SELECT COUNT(*) FROM validation_suites)`).Scan(
+		&result.DeploymentCount,
+		&result.SuiteCount,
+	); err != nil {
+		return DeploymentOverview{}, err
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text,suite_id::text,status,phase,gate_decision,
+			progress_json,deployment_json,
+			COALESCE(suite_snapshot_json->>'name','Validation suite'),
+			failure_reason,started_at,ended_at,created_at,updated_at
+		FROM deployment_validation_runs
+		ORDER BY created_at DESC
+		LIMIT $1`, limit)
+	if err != nil {
+		return DeploymentOverview{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		item, scanErr := scanDeploymentRunSummary(rows)
+		if scanErr != nil {
+			return DeploymentOverview{}, scanErr
+		}
+		result.Runs = append(result.Runs, item)
+	}
+	return result, rows.Err()
+}
+
 type deploymentScanner interface{ Scan(...any) error }
 
 func scanDeploymentRun(row deploymentScanner) (DeploymentRun, error) {
@@ -1369,8 +1992,36 @@ func scanDeploymentRun(row deploymentScanner) (DeploymentRun, error) {
 	_ = json.Unmarshal(configuration, &v.Configuration)
 	_ = json.Unmarshal(snapshot, &v.SuiteSnapshot)
 	_ = json.Unmarshal(report, &v.Report)
+	normalizeDeploymentCancellation(&v)
 	return v, nil
 }
+
+func scanDeploymentRunSummary(row deploymentScanner) (DeploymentRunSummary, error) {
+	var value DeploymentRunSummary
+	var progress, deployment []byte
+	var suiteName string
+	err := row.Scan(
+		&value.ID, &value.SuiteID, &value.Status, &value.Phase, &value.GateDecision,
+		&progress, &deployment, &suiteName, &value.FailureReason,
+		&value.StartedAt, &value.EndedAt, &value.CreatedAt, &value.UpdatedAt,
+	)
+	if err != nil {
+		return value, err
+	}
+	_ = json.Unmarshal(progress, &value.Progress)
+	_ = json.Unmarshal(deployment, &value.Deployment)
+	value.SuiteSnapshot.Name = suiteName
+	if value.Status == "CANCELLED" {
+		if value.GateDecision == "" || value.GateDecision == "PENDING" {
+			value.GateDecision = "BLOCK"
+		}
+		if strings.TrimSpace(value.FailureReason) == "" {
+			value.FailureReason = "Validation was cancelled before completion."
+		}
+	}
+	return value, nil
+}
+
 func (r *PostgresRepository) SaveDeploymentSample(ctx context.Context, runID string, sample DeploymentSample) error {
 	_, err := r.pool.Exec(ctx, `INSERT INTO deployment_validation_samples(id,deployment_run_id,monitor_id,monitor_run_id,sample_number,status,duration_ms,failure_category,created_at)VALUES($1,$2,$3,NULLIF($4,'')::uuid,$5,$6,$7,$8,$9) ON CONFLICT(deployment_run_id,monitor_id,sample_number) DO UPDATE SET monitor_run_id=EXCLUDED.monitor_run_id,status=EXCLUDED.status,duration_ms=EXCLUDED.duration_ms,failure_category=EXCLUDED.failure_category`, sample.ID, runID, sample.MonitorID, sample.MonitorRunID, sample.SampleNumber, sample.Status, sample.DurationMS, sample.FailureCategory, sample.CreatedAt)
 	return err

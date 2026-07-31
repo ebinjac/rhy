@@ -56,10 +56,12 @@ import type {
   ValidationSuiteRunContract,
 } from "@/lib/api-client/contracts"
 import { listMonitors } from "@/lib/api-client/monitors"
+import { listBrowserMonitors } from "@/lib/api-client/browser-monitoring"
 import { listUnifiedAlerts } from "@/lib/api-client/opensearch-alerts"
 import {
   createSuite,
   deleteSuite,
+  getValidationSuiteRun,
   listDeploymentValidations,
   listSuites,
   runSuite,
@@ -79,6 +81,7 @@ export const Route = createFileRoute("/suites")({
     const [
       suites,
       monitorResult,
+      browserMonitors,
       elfQueries,
       deploymentRuns,
       applications,
@@ -86,11 +89,18 @@ export const Route = createFileRoute("/suites")({
     ] = await Promise.all([
       listSuites(),
       listMonitors(),
+      listBrowserMonitors(),
       listELFQueries(),
       listDeploymentValidations(),
       listELFApplications(),
       listUnifiedAlerts({
-        data: { sourceType: "OPENSEARCH_ALERTING", state: "", applicationId: "", serviceId: "", severity: "" },
+        data: {
+          sourceType: "OPENSEARCH_ALERTING",
+          state: "",
+          applicationId: "",
+          serviceId: "",
+          severity: "",
+        },
       }).catch(() => []),
     ])
     const applicationEnvironments = Object.fromEntries(
@@ -106,6 +116,7 @@ export const Route = createFileRoute("/suites")({
     return {
       suites,
       monitors: monitorResult.monitors,
+      browserMonitors,
       elfQueries,
       deploymentRuns,
       applications,
@@ -120,10 +131,14 @@ type DraftCheck = {
   id: string
   kind:
     | "MONITOR"
+    | "BROWSER_MONITOR"
     | "ELF_QUERY"
     | "OPENSEARCH_ALERT"
     | "DYNATRACE_INFRASTRUCTURE"
   monitorId: string
+  browserMonitorId: string
+  checkpointIds: string[]
+  performanceBudgetIds: string[]
   queryId: string
   receiverId: string
   externalMonitorId: string
@@ -165,6 +180,7 @@ function SuitesPage() {
   const {
     suites,
     monitors,
+    browserMonitors,
     elfQueries,
     deploymentRuns,
     applications,
@@ -190,6 +206,9 @@ function SuitesPage() {
     id: "",
     kind: "MONITOR",
     monitorId: monitors[0]?.id ?? "",
+    browserMonitorId: "",
+    checkpointIds: [],
+    performanceBudgetIds: [],
     queryId: "",
     receiverId: "",
     externalMonitorId: "",
@@ -285,6 +304,9 @@ function SuitesPage() {
           id: check.id,
           kind: check.kind,
           monitorId: check.monitorId ?? "",
+          browserMonitorId: check.browserMonitorId ?? "",
+          checkpointIds: check.checkpointIds ?? [],
+          performanceBudgetIds: check.performanceBudgetIds ?? [],
           queryId: check.queryId ?? "",
           receiverId: check.receiverId ?? "",
           externalMonitorId: check.externalMonitorId ?? "",
@@ -382,12 +404,32 @@ function SuitesPage() {
         deploymentStart: new Date(Date.now() - 15 * 60_000).toISOString(),
       },
     })
-    setRunningID("")
     if (!result.ok) {
+      setRunningID("")
       setMessage(result.message)
       return
     }
-    setLatestRun(result.run)
+    let run = result.run
+    setLatestRun(run)
+    while (
+      run.status === "QUEUED" ||
+      run.status === "RUNNING" ||
+      run.status === "CANCELLING"
+    ) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1000))
+      const refreshed = await getValidationSuiteRun({
+        data: { runId: run.id },
+      })
+      if (!refreshed.ok) {
+        setMessage(
+          "Validation continues in the background, but live progress could not be refreshed."
+        )
+        break
+      }
+      run = refreshed.run
+      setLatestRun(run)
+    }
+    setRunningID("")
   }
 
   function requestDelete(suite: ValidationSuiteContract) {
@@ -420,6 +462,9 @@ function SuitesPage() {
         !stage.name ||
         stage.checks.some((check) => {
           if (check.kind === "MONITOR") return !check.monitorId
+          if (check.kind === "BROWSER_MONITOR") {
+            return !check.browserMonitorId
+          }
           if (check.kind === "ELF_QUERY") return !check.queryId
           if (check.kind === "DYNATRACE_INFRASTRUCTURE") {
             return !check.applicationId || !check.environmentBindingId
@@ -446,7 +491,7 @@ function SuitesPage() {
           <h1 className="mt-2 font-heading text-2xl font-semibold text-balance">
             Validation suites
           </h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground text-pretty">
+          <p className="mt-1 max-w-2xl text-sm text-pretty text-muted-foreground">
             Compose published monitors, ELF queries, and OpenSearch alerts into
             deterministic, pipeline-ready validation suites.
           </p>
@@ -526,7 +571,13 @@ function SuitesPage() {
                       : "Compose ordered stages from published monitors, ELF queries, and OpenSearch alerts."}
                   </p>
                 </div>
-                <Button type="button" variant="ghost" size="sm" onClick={closeBuilder} disabled={pending}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={closeBuilder}
+                  disabled={pending}
+                >
                   Cancel
                 </Button>
               </div>
@@ -617,7 +668,10 @@ function SuitesPage() {
                           },
                         ]}
                       >
-                        <SelectTrigger aria-label="Gate mode" className="h-9 w-full">
+                        <SelectTrigger
+                          aria-label="Gate mode"
+                          className="h-9 w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -646,7 +700,10 @@ function SuitesPage() {
                           { value: "ALWAYS", label: "Notify on every run" },
                         ]}
                       >
-                        <SelectTrigger aria-label="Notification policy" className="h-9 w-full">
+                        <SelectTrigger
+                          aria-label="Notification policy"
+                          className="h-9 w-full"
+                        >
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -753,6 +810,12 @@ function SuitesPage() {
                                               kind === "MONITOR"
                                                 ? (monitors[0]?.id ?? "")
                                                 : "",
+                                            browserMonitorId:
+                                              kind === "BROWSER_MONITOR"
+                                                ? (browserMonitors[0]?.id ?? "")
+                                                : "",
+                                            checkpointIds: [],
+                                            performanceBudgetIds: [],
                                             queryId:
                                               kind === "ELF_QUERY"
                                                 ? (elfQueries[0]?.id ?? "")
@@ -797,26 +860,34 @@ function SuitesPage() {
                                             name:
                                               kind === "MONITOR"
                                                 ? (monitors[0]?.name ?? "")
-                                                : kind === "ELF_QUERY"
-                                                ? (elfQueries[0]?.name ?? "")
-                                                : kind ===
-                                                    "DYNATRACE_INFRASTRUCTURE"
-                                                  ? "Dynatrace infrastructure"
-                                                : (firstAlert?.title ??
-                                                  firstAlert?.externalTriggerName ??
-                                                  ""),
-                                          required:
-                                            kind !== "ELF_QUERY" &&
-                                            kind !==
-                                              "DYNATRACE_INFRASTRUCTURE",
-                                        }
-                                      : item
-                                  ),
-                                }))
+                                                : kind === "BROWSER_MONITOR"
+                                                  ? (browserMonitors[0]?.name ??
+                                                    "")
+                                                  : kind === "ELF_QUERY"
+                                                    ? (elfQueries[0]?.name ??
+                                                      "")
+                                                    : kind ===
+                                                        "DYNATRACE_INFRASTRUCTURE"
+                                                      ? "Dynatrace infrastructure"
+                                                      : (firstAlert?.title ??
+                                                        firstAlert?.externalTriggerName ??
+                                                        ""),
+                                            required:
+                                              kind !== "ELF_QUERY" &&
+                                              kind !==
+                                                "DYNATRACE_INFRASTRUCTURE",
+                                          }
+                                        : item
+                                    ),
+                                  }))
                                 })()
                               }}
                               items={[
                                 { value: "MONITOR", label: "Monitor" },
+                                {
+                                  value: "BROWSER_MONITOR",
+                                  label: "UI monitor",
+                                },
                                 { value: "ELF_QUERY", label: "ELF query" },
                                 {
                                   value: "OPENSEARCH_ALERT",
@@ -836,6 +907,9 @@ function SuitesPage() {
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="MONITOR">Monitor</SelectItem>
+                                <SelectItem value="BROWSER_MONITOR">
+                                  UI monitor
+                                </SelectItem>
                                 <SelectItem value="ELF_QUERY">
                                   ELF query
                                 </SelectItem>
@@ -890,6 +964,50 @@ function SuitesPage() {
                                   ))}
                                 </SelectContent>
                               </Select>
+                            ) : check.kind === "BROWSER_MONITOR" ? (
+                              <Select
+                                value={check.browserMonitorId || null}
+                                onValueChange={(value) => {
+                                  if (value == null) return
+                                  const browserMonitor = browserMonitors.find(
+                                    (item) => item.id === value
+                                  )
+                                  updateStage(stageIndex, (current) => ({
+                                    ...current,
+                                    checks: current.checks.map((item, index) =>
+                                      index === checkIndex
+                                        ? {
+                                            ...item,
+                                            browserMonitorId: value,
+                                            name: browserMonitor?.name ?? "",
+                                          }
+                                        : item
+                                    ),
+                                  }))
+                                }}
+                                items={browserMonitors.map((monitor) => ({
+                                  value: monitor.id,
+                                  label: `${monitor.name} · ${monitor.health.toLowerCase()}`,
+                                }))}
+                              >
+                                <SelectTrigger
+                                  aria-label="UI monitor"
+                                  className="h-9 w-full min-w-0"
+                                >
+                                  <SelectValue placeholder="Select UI monitor" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {browserMonitors.map((monitor) => (
+                                    <SelectItem
+                                      key={monitor.id}
+                                      value={monitor.id}
+                                    >
+                                      {monitor.name} ·{" "}
+                                      {monitor.health.toLowerCase()}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                             ) : check.kind === "ELF_QUERY" ? (
                               <Select
                                 value={check.queryId || null}
@@ -926,17 +1044,13 @@ function SuitesPage() {
                                 </SelectTrigger>
                                 <SelectContent>
                                   {elfQueries.map((query) => (
-                                    <SelectItem
-                                      key={query.id}
-                                      value={query.id}
-                                    >
+                                    <SelectItem key={query.id} value={query.id}>
                                       {query.name} · {query.gateMode}
                                     </SelectItem>
                                   ))}
                                 </SelectContent>
                               </Select>
-                            ) : check.kind ===
-                              "DYNATRACE_INFRASTRUCTURE" ? (
+                            ) : check.kind === "DYNATRACE_INFRASTRUCTURE" ? (
                               <Select
                                 value={check.applicationId || null}
                                 onValueChange={(value) => {
@@ -945,10 +1059,9 @@ function SuitesPage() {
                                     (item) => item.id === value
                                   )
                                   void (async () => {
-                                    let bindingId =
-                                      defaultEnvironmentBindingId(
-                                        applicationEnvironments[value]
-                                      )
+                                    let bindingId = defaultEnvironmentBindingId(
+                                      applicationEnvironments[value]
+                                    )
                                     if (!bindingId) {
                                       const ensured =
                                         await ensureApplicationDynatraceContext(
@@ -970,8 +1083,7 @@ function SuitesPage() {
                                             ? {
                                                 ...item,
                                                 applicationId: value,
-                                                environmentBindingId:
-                                                  bindingId,
+                                                environmentBindingId: bindingId,
                                                 name: `${application?.name ?? "Application"} infrastructure`,
                                               }
                                             : item
@@ -1097,12 +1209,11 @@ function SuitesPage() {
                                 ? check.required
                                   ? "Blocking"
                                   : "Advisory"
-                                : check.kind ===
-                                    "DYNATRACE_INFRASTRUCTURE"
+                                : check.kind === "DYNATRACE_INFRASTRUCTURE"
                                   ? check.gateMode === "BLOCKING"
                                     ? "Blocking"
                                     : "Advisory"
-                                : "Required"}
+                                  : "Required"}
                             </label>
                             {stage.checks.length > 1 ? (
                               <Button
@@ -1171,7 +1282,10 @@ function SuitesPage() {
             {suites.length ? (
               <div className="mt-4 grid gap-3 lg:grid-cols-2">
                 {suites.map((suite) => (
-                  <article className="rounded-xl border p-4 sm:p-5" key={suite.id}>
+                  <article
+                    className="rounded-xl border p-4 sm:p-5"
+                    key={suite.id}
+                  >
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-medium">{suite.name}</h3>
@@ -1315,7 +1429,10 @@ function SuitesPage() {
               onClick={confirmDelete}
             >
               {deleting ? (
-                <LoaderCircle className="animate-spin" data-icon="inline-start" />
+                <LoaderCircle
+                  className="animate-spin"
+                  data-icon="inline-start"
+                />
               ) : (
                 <Trash2 data-icon="inline-start" />
               )}
@@ -1335,6 +1452,10 @@ function RunResult({
   run: ValidationSuiteRunContract
   resultRef: React.RefObject<HTMLElement | null>
 }) {
+  const active =
+    run.status === "QUEUED" ||
+    run.status === "RUNNING" ||
+    run.status === "CANCELLING"
   const allowed = run.gateDecision !== "BLOCK"
   return (
     <section
@@ -1342,18 +1463,25 @@ function RunResult({
       tabIndex={-1}
       role="status"
       aria-live="polite"
-      className={`mt-6 rounded-xl border p-4 outline-none sm:p-5 ${allowed ? "border-success/30 bg-success-soft/45" : "border-destructive/30 bg-destructive/5"}`}
+      className={`mt-6 rounded-xl border p-4 outline-none sm:p-5 ${active ? "bg-muted/25" : allowed ? "border-success/30 bg-success-soft/45" : "border-destructive/30 bg-destructive/5"}`}
     >
       <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center">
         <div className="flex items-center gap-3">
-          {allowed ? (
+          {active ? (
+            <LoaderCircle
+              className="size-5 animate-spin text-primary motion-reduce:animate-none"
+              aria-hidden
+            />
+          ) : allowed ? (
             <Check className="size-5 text-success-foreground" aria-hidden />
           ) : (
             <CircleAlert className="size-5 text-destructive" aria-hidden />
           )}
           <div>
             <p className="font-heading text-lg font-semibold">
-              Gate decision: {run.gateDecision.replaceAll("_", " ")}
+              {active
+                ? "Validation in progress"
+                : `Gate decision: ${run.gateDecision.replaceAll("_", " ")}`}
             </p>
             <p className="text-sm text-muted-foreground">
               {run.status} · {run.durationMs} ms · {run.results.length} checks
@@ -1372,6 +1500,7 @@ function RunResult({
               <p className="font-medium">
                 {result.name ||
                   result.monitorId ||
+                  result.browserMonitorId ||
                   result.queryId ||
                   result.externalTriggerName ||
                   result.externalMonitorName}
@@ -1407,6 +1536,17 @@ function RunResult({
                   to="/monitors/$monitorId/runs"
                 >
                   Diagnostics <ArrowRight className="size-3" />
+                </Link>
+              ) : result.browserRunId && result.browserMonitorId ? (
+                <Link
+                  className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  params={{
+                    monitorId: result.browserMonitorId,
+                    runId: result.browserRunId,
+                  }}
+                  to="/ui-monitoring/$monitorId/runs/$runId"
+                >
+                  Journey diagnostics <ArrowRight className="size-3" />
                 </Link>
               ) : result.queryId ? (
                 <Link

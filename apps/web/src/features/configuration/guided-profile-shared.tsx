@@ -15,6 +15,8 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { CircleAlert, LoaderCircle, Plus, Trash2, TriangleAlert } from "lucide-react"
 
+import { PageEmptyState } from "@/components/page-empty-state"
+
 export function ConfigurationIntro({
   icon,
   title,
@@ -185,15 +187,15 @@ export function EmptyProfiles({
   onCreate: () => void
 }) {
   return (
-    <div className="mt-5 rounded-2xl border border-dashed px-5 py-12 text-center">
-      <p className="font-medium">{title}</p>
-      <p className="mx-auto mt-1 max-w-lg text-sm text-muted-foreground">
-        {description}
-      </p>
-      <Button className="mt-4 min-h-11 sm:min-h-9" onClick={onCreate}>
-        <Plus /> Create profile
-      </Button>
-    </div>
+    <PageEmptyState
+      title={title}
+      description={description}
+      action={
+        <Button className="min-h-11 sm:min-h-9" onClick={onCreate}>
+          <Plus /> Create profile
+        </Button>
+      }
+    />
   )
 }
 

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -64,24 +64,19 @@ import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
 import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
 import type { MonitorStatus } from "@/features/monitors/seed-data"
 import {
-  effectiveMonitorListStatus,
   listMonitorOperationalStatus,
   OperationalStatusBadge,
 } from "@/components/operational-status"
 import {
   createMonitor,
-  listMonitors,
+  listMonitorPage,
   mutateMonitor,
   permanentlyDeleteMonitors,
   runMonitor,
 } from "@/lib/api-client/monitors"
 import { PageContainer } from "@/components/page-container"
+import { PageEmptyState } from "@/components/page-empty-state"
 
-/**
- * List filtering uses URL search params as the source of truth with client-side
- * matching. The monitors API does not yet accept q/status/applicationId/page —
- * extend GET /api/v1/monitors when server-backed filtering is needed.
- */
 export const Route = createFileRoute("/monitors/")({
   validateSearch: (search: Record<string, unknown>) => ({
     ...(typeof search.q === "string" && search.q ? { q: search.q } : {}),
@@ -94,8 +89,30 @@ export const Route = createFileRoute("/monitors/")({
     ...(positivePage(search.page) > 1
       ? { page: positivePage(search.page) }
       : {}),
+    ...(typeof search.cursor === "string" && search.cursor
+      ? { cursor: search.cursor }
+      : {}),
+    ...(typeof search.trail === "string" && search.trail
+      ? { trail: search.trail }
+      : {}),
   }),
-  loader: () => listMonitors(),
+  loader: ({ location }) => {
+    const search = location.search as {
+      q?: string
+      status?: string
+      application?: string
+      cursor?: string
+    }
+    return listMonitorPage({
+      data: {
+        query: search.q,
+        status: search.status,
+        applicationId: search.application,
+        cursor: search.cursor,
+        limit: 25,
+      },
+    })
+  },
   component: MonitorsPage,
 })
 
@@ -113,7 +130,7 @@ const FILTER_ALL_LABELS: Record<string, string> = {
 }
 
 function MonitorsPage() {
-  const { monitors, applications } = Route.useLoaderData()
+  const { monitors, applications, total, nextCursor } = Route.useLoaderData()
   const search = Route.useSearch()
   const navigate = Route.useNavigate()
   const router = useRouter()
@@ -128,51 +145,56 @@ function MonitorsPage() {
   const [bulkPending, setBulkPending] = useState("")
   const [importOpen, setImportOpen] = useState(false)
   const importCreationId = useRef("")
-  const normalizedQuery = query.trim().toLowerCase()
-  const hasActiveFilters = Boolean(normalizedQuery || status || applicationId)
-  const filtered = useMemo(
-    () =>
-      monitors.filter((monitor) => {
-        const listStatus = effectiveMonitorListStatus(
-          monitor.status,
-          monitor.successRate
-        )
-        if (status && listStatus !== status) return false
-        if (applicationId && monitor.applicationId !== applicationId)
-          return false
-        if (!normalizedQuery) return true
-        return [
-          monitor.name,
-          monitor.description,
-          monitor.application,
-          monitor.slug,
-          ...monitor.tags,
-        ].some((value) => value.toLowerCase().includes(normalizedQuery))
-      }),
-    [monitors, status, applicationId, normalizedQuery]
-  )
+  const [queryInput, setQueryInput] = useState(query)
+  const hasActiveFilters = Boolean(query.trim() || status || applicationId)
   const pageSize = 25
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
   const page = Math.min(search.page ?? 1, pageCount)
-  const visible = filtered.slice((page - 1) * pageSize, page * pageSize)
+  const visible = monitors
   const visibleIDs = visible.map((monitor) => monitor.id)
   const allVisibleSelected =
     visibleIDs.length > 0 && visibleIDs.every((id) => selected.has(id))
   const someVisibleSelected = visibleIDs.some((id) => selected.has(id))
 
+  useEffect(() => setQueryInput(query), [query])
+  useEffect(() => {
+    if (queryInput === query) return
+    const timer = window.setTimeout(() => {
+      void navigate({
+        search: (previous) => ({
+          ...previous,
+          q: queryInput || undefined,
+          page: undefined,
+          cursor: undefined,
+          trail: undefined,
+        }),
+        replace: true,
+      })
+    }, 300)
+    return () => window.clearTimeout(timer)
+  }, [navigate, query, queryInput])
+
   function updateSearch(
     patch: Partial<{
-      q: string
-      status: string
-      application: string
-      page: number
+      q: string | undefined
+      status: string | undefined
+      application: string | undefined
+      page: number | undefined
+      cursor: string | undefined
+      trail: string | undefined
     }>
   ) {
+    const filtersChanged =
+      Object.hasOwn(patch, "q") ||
+      Object.hasOwn(patch, "status") ||
+      Object.hasOwn(patch, "application")
     void navigate({
       search: (previous) => ({
         ...previous,
         ...patch,
-        page: patch.page ?? 1,
+        ...(filtersChanged
+          ? { page: undefined, cursor: undefined, trail: undefined }
+          : {}),
       }),
       replace: true,
     })
@@ -359,8 +381,8 @@ function MonitorsPage() {
             aria-label="Search monitors"
             className="h-9 pl-9"
             placeholder="Search by name, application, slug, or tag"
-            value={query}
-            onChange={(event) => updateSearch({ q: event.target.value })}
+            value={queryInput}
+            onChange={(event) => setQueryInput(event.target.value)}
           />
         </div>
         <div className="flex flex-wrap gap-2 lg:ml-auto">
@@ -679,30 +701,30 @@ function MonitorsPage() {
           ))}
         </ul>
 
-        {!monitors.length ? (
-          <div className="px-6 py-12 text-center">
-            <p className="text-sm font-medium">No monitors yet</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Create a monitor to start publishing and operating synthetic API
-              workflows.
-            </p>
-            <div className="mt-4 flex flex-wrap justify-center gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setImportOpen(true)}
-              >
-                <Upload data-icon="inline-start" /> Import collection
-              </Button>
-              <Button
-                render={<Link to="/monitors/new" />}
-                nativeButton={false}
-              >
-                <Plus data-icon="inline-start" /> New monitor
-              </Button>
-            </div>
-          </div>
-        ) : !filtered.length ? (
+        {!monitors.length && !hasActiveFilters ? (
+          <PageEmptyState
+            className="mt-0 border-0"
+            title="No monitors yet"
+            description="Create a monitor to start publishing and operating synthetic API workflows."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setImportOpen(true)}
+                >
+                  <Upload data-icon="inline-start" /> Import collection
+                </Button>
+                <Button
+                  render={<Link to="/monitors/new" />}
+                  nativeButton={false}
+                >
+                  <Plus data-icon="inline-start" /> New monitor
+                </Button>
+              </div>
+            }
+          />
+        ) : !monitors.length ? (
           <div className="px-6 py-12 text-center">
             <p className="text-sm font-medium">No monitors match</p>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -715,15 +737,25 @@ function MonitorsPage() {
       </div>
       <div className="mt-3 flex items-center justify-between gap-4 text-xs text-muted-foreground">
         <p>
-          Showing {filtered.length ? (page - 1) * pageSize + 1 : 0}–
-          {Math.min(page * pageSize, filtered.length)} of {filtered.length}{" "}
-          matching monitors · {monitors.length} total
+          Showing {monitors.length ? (page - 1) * pageSize + 1 : 0}–
+          {Math.min(page * pageSize, total)} of {total} matching monitors
         </p>
         <div className="flex items-center gap-2">
           <Button
             aria-label="Previous monitor page"
             disabled={page === 1}
-            onClick={() => updateSearch({ page: Math.max(1, page - 1) })}
+            onClick={() => {
+              const trail = decodeCursorTrail(search.trail)
+              const previousCursor = trail.pop()
+              updateSearch({
+                page: Math.max(1, page - 1),
+                cursor:
+                  previousCursor && previousCursor !== "~"
+                    ? previousCursor
+                    : undefined,
+                trail: encodeCursorTrail(trail),
+              })
+            }}
             size="sm"
             variant="outline"
           >
@@ -734,10 +766,16 @@ function MonitorsPage() {
           </span>
           <Button
             aria-label="Next monitor page"
-            disabled={page === pageCount}
-            onClick={() =>
-              updateSearch({ page: Math.min(pageCount, page + 1) })
-            }
+            disabled={!nextCursor}
+            onClick={() => {
+              const trail = decodeCursorTrail(search.trail)
+              trail.push(search.cursor ?? "~")
+              updateSearch({
+                page: Math.min(pageCount, page + 1),
+                cursor: nextCursor,
+                trail: encodeCursorTrail(trail),
+              })
+            }}
             size="sm"
             variant="outline"
           >
@@ -840,6 +878,14 @@ function uniqueImportSlug(name: string, existing: string[]) {
 function positivePage(value: unknown) {
   const parsed = Number(value)
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+}
+
+function decodeCursorTrail(value: string | undefined) {
+  return value ? value.split(".").filter(Boolean) : []
+}
+
+function encodeCursorTrail(values: string[]) {
+  return values.length ? values.join(".") : undefined
 }
 
 function formatAvailabilityPercent(value: number) {

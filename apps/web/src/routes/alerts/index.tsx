@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useState } from "react"
 import {
   createFileRoute,
   Link,
@@ -25,6 +25,7 @@ import {
   Clock3,
   ExternalLink,
   LoaderCircle,
+  MonitorCheck,
   RefreshCw,
   Search,
   Server,
@@ -41,7 +42,7 @@ import { listELFApplications } from "@/lib/api-client/elf"
 import { mutateAlert } from "@/lib/api-client/monitors"
 import {
   listAlertEvents,
-  listUnifiedAlerts,
+  listUnifiedAlertsPage,
 } from "@/lib/api-client/opensearch-alerts"
 import { formatDateTime } from "@/lib/format-date"
 import { PageContainer } from "@/components/page-container"
@@ -71,26 +72,30 @@ export const Route = createFileRoute("/alerts/")({
         ? Math.floor(search.page)
         : undefined,
   }),
-  loader: async () => {
-    const [alerts, applications] = await Promise.all([
-      listUnifiedAlerts({
+  loaderDeps: ({ search }) => search,
+  loader: async ({ deps }) => {
+    const [alertPage, applications] = await Promise.all([
+      listUnifiedAlertsPage({
         data: {
-          state: "",
-          sourceType: "",
-          applicationId: "",
-          serviceId: "",
-          severity: "",
+          query: deps.query ?? "",
+          sourceType: deps.source ?? "",
+          state: deps.state ?? "",
+          severity: deps.severity ?? "",
+          applicationId: deps.application ?? "",
+          monitorType: deps.monitorType ?? "",
+          page: deps.page ?? 1,
+          limit: 25,
         },
       }),
       listELFApplications(),
     ])
-    return { alerts, applications }
+    return { ...alertPage, applications }
   },
   component: AlertsPage,
 })
 
 function AlertsPage() {
-  const { alerts, applications } = Route.useLoaderData()
+  const { alerts, applications, summary, total, limit } = Route.useLoaderData()
   const search = Route.useSearch()
   const filters = {
     query: search.query ?? "",
@@ -108,30 +113,16 @@ function AlertsPage() {
       return hash.startsWith("alert-") ? hash.slice("alert-".length) : ""
     },
   })
-  const filtered = useMemo(
-    () =>
-      alerts.filter(
-        (alert) =>
-          (!filters.source || alert.sourceType === filters.source) &&
-          (!filters.state || alert.state === filters.state) &&
-          (!filters.severity || alert.severity === filters.severity) &&
-          (!filters.application ||
-            alert.applicationId === filters.application) &&
-          (!filters.monitorType ||
-            alert.externalMonitorType === filters.monitorType) &&
-          `${alert.title} ${alert.description ?? ""} ${alert.externalMonitorName ?? ""} ${alert.applicationName ?? ""}`
-            .toLowerCase()
-            .includes(filters.query.toLowerCase())
-      ),
-    [alerts, filters]
+  const filtersActive = Boolean(
+    filters.query ||
+      filters.source ||
+      filters.state ||
+      filters.severity ||
+      filters.application ||
+      filters.monitorType
   )
-  const pageSize = 25
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const pageCount = Math.max(1, Math.ceil(total / limit))
   const currentPage = Math.min(filters.page, pageCount)
-  const visibleAlerts = filtered.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize
-  )
   function updateFilter(
     key:
       "query" | "source" | "state" | "severity" | "application" | "monitorType",
@@ -142,12 +133,6 @@ function AlertsPage() {
       replace: true,
     })
   }
-  const active = alerts.filter(
-    (alert) =>
-      alert.state === "OPEN" ||
-      alert.state === "ACKNOWLEDGED" ||
-      alert.state === "ERROR"
-  )
   return (
     <PageContainer as="main">
       <header className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
@@ -156,8 +141,8 @@ function AlertsPage() {
             Alert inbox
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Triage synthetic monitor failures and OpenSearch Alerting events in
-            one operational queue.
+            Triage API monitor failures, browser journey failures, and
+            OpenSearch Alerting events in one operational queue.
           </p>
         </div>
         <Badge variant="secondary" className="w-fit">
@@ -168,32 +153,23 @@ function AlertsPage() {
       <div className="mt-7 grid overflow-hidden rounded-xl border sm:grid-cols-4">
         <Metric
           label="Active"
-          value={String(active.length)}
+          value={String(summary.activeCount)}
           icon={CircleAlert}
-          danger={active.length > 0}
+          danger={summary.activeCount > 0}
         />
         <Metric
           label="Critical / high"
-          value={String(
-            active.filter(
-              (item) => item.severity === "CRITICAL" || item.severity === "HIGH"
-            ).length
-          )}
+          value={String(summary.criticalHighCount)}
           icon={ShieldCheck}
         />
         <Metric
           label="OpenSearch"
-          value={String(
-            active.filter((item) => item.sourceType === "OPENSEARCH_ALERTING")
-              .length
-          )}
+          value={String(summary.openSearchActiveCount)}
           icon={Webhook}
         />
         <Metric
           label="Resolved"
-          value={String(
-            alerts.filter((item) => item.state === "RESOLVED").length
-          )}
+          value={String(summary.resolvedCount)}
           icon={Check}
         />
       </div>
@@ -216,6 +192,7 @@ function AlertsPage() {
             onChange={(value) => updateFilter("source", value)}
             options={[
               ["RHYTHM_MONITOR", "Rhythm monitors"],
+              ["RHYTHM_BROWSER_MONITOR", "UI monitors"],
               ["OPENSEARCH_ALERTING", "OpenSearch"],
             ]}
           />
@@ -263,7 +240,7 @@ function AlertsPage() {
           />
         </div>
         <p className="mt-3 text-xs text-muted-foreground" role="status">
-          Showing {filtered.length} of {alerts.length} alerts
+          Showing {alerts.length} of {total} matching alerts
         </p>
       </section>
 
@@ -271,9 +248,9 @@ function AlertsPage() {
         <h2 id="recent-alerts" className="font-heading text-lg font-semibold">
           Recent alerts
         </h2>
-        {visibleAlerts.length ? (
+        {alerts.length ? (
           <div className="mt-4 divide-y border-y">
-            {visibleAlerts.map((alert) => (
+            {alerts.map((alert) => (
               <AlertRow
                 key={alert.id}
                 alert={alert}
@@ -284,14 +261,23 @@ function AlertsPage() {
         ) : (
           <div className="mt-4 border-y py-14 text-center">
             <Check className="mx-auto size-7 text-success" />
-            <p className="mt-3 font-medium">No alerts match these filters</p>
+            <p className="mt-3 font-medium">
+              {total === 0 && !filtersActive
+                ? "No alerts yet"
+                : filtersActive
+                  ? "No alerts match these filters"
+                  : "No alerts to show"}
+            </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Clear a filter or configure an OpenSearch receiver from
-              Applications.
+              {total === 0 && !filtersActive
+                ? "When monitors fail or OpenSearch deliveries arrive, they will appear here. Configure a receiver from Applications."
+                : filtersActive
+                  ? "Clear a filter to widen the inbox, or configure an OpenSearch receiver from Applications."
+                  : "Configure an OpenSearch receiver from Applications to ingest alerts."}
             </p>
           </div>
         )}
-        {filtered.length > pageSize ? (
+        {total > limit ? (
           <div className="mt-4 flex items-center justify-between gap-3">
             <Button
               disabled={currentPage === 1}
@@ -345,20 +331,32 @@ function AlertRow({
   const [message, setMessage] = useState("")
   const [expanded, setExpanded] = useState(initiallyExpanded)
   const [events, setEvents] = useState<AlertEventContract[] | null>(null)
+  const [eventsLoading, setEventsLoading] = useState(false)
+  const [eventsError, setEventsError] = useState("")
   const active =
     alert.state === "OPEN" ||
     alert.state === "ACKNOWLEDGED" ||
     alert.state === "ERROR"
 
+  async function loadEvents() {
+    setEventsLoading(true)
+    setEventsError("")
+    try {
+      setEvents(await listAlertEvents({ data: { alertId: alert.id } }))
+    } catch (error) {
+      setEventsError(
+        error instanceof Error
+          ? error.message
+          : "Event history could not be loaded."
+      )
+    } finally {
+      setEventsLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (!initiallyExpanded) return
-    let cancelled = false
-    void listAlertEvents({ data: { alertId: alert.id } }).then((next) => {
-      if (!cancelled) setEvents(next)
-    })
-    return () => {
-      cancelled = true
-    }
+    void loadEvents()
   }, [alert.id, initiallyExpanded])
 
   async function act(action: "acknowledge" | "resolve") {
@@ -375,11 +373,12 @@ function AlertRow({
   async function toggleEvidence() {
     const next = !expanded
     setExpanded(next)
-    if (next && events === null) {
-      setEvents(await listAlertEvents({ data: { alertId: alert.id } }))
+    if (next && events === null && !eventsLoading) {
+      await loadEvents()
     }
   }
   const external = alert.sourceType === "OPENSEARCH_ALERTING"
+  const browser = alert.sourceType === "RHYTHM_BROWSER_MONITOR"
   useEffect(() => {
     if (!initiallyExpanded) return
     const node = document.getElementById(`alert-${alert.id}`)
@@ -405,6 +404,8 @@ function AlertRow({
         >
           {external ? (
             <Webhook className="size-4" />
+          ) : browser ? (
+            <MonitorCheck className="size-4" />
           ) : active ? (
             <CircleAlert className="size-4" />
           ) : (
@@ -417,7 +418,7 @@ function AlertRow({
             <Badge variant="secondary">{alert.state}</Badge>
             <Severity severity={alert.severity} />
             <Badge variant="outline">
-              {external ? "OpenSearch" : "Rhythm monitor"}
+              {external ? "OpenSearch" : browser ? "UI monitor" : "API monitor"}
             </Badge>
           </div>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
@@ -466,6 +467,15 @@ function AlertRow({
                 View runs
               </Link>
             ) : null}
+            {browser && alert.browserMonitorId ? (
+              <Link
+                className="font-medium text-primary hover:underline"
+                params={{ monitorId: alert.browserMonitorId }}
+                to="/ui-monitoring/$monitorId/runs"
+              >
+                View browser runs
+              </Link>
+            ) : null}
             {external ? (
               <>
                 <Link
@@ -508,7 +518,15 @@ function AlertRow({
               Open alert details
             </Link>
           </div>
-          {expanded ? <Evidence alert={alert} events={events} /> : null}
+          {expanded ? (
+            <Evidence
+              alert={alert}
+              events={events}
+              eventsError={eventsError}
+              eventsLoading={eventsLoading}
+              onRetryEvents={() => void loadEvents()}
+            />
+          ) : null}
           {message ? (
             <p className="mt-2 text-xs text-destructive" role="alert">
               {message}
@@ -549,9 +567,15 @@ function AlertRow({
 function Evidence({
   alert,
   events,
+  eventsLoading,
+  eventsError,
+  onRetryEvents,
 }: {
   alert: AlertContract
   events: AlertEventContract[] | null
+  eventsLoading: boolean
+  eventsError: string
+  onRetryEvents: () => void
 }) {
   const evidenceEntries = Object.entries(alert.evidence).filter(
     ([, value]) => value !== "" && value !== null
@@ -607,11 +631,23 @@ function Evidence({
           <h4 className="inline-flex items-center gap-2 text-sm font-medium">
             <Clock3 className="size-4" /> Lifecycle
           </h4>
-          {events === null ? (
-            <p className="mt-3 text-xs text-muted-foreground">
+          {eventsLoading && events === null ? (
+            <div
+              aria-busy="true"
+              className="mt-3 flex items-center gap-2 text-xs text-muted-foreground"
+              role="status"
+            >
+              <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
               Loading event history…
-            </p>
-          ) : events.length ? (
+            </div>
+          ) : eventsError && events === null ? (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs">
+              <span className="text-muted-foreground">{eventsError}</span>
+              <Button onClick={onRetryEvents} size="sm" variant="outline">
+                <RefreshCw /> Retry
+              </Button>
+            </div>
+          ) : events?.length ? (
             <ol className="mt-3 space-y-3">
               {events.map((event) => (
                 <li

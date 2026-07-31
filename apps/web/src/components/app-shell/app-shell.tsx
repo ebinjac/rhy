@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
 import {
@@ -38,6 +38,7 @@ import {
   TriangleAlert,
   Gauge,
   FileSearch,
+  MonitorCheck,
   Settings2,
   ScrollText,
   Check,
@@ -45,15 +46,29 @@ import {
   Sparkles,
 } from "lucide-react"
 
-import { AlertsInbox } from "@/components/app-shell/alerts-inbox"
-import { GlobalSearch } from "@/components/app-shell/global-search"
-import { HelpDrawer } from "@/components/app-shell/help-drawer"
 import { ThemeToggle } from "@/components/app-shell/theme-toggle"
 import { RhythmLogo } from "@/components/brand/rhythm-logo"
+
+const DeferredGlobalSearch = lazy(() =>
+  import("@/components/app-shell/global-search").then((module) => ({
+    default: module.GlobalSearch,
+  }))
+)
+const DeferredHelpDrawer = lazy(() =>
+  import("@/components/app-shell/help-drawer").then((module) => ({
+    default: module.HelpDrawer,
+  }))
+)
+const DeferredAlertsInbox = lazy(() =>
+  import("@/components/app-shell/alerts-inbox").then((module) => ({
+    default: module.AlertsInbox,
+  }))
+)
 
 const navigation = [
   { label: "Overview", to: "/", icon: Gauge },
   { label: "Monitors", to: "/monitors", icon: Activity },
+  { label: "UI monitoring", to: "/ui-monitoring", icon: MonitorCheck },
   { label: "Applications", to: "/applications", icon: AppWindow },
   { label: "ELF log search", to: "/elf", icon: FileSearch },
   { label: "Alerts", to: "/alerts", icon: CircleAlert },
@@ -204,7 +219,11 @@ function WorkspacePreferences() {
         <DropdownMenuGroup>
           <DropdownMenuLabel>Display preferences</DropdownMenuLabel>
           <DropdownMenuItem onClick={() => updateDensity("comfortable")}>
-            {density === "comfortable" ? <Check /> : <span className="size-4" />}
+            {density === "comfortable" ? (
+              <Check />
+            ) : (
+              <span className="size-4" />
+            )}
             Comfortable tables
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => updateDensity("compact")}>
@@ -241,11 +260,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SidebarInset>
           <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur md:px-6">
             <SidebarTrigger />
-            <GlobalSearch />
+            <DeferredShellSearch />
             <div className="ml-auto flex items-center gap-2">
-              <HelpDrawer />
+              <DeferredShellActions />
               <ThemeToggle />
-              <AlertsInbox />
             </div>
           </header>
           <div id="main-content" className="min-w-0 outline-none" tabIndex={-1}>
@@ -257,6 +275,78 @@ export function AppShell({ children }: { children: ReactNode }) {
   )
 }
 
+function DeferredShellSearch() {
+  const ready = useIdleReady()
+  if (!ready) {
+    return (
+      <div
+        aria-hidden="true"
+        className="hidden h-9 w-full max-w-sm rounded-lg bg-muted/45 sm:block"
+      />
+    )
+  }
+  return (
+    <Suspense
+      fallback={
+        <div
+          aria-hidden="true"
+          className="hidden h-9 w-full max-w-sm rounded-lg bg-muted/45 sm:block"
+        />
+      }
+    >
+      <DeferredGlobalSearch />
+    </Suspense>
+  )
+}
+
+function DeferredShellActions() {
+  const ready = useIdleReady()
+  if (!ready) {
+    return (
+      <div aria-hidden="true" className="flex gap-2">
+        <span className="size-9 rounded-lg bg-muted/45" />
+        <span className="size-9 rounded-lg bg-muted/45" />
+      </div>
+    )
+  }
+  return (
+    <Suspense
+      fallback={
+        <div aria-hidden="true" className="flex gap-2">
+          <span className="size-9 rounded-lg bg-muted/45" />
+          <span className="size-9 rounded-lg bg-muted/45" />
+        </div>
+      }
+    >
+      <DeferredHelpDrawer />
+      <DeferredAlertsInbox />
+    </Suspense>
+  )
+}
+
+function useIdleReady() {
+  const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const windowWithIdle = window as Window & {
+      requestIdleCallback?: (
+        callback: () => void,
+        options?: { timeout: number }
+      ) => number
+      cancelIdleCallback?: (id: number) => void
+    }
+    if (windowWithIdle.requestIdleCallback) {
+      const handle = windowWithIdle.requestIdleCallback(
+        () => setReady(true),
+        { timeout: 1200 }
+      )
+      return () => windowWithIdle.cancelIdleCallback?.(handle)
+    }
+    const handle = window.setTimeout(() => setReady(true), 250)
+    return () => window.clearTimeout(handle)
+  }, [])
+  return ready
+}
+
 export function SystemNotice({
   alert,
   alertCount = alert ? 1 : 0,
@@ -265,15 +355,15 @@ export function SystemNotice({
   alert?: {
     id?: string
     severity?: "INFO" | "LOW" | "WARNING" | "HIGH" | "CRITICAL"
-    sourceType?: "RHYTHM_MONITOR" | "OPENSEARCH_ALERTING"
+    sourceType?:
+      "RHYTHM_MONITOR" | "RHYTHM_BROWSER_MONITOR" | "OPENSEARCH_ALERTING"
     monitorName?: string
     title: string
     consecutiveFailures: number
   }
 }) {
   if (!alert) return null
-  const critical =
-    alert.severity === "CRITICAL" || alert.severity === "HIGH"
+  const critical = alert.severity === "CRITICAL" || alert.severity === "HIGH"
   const surface = critical
     ? "border-b bg-destructive/8 text-destructive"
     : alert.severity === "WARNING"
@@ -291,7 +381,9 @@ export function SystemNotice({
   const detail =
     alert.sourceType === "OPENSEARCH_ALERTING"
       ? "was received from OpenSearch."
-      : `has failed ${alert.consecutiveFailures} consecutive runs.`
+      : alert.sourceType === "RHYTHM_BROWSER_MONITOR"
+        ? `has failed ${alert.consecutiveFailures} consecutive browser journeys.`
+        : `has failed ${alert.consecutiveFailures} consecutive runs.`
   return (
     <div
       role="status"

@@ -2,16 +2,58 @@ package runs
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"sync"
 	"time"
 )
+
+var ErrAlreadyQueued = errors.New("run is already queued")
 
 type Repository interface {
 	Save(context.Context, Run) error
 	List(context.Context, string, int) ([]Run, error)
 	ListRecent(context.Context, int) ([]Run, error)
 	Get(context.Context, string) (Run, error)
+}
+
+type QueueRequest struct {
+	MonitorID         string    `json:"monitorId"`
+	ActorID           string    `json:"actorId"`
+	Mode              string    `json:"mode"`
+	TriggerType       string    `json:"triggerType,omitempty"`
+	ScheduleID        string    `json:"scheduleId,omitempty"`
+	ConcurrencyPolicy string    `json:"concurrencyPolicy,omitempty"`
+	Deduplication     string    `json:"deduplicationKey,omitempty"`
+	QueuedAt          time.Time `json:"queuedAt"`
+	RecoverySafe      bool      `json:"recoverySafe"`
+}
+
+// DurableRepository is implemented by persistent repositories that can create
+// the queued run and its execution job in one transaction.
+type DurableRepository interface {
+	Enqueue(context.Context, Run, QueueRequest) error
+	RequestCancel(context.Context, string) (bool, error)
+}
+
+type SummaryRepository interface {
+	GetSummary(context.Context, string) (Run, error)
+}
+
+type EventRepository interface {
+	ListEvents(context.Context, string, int, int) ([]RunEvent, int, bool, error)
+}
+
+type DiagnosticsSummaryRepository interface {
+	GetDiagnosticsSummary(context.Context, string) (Run, RunAnalysis, error)
+}
+
+type StepRepository interface {
+	GetStep(context.Context, string, string) (StepRun, error)
+}
+
+type IncrementalRepository interface {
+	SaveDelta(context.Context, Run, []StepRun, []RunEvent) error
 }
 
 func (r *MemoryRepository) MetricPoints(_ context.Context, monitorID string, since time.Time, limit int) ([]HistoryMetricPoint, error) {

@@ -42,6 +42,12 @@ const defaultMaxBodyBytes = 1 << 20
 
 var templatePattern = regexp.MustCompile(`\{\{\s*([^{}]+?)\s*\}\}`)
 
+var ErrTargetLimiterUnavailable = errors.New("distributed target concurrency limiter is unavailable")
+
+type TargetConcurrencyLimiter interface {
+	Acquire(context.Context, string, int) (func(), error)
+}
+
 func int64FromAny(value any) int64 {
 	switch typed := value.(type) {
 	case int64:
@@ -60,9 +66,14 @@ func int64FromAny(value any) int64 {
 }
 
 type HTTPExecutor struct {
-	allowPrivate bool
-	resolver     RuntimeResolver
-	scripts      scripts.Executor
+	allowPrivate  bool
+	resolver      RuntimeResolver
+	scripts       scripts.Executor
+	hostMu        sync.Mutex
+	hostLimit     int
+	hostSlots     map[string]chan struct{}
+	targetLimiter TargetConcurrencyLimiter
+	caCache       sync.Map
 }
 
 type TLSMaterial struct {
@@ -95,14 +106,30 @@ type RuntimeResolver interface {
 }
 
 func NewHTTPExecutor(allowPrivate bool) *HTTPExecutor {
-	return &HTTPExecutor{allowPrivate: allowPrivate}
+	return &HTTPExecutor{allowPrivate: allowPrivate, hostLimit: 16, hostSlots: map[string]chan struct{}{}}
 }
 
 func NewHTTPExecutorWithResolver(allowPrivate bool, resolver RuntimeResolver) *HTTPExecutor {
-	return &HTTPExecutor{allowPrivate: allowPrivate, resolver: resolver}
+	return &HTTPExecutor{allowPrivate: allowPrivate, resolver: resolver, hostLimit: 16, hostSlots: map[string]chan struct{}{}}
 }
 
 func (e *HTTPExecutor) SetScriptExecutor(executor scripts.Executor) { e.scripts = executor }
+
+func (e *HTTPExecutor) SetTargetHostConcurrency(limit int) {
+	if limit < 1 {
+		limit = 16
+	}
+	e.hostMu.Lock()
+	e.hostLimit = limit
+	e.hostSlots = map[string]chan struct{}{}
+	e.hostMu.Unlock()
+}
+
+func (e *HTTPExecutor) SetTargetConcurrencyLimiter(limiter TargetConcurrencyLimiter) {
+	e.hostMu.Lock()
+	e.targetLimiter = limiter
+	e.hostMu.Unlock()
+}
 
 func (e *HTTPExecutor) LoadEnvironment(ctx context.Context, environmentID string) (EnvironmentMaterial, error) {
 	if strings.TrimSpace(environmentID) == "" {
@@ -245,6 +272,7 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 	if err != nil {
 		return finishStep(result, StatusFailed, "CONFIGURATION_ERROR", err.Error(), started)
 	}
+	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport}
 	if requestConfig.PersistCookies {
 		client.Jar = jar
@@ -259,6 +287,14 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		return finishStep(result, StatusFailed, "CONFIGURATION_ERROR", "Retries for non-idempotent requests require an Idempotency-Key header.", started)
 	}
 	preparationMS := time.Since(started).Milliseconds()
+	releaseTarget, err := e.acquireTarget(requestContext, request.URL)
+	if err != nil {
+		if errors.Is(err, ErrTargetLimiterUnavailable) {
+			return finishStep(result, StatusFailed, "TARGET_CONCURRENCY_UNAVAILABLE", "Distributed target concurrency control is unavailable.", started)
+		}
+		return finishStep(result, StatusTimedOut, "TARGET_CONCURRENCY_TIMEOUT", "The target host remained at its configured concurrency limit until this step timed out.", started)
+	}
+	defer releaseTarget()
 	response, attempts, err := doWithRetries(requestContext, client, request, requestConfig.Settings, safeRequest, requestConfig.Proxy)
 	result.Attempts, result.AttemptCount = attempts, len(attempts)
 	result.Timing = map[string]any{"preparationMs": preparationMS}
@@ -408,6 +444,33 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		}
 	}
 	return finishStep(result, StatusSuccess, "", "", started)
+}
+
+func (e *HTTPExecutor) acquireTarget(ctx context.Context, target *url.URL) (func(), error) {
+	key := strings.ToLower(target.Hostname())
+	if key == "" {
+		return func() {}, nil
+	}
+	e.hostMu.Lock()
+	limiter := e.targetLimiter
+	limit := e.hostLimit
+	e.hostMu.Unlock()
+	if limiter != nil {
+		return limiter.Acquire(ctx, key, limit)
+	}
+	e.hostMu.Lock()
+	slots := e.hostSlots[key]
+	if slots == nil {
+		slots = make(chan struct{}, limit)
+		e.hostSlots[key] = slots
+	}
+	e.hostMu.Unlock()
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 var vaultCallPattern = regexp.MustCompile(`pm\.vault\.get\(\s*["']([^"']+)["']\s*\)`)
@@ -710,6 +773,15 @@ func (e *HTTPExecutor) ExecuteMetric(ctx context.Context, definition StepDefinit
 	if err != nil {
 		return finishStep(result, StatusFailed, "CONFIGURATION_ERROR", err.Error(), started)
 	}
+	defer transport.CloseIdleConnections()
+	releaseTarget, err := e.acquireTarget(requestContext, target)
+	if err != nil {
+		if errors.Is(err, ErrTargetLimiterUnavailable) {
+			return finishStep(result, StatusFailed, "TARGET_CONCURRENCY_UNAVAILABLE", "Distributed target concurrency control is unavailable.", started)
+		}
+		return finishStep(result, StatusTimedOut, "TARGET_CONCURRENCY_TIMEOUT", "The telemetry host remained at its configured concurrency limit.", started)
+	}
+	defer releaseTarget()
 	response, err := (&http.Client{Transport: transport}).Do(request)
 	if err != nil {
 		return finishStep(result, StatusFailed, networkFailureCategory(err), safeError(err), started)
@@ -830,6 +902,7 @@ func (e *HTTPExecutor) executeStepActions(ctx context.Context, actions []ActionC
 			if err != nil {
 				return nil, err
 			}
+			defer transport.CloseIdleConnections()
 			client := &http.Client{Transport: transport}
 			configureRedirects(client, SettingsConfig{FollowRedirects: true, MaxRedirects: 3}, e)
 			token, err := e.acquireOAuthToken(ctx, client, AuthConfig{Type: "oauth2", Fields: action.Fields}, values)
@@ -1267,14 +1340,20 @@ func (e *HTTPExecutor) transport(ctx context.Context, config RequestConfig) (*ht
 		TLSClientConfig:    &tls.Config{MinVersion: minimumVersion, InsecureSkipVerify: !verifyHostname}, //nolint:gosec -- an explicit monitor option
 	}
 	if tlsMaterial.CABundlePEM != "" {
-		pool, err := x509.SystemCertPool()
-		if err != nil || pool == nil {
-			pool = x509.NewCertPool()
+		cacheKey := sha256.Sum256([]byte(tlsMaterial.CABundlePEM))
+		if cached, ok := e.caCache.Load(cacheKey); ok {
+			transport.TLSClientConfig.RootCAs = cached.(*x509.CertPool).Clone()
+		} else {
+			pool, err := x509.SystemCertPool()
+			if err != nil || pool == nil {
+				pool = x509.NewCertPool()
+			}
+			if !pool.AppendCertsFromPEM([]byte(tlsMaterial.CABundlePEM)) {
+				return nil, errors.New("custom CA bundle is not valid PEM")
+			}
+			e.caCache.Store(cacheKey, pool.Clone())
+			transport.TLSClientConfig.RootCAs = pool
 		}
-		if !pool.AppendCertsFromPEM([]byte(tlsMaterial.CABundlePEM)) {
-			return nil, errors.New("custom CA bundle is not valid PEM")
-		}
-		transport.TLSClientConfig.RootCAs = pool
 	}
 	if tlsMaterial.ClientCertificatePEM != "" || tlsMaterial.ClientKeyPEM != "" {
 		certificate, err := tls.X509KeyPair([]byte(tlsMaterial.ClientCertificatePEM), []byte(tlsMaterial.ClientKeyPEM))

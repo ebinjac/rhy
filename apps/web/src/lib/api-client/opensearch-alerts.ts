@@ -16,6 +16,13 @@ import type {
 const baseURL = () => process.env.RHYTHM_API_URL ?? "http://localhost:8080"
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  return (await envelope<T>(path, init)).data
+}
+
+async function envelope<T>(
+  path: string,
+  init?: RequestInit
+): Promise<ApiSuccess<T>> {
   const response = await fetch(`${baseURL()}${path}`, {
     ...init,
     headers: {
@@ -29,8 +36,10 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
     const failure = (await response.json()) as ApiErrorResponse
     throw new Error(failure.error.message || "Rhythm API request failed.")
   }
-  if (response.status === 204) return undefined as T
-  return ((await response.json()) as ApiSuccess<T>).data
+  if (response.status === 204) {
+    return { data: undefined as T, meta: { requestId: "" } }
+  }
+  return (await response.json()) as ApiSuccess<T>
 }
 
 const receiverInput = z.object({
@@ -199,6 +208,59 @@ export const listUnifiedAlerts = createServerFn({ method: "GET" })
       if (value) params.set(key, value)
     })
     return json(`/api/v1/alerts?${params}`)
+  })
+
+export type AlertInboxSummary = {
+  activeCount: number
+  criticalHighCount: number
+  openSearchActiveCount: number
+  resolvedCount: number
+}
+
+export type AlertPage = {
+  alerts: AlertContract[]
+  summary: AlertInboxSummary
+  total: number
+  limit: number
+}
+
+export const listUnifiedAlertsPage = createServerFn({ method: "GET" })
+  .validator(
+    z.object({
+      query: z.string().default(""),
+      sourceType: z.string().default(""),
+      state: z.string().default(""),
+      severity: z.string().default(""),
+      applicationId: z.string().default(""),
+      monitorType: z.string().default(""),
+      page: z.number().int().min(1).default(1),
+      limit: z.number().int().min(1).max(100).default(25),
+    })
+  )
+  .handler(async ({ data }): Promise<AlertPage> => {
+    const params = new URLSearchParams({ limit: String(data.limit) })
+    const offset = (data.page - 1) * data.limit
+    if (offset > 0) {
+      params.set("cursor", Buffer.from(`offset:${offset}`).toString("base64url"))
+    }
+    if (data.query) params.set("query", data.query)
+    if (data.sourceType) params.set("sourceType", data.sourceType)
+    if (data.state) params.set("state", data.state)
+    if (data.severity) params.set("severity", data.severity)
+    if (data.applicationId)
+      params.set("applicationId", data.applicationId)
+    if (data.monitorType) params.set("monitorType", data.monitorType)
+
+    const [alertsEnvelope, summary] = await Promise.all([
+      envelope<AlertContract[]>(`/api/v1/alerts?${params}`),
+      json<AlertInboxSummary>("/api/v1/alerts/summary"),
+    ])
+    return {
+      alerts: alertsEnvelope.data,
+      summary,
+      total: alertsEnvelope.meta.page?.total ?? alertsEnvelope.data.length,
+      limit: data.limit,
+    }
   })
 
 export const listAlertEvents = createServerFn({ method: "GET" })

@@ -15,6 +15,7 @@ import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
 import { Route as RhythmRouteImport } from './routes/rhythm'
 import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as LlmsFullDottxtRouteImport } from './routes/llms-full[.]txt'
+import { Route as HealthzRouteImport } from './routes/healthz'
 import { Route as ElfRouteImport } from './routes/elf'
 import { Route as ConfigurationRouteImport } from './routes/configuration'
 import { Route as AuditRouteImport } from './routes/audit'
@@ -22,10 +23,13 @@ import { Route as ApplicationsRouteImport } from './routes/applications'
 import { Route as AlertsRouteImport } from './routes/alerts'
 import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as UiMonitoringIndexRouteImport } from './routes/ui-monitoring/index'
 import { Route as MonitorsIndexRouteImport } from './routes/monitors/index'
 import { Route as ElfIndexRouteImport } from './routes/elf/index'
 import { Route as ApplicationsIndexRouteImport } from './routes/applications/index'
 import { Route as AlertsIndexRouteImport } from './routes/alerts/index'
+import { Route as UiMonitoringNewRouteImport } from './routes/ui-monitoring/new'
+import { Route as UiMonitoringMonitorIdRouteImport } from './routes/ui-monitoring/$monitorId'
 import { Route as MonitorsNewRouteImport } from './routes/monitors/new'
 import { Route as MonitorsMonitorIdRouteImport } from './routes/monitors/$monitorId'
 import { Route as ElfSettingsRouteImport } from './routes/elf/settings'
@@ -37,14 +41,23 @@ import { Route as DeploymentRunsDeploymentRunIdRouteImport } from './routes/depl
 import { Route as ApplicationsApplicationIdRouteImport } from './routes/applications/$applicationId'
 import { Route as ApiDocsSearchRouteImport } from './routes/api/docs-search'
 import { Route as AlertsAlertIdRouteImport } from './routes/alerts/$alertId'
+import { Route as UiMonitoringMonitorIdIndexRouteImport } from './routes/ui-monitoring/$monitorId/index'
 import { Route as MonitorsMonitorIdIndexRouteImport } from './routes/monitors/$monitorId/index'
+import { Route as UiMonitoringMonitorIdSettingsRouteImport } from './routes/ui-monitoring/$monitorId/settings'
+import { Route as UiMonitoringMonitorIdRunsRouteImport } from './routes/ui-monitoring/$monitorId/runs'
+import { Route as UiMonitoringMonitorIdMetricsRouteImport } from './routes/ui-monitoring/$monitorId/metrics'
+import { Route as UiMonitoringMonitorIdJourneyRouteImport } from './routes/ui-monitoring/$monitorId/journey'
+import { Route as UiMonitoringMonitorIdBaselinesRouteImport } from './routes/ui-monitoring/$monitorId/baselines'
 import { Route as MonitorsMonitorIdRunsRouteImport } from './routes/monitors/$monitorId/runs'
 import { Route as MonitorsMonitorIdRevisionsRouteImport } from './routes/monitors/$monitorId/revisions'
 import { Route as MonitorsMonitorIdMetricsRouteImport } from './routes/monitors/$monitorId/metrics'
 import { Route as MonitorsMonitorIdEditRouteImport } from './routes/monitors/$monitorId/edit'
 import { Route as ElfRunRunIdRouteImport } from './routes/elf/run/$runId'
 import { Route as DocsCurrentSplatRouteImport } from './routes/docs/current/$'
+import { Route as ApiBrowserArtifactsArtifactIdRouteImport } from './routes/api/browser-artifacts/$artifactId'
+import { Route as UiMonitoringMonitorIdRunsIndexRouteImport } from './routes/ui-monitoring/$monitorId/runs/index'
 import { Route as MonitorsMonitorIdRunsIndexRouteImport } from './routes/monitors/$monitorId/runs/index'
+import { Route as UiMonitoringMonitorIdRunsRunIdRouteImport } from './routes/ui-monitoring/$monitorId/runs/$runId'
 import { Route as MonitorsMonitorIdRunsRunIdRouteImport } from './routes/monitors/$monitorId/runs/$runId'
 
 const SuitesRoute = SuitesRouteImport.update({
@@ -75,6 +88,11 @@ const LlmsDottxtRoute = LlmsDottxtRouteImport.update({
 const LlmsFullDottxtRoute = LlmsFullDottxtRouteImport.update({
   id: '/llms-full.txt',
   path: '/llms-full.txt',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const HealthzRoute = HealthzRouteImport.update({
+  id: '/healthz',
+  path: '/healthz',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ElfRoute = ElfRouteImport.update({
@@ -112,6 +130,11 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UiMonitoringIndexRoute = UiMonitoringIndexRouteImport.update({
+  id: '/ui-monitoring/',
+  path: '/ui-monitoring/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MonitorsIndexRoute = MonitorsIndexRouteImport.update({
   id: '/monitors/',
   path: '/monitors/',
@@ -131,6 +154,16 @@ const AlertsIndexRoute = AlertsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AlertsRoute,
+} as any)
+const UiMonitoringNewRoute = UiMonitoringNewRouteImport.update({
+  id: '/ui-monitoring/new',
+  path: '/ui-monitoring/new',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const UiMonitoringMonitorIdRoute = UiMonitoringMonitorIdRouteImport.update({
+  id: '/ui-monitoring/$monitorId',
+  path: '/ui-monitoring/$monitorId',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const MonitorsNewRoute = MonitorsNewRouteImport.update({
   id: '/monitors/new',
@@ -189,11 +222,47 @@ const AlertsAlertIdRoute = AlertsAlertIdRouteImport.update({
   path: '/$alertId',
   getParentRoute: () => AlertsRoute,
 } as any)
+const UiMonitoringMonitorIdIndexRoute =
+  UiMonitoringMonitorIdIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
 const MonitorsMonitorIdIndexRoute = MonitorsMonitorIdIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => MonitorsMonitorIdRoute,
 } as any)
+const UiMonitoringMonitorIdSettingsRoute =
+  UiMonitoringMonitorIdSettingsRouteImport.update({
+    id: '/settings',
+    path: '/settings',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
+const UiMonitoringMonitorIdRunsRoute =
+  UiMonitoringMonitorIdRunsRouteImport.update({
+    id: '/runs',
+    path: '/runs',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
+const UiMonitoringMonitorIdMetricsRoute =
+  UiMonitoringMonitorIdMetricsRouteImport.update({
+    id: '/metrics',
+    path: '/metrics',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
+const UiMonitoringMonitorIdJourneyRoute =
+  UiMonitoringMonitorIdJourneyRouteImport.update({
+    id: '/journey',
+    path: '/journey',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
+const UiMonitoringMonitorIdBaselinesRoute =
+  UiMonitoringMonitorIdBaselinesRouteImport.update({
+    id: '/baselines',
+    path: '/baselines',
+    getParentRoute: () => UiMonitoringMonitorIdRoute,
+  } as any)
 const MonitorsMonitorIdRunsRoute = MonitorsMonitorIdRunsRouteImport.update({
   id: '/runs',
   path: '/runs',
@@ -226,11 +295,29 @@ const DocsCurrentSplatRoute = DocsCurrentSplatRouteImport.update({
   path: '/docs/current/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiBrowserArtifactsArtifactIdRoute =
+  ApiBrowserArtifactsArtifactIdRouteImport.update({
+    id: '/api/browser-artifacts/$artifactId',
+    path: '/api/browser-artifacts/$artifactId',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const UiMonitoringMonitorIdRunsIndexRoute =
+  UiMonitoringMonitorIdRunsIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => UiMonitoringMonitorIdRunsRoute,
+  } as any)
 const MonitorsMonitorIdRunsIndexRoute =
   MonitorsMonitorIdRunsIndexRouteImport.update({
     id: '/',
     path: '/',
     getParentRoute: () => MonitorsMonitorIdRunsRoute,
+  } as any)
+const UiMonitoringMonitorIdRunsRunIdRoute =
+  UiMonitoringMonitorIdRunsRunIdRouteImport.update({
+    id: '/$runId',
+    path: '/$runId',
+    getParentRoute: () => UiMonitoringMonitorIdRunsRoute,
   } as any)
 const MonitorsMonitorIdRunsRunIdRoute =
   MonitorsMonitorIdRunsRunIdRouteImport.update({
@@ -247,6 +334,7 @@ export interface FileRoutesByFullPath {
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
   '/elf': typeof ElfRouteWithChildren
+  '/healthz': typeof HealthzRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/rhythm': typeof RhythmRoute
@@ -264,25 +352,38 @@ export interface FileRoutesByFullPath {
   '/elf/settings': typeof ElfSettingsRoute
   '/monitors/$monitorId': typeof MonitorsMonitorIdRouteWithChildren
   '/monitors/new': typeof MonitorsNewRoute
+  '/ui-monitoring/$monitorId': typeof UiMonitoringMonitorIdRouteWithChildren
+  '/ui-monitoring/new': typeof UiMonitoringNewRoute
   '/alerts/': typeof AlertsIndexRoute
   '/applications/': typeof ApplicationsIndexRoute
   '/elf/': typeof ElfIndexRoute
   '/monitors/': typeof MonitorsIndexRoute
+  '/ui-monitoring/': typeof UiMonitoringIndexRoute
+  '/api/browser-artifacts/$artifactId': typeof ApiBrowserArtifactsArtifactIdRoute
   '/docs/current/$': typeof DocsCurrentSplatRoute
   '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/ui-monitoring/$monitorId/baselines': typeof UiMonitoringMonitorIdBaselinesRoute
+  '/ui-monitoring/$monitorId/journey': typeof UiMonitoringMonitorIdJourneyRoute
+  '/ui-monitoring/$monitorId/metrics': typeof UiMonitoringMonitorIdMetricsRoute
+  '/ui-monitoring/$monitorId/runs': typeof UiMonitoringMonitorIdRunsRouteWithChildren
+  '/ui-monitoring/$monitorId/settings': typeof UiMonitoringMonitorIdSettingsRoute
   '/monitors/$monitorId/': typeof MonitorsMonitorIdIndexRoute
+  '/ui-monitoring/$monitorId/': typeof UiMonitoringMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/ui-monitoring/$monitorId/runs/$runId': typeof UiMonitoringMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
+  '/ui-monitoring/$monitorId/runs/': typeof UiMonitoringMonitorIdRunsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
+  '/healthz': typeof HealthzRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/rhythm': typeof RhythmRoute
@@ -299,18 +400,28 @@ export interface FileRoutesByTo {
   '/elf/runs': typeof ElfRunsRoute
   '/elf/settings': typeof ElfSettingsRoute
   '/monitors/new': typeof MonitorsNewRoute
+  '/ui-monitoring/new': typeof UiMonitoringNewRoute
   '/alerts': typeof AlertsIndexRoute
   '/applications': typeof ApplicationsIndexRoute
   '/elf': typeof ElfIndexRoute
   '/monitors': typeof MonitorsIndexRoute
+  '/ui-monitoring': typeof UiMonitoringIndexRoute
+  '/api/browser-artifacts/$artifactId': typeof ApiBrowserArtifactsArtifactIdRoute
   '/docs/current/$': typeof DocsCurrentSplatRoute
   '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
+  '/ui-monitoring/$monitorId/baselines': typeof UiMonitoringMonitorIdBaselinesRoute
+  '/ui-monitoring/$monitorId/journey': typeof UiMonitoringMonitorIdJourneyRoute
+  '/ui-monitoring/$monitorId/metrics': typeof UiMonitoringMonitorIdMetricsRoute
+  '/ui-monitoring/$monitorId/settings': typeof UiMonitoringMonitorIdSettingsRoute
   '/monitors/$monitorId': typeof MonitorsMonitorIdIndexRoute
+  '/ui-monitoring/$monitorId': typeof UiMonitoringMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/ui-monitoring/$monitorId/runs/$runId': typeof UiMonitoringMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsIndexRoute
+  '/ui-monitoring/$monitorId/runs': typeof UiMonitoringMonitorIdRunsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -321,6 +432,7 @@ export interface FileRoutesById {
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
   '/elf': typeof ElfRouteWithChildren
+  '/healthz': typeof HealthzRoute
   '/llms-full.txt': typeof LlmsFullDottxtRoute
   '/llms.txt': typeof LlmsDottxtRoute
   '/rhythm': typeof RhythmRoute
@@ -338,19 +450,31 @@ export interface FileRoutesById {
   '/elf/settings': typeof ElfSettingsRoute
   '/monitors/$monitorId': typeof MonitorsMonitorIdRouteWithChildren
   '/monitors/new': typeof MonitorsNewRoute
+  '/ui-monitoring/$monitorId': typeof UiMonitoringMonitorIdRouteWithChildren
+  '/ui-monitoring/new': typeof UiMonitoringNewRoute
   '/alerts/': typeof AlertsIndexRoute
   '/applications/': typeof ApplicationsIndexRoute
   '/elf/': typeof ElfIndexRoute
   '/monitors/': typeof MonitorsIndexRoute
+  '/ui-monitoring/': typeof UiMonitoringIndexRoute
+  '/api/browser-artifacts/$artifactId': typeof ApiBrowserArtifactsArtifactIdRoute
   '/docs/current/$': typeof DocsCurrentSplatRoute
   '/elf/run/$runId': typeof ElfRunRunIdRoute
   '/monitors/$monitorId/edit': typeof MonitorsMonitorIdEditRoute
   '/monitors/$monitorId/metrics': typeof MonitorsMonitorIdMetricsRoute
   '/monitors/$monitorId/revisions': typeof MonitorsMonitorIdRevisionsRoute
   '/monitors/$monitorId/runs': typeof MonitorsMonitorIdRunsRouteWithChildren
+  '/ui-monitoring/$monitorId/baselines': typeof UiMonitoringMonitorIdBaselinesRoute
+  '/ui-monitoring/$monitorId/journey': typeof UiMonitoringMonitorIdJourneyRoute
+  '/ui-monitoring/$monitorId/metrics': typeof UiMonitoringMonitorIdMetricsRoute
+  '/ui-monitoring/$monitorId/runs': typeof UiMonitoringMonitorIdRunsRouteWithChildren
+  '/ui-monitoring/$monitorId/settings': typeof UiMonitoringMonitorIdSettingsRoute
   '/monitors/$monitorId/': typeof MonitorsMonitorIdIndexRoute
+  '/ui-monitoring/$monitorId/': typeof UiMonitoringMonitorIdIndexRoute
   '/monitors/$monitorId/runs/$runId': typeof MonitorsMonitorIdRunsRunIdRoute
+  '/ui-monitoring/$monitorId/runs/$runId': typeof UiMonitoringMonitorIdRunsRunIdRoute
   '/monitors/$monitorId/runs/': typeof MonitorsMonitorIdRunsIndexRoute
+  '/ui-monitoring/$monitorId/runs/': typeof UiMonitoringMonitorIdRunsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -362,6 +486,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/configuration'
     | '/elf'
+    | '/healthz'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/rhythm'
@@ -379,25 +504,38 @@ export interface FileRouteTypes {
     | '/elf/settings'
     | '/monitors/$monitorId'
     | '/monitors/new'
+    | '/ui-monitoring/$monitorId'
+    | '/ui-monitoring/new'
     | '/alerts/'
     | '/applications/'
     | '/elf/'
     | '/monitors/'
+    | '/ui-monitoring/'
+    | '/api/browser-artifacts/$artifactId'
     | '/docs/current/$'
     | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
     | '/monitors/$monitorId/runs'
+    | '/ui-monitoring/$monitorId/baselines'
+    | '/ui-monitoring/$monitorId/journey'
+    | '/ui-monitoring/$monitorId/metrics'
+    | '/ui-monitoring/$monitorId/runs'
+    | '/ui-monitoring/$monitorId/settings'
     | '/monitors/$monitorId/'
+    | '/ui-monitoring/$monitorId/'
     | '/monitors/$monitorId/runs/$runId'
+    | '/ui-monitoring/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs/'
+    | '/ui-monitoring/$monitorId/runs/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/agents'
     | '/audit'
     | '/configuration'
+    | '/healthz'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/rhythm'
@@ -414,18 +552,28 @@ export interface FileRouteTypes {
     | '/elf/runs'
     | '/elf/settings'
     | '/monitors/new'
+    | '/ui-monitoring/new'
     | '/alerts'
     | '/applications'
     | '/elf'
     | '/monitors'
+    | '/ui-monitoring'
+    | '/api/browser-artifacts/$artifactId'
     | '/docs/current/$'
     | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
+    | '/ui-monitoring/$monitorId/baselines'
+    | '/ui-monitoring/$monitorId/journey'
+    | '/ui-monitoring/$monitorId/metrics'
+    | '/ui-monitoring/$monitorId/settings'
     | '/monitors/$monitorId'
+    | '/ui-monitoring/$monitorId'
     | '/monitors/$monitorId/runs/$runId'
+    | '/ui-monitoring/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs'
+    | '/ui-monitoring/$monitorId/runs'
   id:
     | '__root__'
     | '/'
@@ -435,6 +583,7 @@ export interface FileRouteTypes {
     | '/audit'
     | '/configuration'
     | '/elf'
+    | '/healthz'
     | '/llms-full.txt'
     | '/llms.txt'
     | '/rhythm'
@@ -452,19 +601,31 @@ export interface FileRouteTypes {
     | '/elf/settings'
     | '/monitors/$monitorId'
     | '/monitors/new'
+    | '/ui-monitoring/$monitorId'
+    | '/ui-monitoring/new'
     | '/alerts/'
     | '/applications/'
     | '/elf/'
     | '/monitors/'
+    | '/ui-monitoring/'
+    | '/api/browser-artifacts/$artifactId'
     | '/docs/current/$'
     | '/elf/run/$runId'
     | '/monitors/$monitorId/edit'
     | '/monitors/$monitorId/metrics'
     | '/monitors/$monitorId/revisions'
     | '/monitors/$monitorId/runs'
+    | '/ui-monitoring/$monitorId/baselines'
+    | '/ui-monitoring/$monitorId/journey'
+    | '/ui-monitoring/$monitorId/metrics'
+    | '/ui-monitoring/$monitorId/runs'
+    | '/ui-monitoring/$monitorId/settings'
     | '/monitors/$monitorId/'
+    | '/ui-monitoring/$monitorId/'
     | '/monitors/$monitorId/runs/$runId'
+    | '/ui-monitoring/$monitorId/runs/$runId'
     | '/monitors/$monitorId/runs/'
+    | '/ui-monitoring/$monitorId/runs/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -475,6 +636,7 @@ export interface RootRouteChildren {
   AuditRoute: typeof AuditRoute
   ConfigurationRoute: typeof ConfigurationRoute
   ElfRoute: typeof ElfRouteWithChildren
+  HealthzRoute: typeof HealthzRoute
   LlmsFullDottxtRoute: typeof LlmsFullDottxtRoute
   LlmsDottxtRoute: typeof LlmsDottxtRoute
   RhythmRoute: typeof RhythmRoute
@@ -487,7 +649,11 @@ export interface RootRouteChildren {
   DocsSplatRoute: typeof DocsSplatRoute
   MonitorsMonitorIdRoute: typeof MonitorsMonitorIdRouteWithChildren
   MonitorsNewRoute: typeof MonitorsNewRoute
+  UiMonitoringMonitorIdRoute: typeof UiMonitoringMonitorIdRouteWithChildren
+  UiMonitoringNewRoute: typeof UiMonitoringNewRoute
   MonitorsIndexRoute: typeof MonitorsIndexRoute
+  UiMonitoringIndexRoute: typeof UiMonitoringIndexRoute
+  ApiBrowserArtifactsArtifactIdRoute: typeof ApiBrowserArtifactsArtifactIdRoute
   DocsCurrentSplatRoute: typeof DocsCurrentSplatRoute
 }
 
@@ -533,6 +699,13 @@ declare module '@tanstack/react-router' {
       path: '/llms-full.txt'
       fullPath: '/llms-full.txt'
       preLoaderRoute: typeof LlmsFullDottxtRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/healthz': {
+      id: '/healthz'
+      path: '/healthz'
+      fullPath: '/healthz'
+      preLoaderRoute: typeof HealthzRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/elf': {
@@ -584,6 +757,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/ui-monitoring/': {
+      id: '/ui-monitoring/'
+      path: '/ui-monitoring'
+      fullPath: '/ui-monitoring/'
+      preLoaderRoute: typeof UiMonitoringIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/monitors/': {
       id: '/monitors/'
       path: '/monitors'
@@ -611,6 +791,20 @@ declare module '@tanstack/react-router' {
       fullPath: '/alerts/'
       preLoaderRoute: typeof AlertsIndexRouteImport
       parentRoute: typeof AlertsRoute
+    }
+    '/ui-monitoring/new': {
+      id: '/ui-monitoring/new'
+      path: '/ui-monitoring/new'
+      fullPath: '/ui-monitoring/new'
+      preLoaderRoute: typeof UiMonitoringNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ui-monitoring/$monitorId': {
+      id: '/ui-monitoring/$monitorId'
+      path: '/ui-monitoring/$monitorId'
+      fullPath: '/ui-monitoring/$monitorId'
+      preLoaderRoute: typeof UiMonitoringMonitorIdRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/monitors/new': {
       id: '/monitors/new'
@@ -689,12 +883,54 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AlertsAlertIdRouteImport
       parentRoute: typeof AlertsRoute
     }
+    '/ui-monitoring/$monitorId/': {
+      id: '/ui-monitoring/$monitorId/'
+      path: '/'
+      fullPath: '/ui-monitoring/$monitorId/'
+      preLoaderRoute: typeof UiMonitoringMonitorIdIndexRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
+    }
     '/monitors/$monitorId/': {
       id: '/monitors/$monitorId/'
       path: '/'
       fullPath: '/monitors/$monitorId/'
       preLoaderRoute: typeof MonitorsMonitorIdIndexRouteImport
       parentRoute: typeof MonitorsMonitorIdRoute
+    }
+    '/ui-monitoring/$monitorId/settings': {
+      id: '/ui-monitoring/$monitorId/settings'
+      path: '/settings'
+      fullPath: '/ui-monitoring/$monitorId/settings'
+      preLoaderRoute: typeof UiMonitoringMonitorIdSettingsRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
+    }
+    '/ui-monitoring/$monitorId/runs': {
+      id: '/ui-monitoring/$monitorId/runs'
+      path: '/runs'
+      fullPath: '/ui-monitoring/$monitorId/runs'
+      preLoaderRoute: typeof UiMonitoringMonitorIdRunsRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
+    }
+    '/ui-monitoring/$monitorId/metrics': {
+      id: '/ui-monitoring/$monitorId/metrics'
+      path: '/metrics'
+      fullPath: '/ui-monitoring/$monitorId/metrics'
+      preLoaderRoute: typeof UiMonitoringMonitorIdMetricsRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
+    }
+    '/ui-monitoring/$monitorId/journey': {
+      id: '/ui-monitoring/$monitorId/journey'
+      path: '/journey'
+      fullPath: '/ui-monitoring/$monitorId/journey'
+      preLoaderRoute: typeof UiMonitoringMonitorIdJourneyRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
+    }
+    '/ui-monitoring/$monitorId/baselines': {
+      id: '/ui-monitoring/$monitorId/baselines'
+      path: '/baselines'
+      fullPath: '/ui-monitoring/$monitorId/baselines'
+      preLoaderRoute: typeof UiMonitoringMonitorIdBaselinesRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRoute
     }
     '/monitors/$monitorId/runs': {
       id: '/monitors/$monitorId/runs'
@@ -738,12 +974,33 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DocsCurrentSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/browser-artifacts/$artifactId': {
+      id: '/api/browser-artifacts/$artifactId'
+      path: '/api/browser-artifacts/$artifactId'
+      fullPath: '/api/browser-artifacts/$artifactId'
+      preLoaderRoute: typeof ApiBrowserArtifactsArtifactIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ui-monitoring/$monitorId/runs/': {
+      id: '/ui-monitoring/$monitorId/runs/'
+      path: '/'
+      fullPath: '/ui-monitoring/$monitorId/runs/'
+      preLoaderRoute: typeof UiMonitoringMonitorIdRunsIndexRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRunsRoute
+    }
     '/monitors/$monitorId/runs/': {
       id: '/monitors/$monitorId/runs/'
       path: '/'
       fullPath: '/monitors/$monitorId/runs/'
       preLoaderRoute: typeof MonitorsMonitorIdRunsIndexRouteImport
       parentRoute: typeof MonitorsMonitorIdRunsRoute
+    }
+    '/ui-monitoring/$monitorId/runs/$runId': {
+      id: '/ui-monitoring/$monitorId/runs/$runId'
+      path: '/$runId'
+      fullPath: '/ui-monitoring/$monitorId/runs/$runId'
+      preLoaderRoute: typeof UiMonitoringMonitorIdRunsRunIdRouteImport
+      parentRoute: typeof UiMonitoringMonitorIdRunsRoute
     }
     '/monitors/$monitorId/runs/$runId': {
       id: '/monitors/$monitorId/runs/$runId'
@@ -834,6 +1091,45 @@ const MonitorsMonitorIdRouteChildren: MonitorsMonitorIdRouteChildren = {
 const MonitorsMonitorIdRouteWithChildren =
   MonitorsMonitorIdRoute._addFileChildren(MonitorsMonitorIdRouteChildren)
 
+interface UiMonitoringMonitorIdRunsRouteChildren {
+  UiMonitoringMonitorIdRunsRunIdRoute: typeof UiMonitoringMonitorIdRunsRunIdRoute
+  UiMonitoringMonitorIdRunsIndexRoute: typeof UiMonitoringMonitorIdRunsIndexRoute
+}
+
+const UiMonitoringMonitorIdRunsRouteChildren: UiMonitoringMonitorIdRunsRouteChildren =
+  {
+    UiMonitoringMonitorIdRunsRunIdRoute: UiMonitoringMonitorIdRunsRunIdRoute,
+    UiMonitoringMonitorIdRunsIndexRoute: UiMonitoringMonitorIdRunsIndexRoute,
+  }
+
+const UiMonitoringMonitorIdRunsRouteWithChildren =
+  UiMonitoringMonitorIdRunsRoute._addFileChildren(
+    UiMonitoringMonitorIdRunsRouteChildren,
+  )
+
+interface UiMonitoringMonitorIdRouteChildren {
+  UiMonitoringMonitorIdBaselinesRoute: typeof UiMonitoringMonitorIdBaselinesRoute
+  UiMonitoringMonitorIdJourneyRoute: typeof UiMonitoringMonitorIdJourneyRoute
+  UiMonitoringMonitorIdMetricsRoute: typeof UiMonitoringMonitorIdMetricsRoute
+  UiMonitoringMonitorIdRunsRoute: typeof UiMonitoringMonitorIdRunsRouteWithChildren
+  UiMonitoringMonitorIdSettingsRoute: typeof UiMonitoringMonitorIdSettingsRoute
+  UiMonitoringMonitorIdIndexRoute: typeof UiMonitoringMonitorIdIndexRoute
+}
+
+const UiMonitoringMonitorIdRouteChildren: UiMonitoringMonitorIdRouteChildren = {
+  UiMonitoringMonitorIdBaselinesRoute: UiMonitoringMonitorIdBaselinesRoute,
+  UiMonitoringMonitorIdJourneyRoute: UiMonitoringMonitorIdJourneyRoute,
+  UiMonitoringMonitorIdMetricsRoute: UiMonitoringMonitorIdMetricsRoute,
+  UiMonitoringMonitorIdRunsRoute: UiMonitoringMonitorIdRunsRouteWithChildren,
+  UiMonitoringMonitorIdSettingsRoute: UiMonitoringMonitorIdSettingsRoute,
+  UiMonitoringMonitorIdIndexRoute: UiMonitoringMonitorIdIndexRoute,
+}
+
+const UiMonitoringMonitorIdRouteWithChildren =
+  UiMonitoringMonitorIdRoute._addFileChildren(
+    UiMonitoringMonitorIdRouteChildren,
+  )
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentsRoute: AgentsRoute,
@@ -842,6 +1138,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuditRoute: AuditRoute,
   ConfigurationRoute: ConfigurationRoute,
   ElfRoute: ElfRouteWithChildren,
+  HealthzRoute: HealthzRoute,
   LlmsFullDottxtRoute: LlmsFullDottxtRoute,
   LlmsDottxtRoute: LlmsDottxtRoute,
   RhythmRoute: RhythmRoute,
@@ -854,7 +1151,11 @@ const rootRouteChildren: RootRouteChildren = {
   DocsSplatRoute: DocsSplatRoute,
   MonitorsMonitorIdRoute: MonitorsMonitorIdRouteWithChildren,
   MonitorsNewRoute: MonitorsNewRoute,
+  UiMonitoringMonitorIdRoute: UiMonitoringMonitorIdRouteWithChildren,
+  UiMonitoringNewRoute: UiMonitoringNewRoute,
   MonitorsIndexRoute: MonitorsIndexRoute,
+  UiMonitoringIndexRoute: UiMonitoringIndexRoute,
+  ApiBrowserArtifactsArtifactIdRoute: ApiBrowserArtifactsArtifactIdRoute,
   DocsCurrentSplatRoute: DocsCurrentSplatRoute,
 }
 export const routeTree = rootRouteImport

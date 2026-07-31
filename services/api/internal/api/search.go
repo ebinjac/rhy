@@ -186,6 +186,19 @@ func (s *server) appendWorkspaceResources(r *http.Request, result *searchRespons
 		result.Resources = append(result.Resources, hit)
 	}
 
+	if s.browserMonitors != nil {
+		if monitors, err := s.browserMonitors.List(r.Context()); err == nil {
+			for _, monitor := range monitors {
+				appendHit(searchResourceHit{
+					Kind: "BROWSER_MONITOR", ID: monitor.ID, Name: monitor.Name,
+					Description: monitor.Description, Context: monitor.ApplicationName + " · " + monitor.ServiceName,
+					ApplicationID: monitor.ApplicationID, Status: monitor.Health,
+				}, monitor.ID, monitor.Name, monitor.Slug, monitor.Description, monitor.ApplicationName,
+					monitor.ServiceName, monitor.EnvironmentName, monitor.Health, monitor.LastStatus)
+			}
+		}
+	}
+
 	if s.elf != nil {
 		if applications, err := s.elf.ListApplications(r.Context()); err == nil {
 			for _, application := range applications {
@@ -307,6 +320,8 @@ func matchAlert(alert alerts.Alert, needle string) bool {
 		alert.Severity,
 		alert.MonitorID,
 		alert.MonitorName,
+		alert.BrowserMonitorID,
+		alert.BrowserMonitorName,
 		alert.ApplicationName,
 		alert.ApplicationCARID,
 		alert.ServiceName,
