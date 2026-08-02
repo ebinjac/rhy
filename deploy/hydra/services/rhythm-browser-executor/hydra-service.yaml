@@ -1,0 +1,23 @@
+# Console onboarding contract. Replace placeholders before creating the service.
+project: <HYDRA_PROJECT_NAME>
+service: rhythm-browser-executor
+description: Rhythm browser execution, Chromium, and visual diagnostics.
+platform: on-prem
+network: intranet
+maximumEnvironment: e3
+workloadType: regular-application
+persistentStorage: none
+deploymentMethod: rolling
+applicationType: api
+routability:
+  mode: non-routable
+  sso: false
+  automaticFailover: true
+certificates:
+  corporateTrustFromBuildpack: true
+  inboundMutualTLS: false
+  outboundMutualTLS: false
+  messageSigning: false
+workflow: .github/workflows/deploy-rhythm-browser-executor.yml
+valuesPath: deploy/hydra/services/rhythm-browser-executor/helm
+dockerfile: deploy/hydra/services/rhythm-browser-executor/Dockerfile

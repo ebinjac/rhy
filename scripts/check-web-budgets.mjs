@@ -31,6 +31,7 @@ const sharedCSS = measurements
 const failures = []
 check("shared JavaScript", sharedJavaScript, limits.sharedJavaScriptGzip)
 check("shared CSS", sharedCSS, limits.sharedCSSGzip)
+await checkRequiredProductStyles(sharedCSS)
 for (const item of measurements.filter((candidate) => candidate.entry.endsWith(".js"))) {
   if (item === sharedJavaScript) continue
   if (item.gzip > limits.routeChunkGzip) {
@@ -66,6 +67,23 @@ function check(label, measurement, limit) {
   if (measurement.gzip > limit) {
     failures.push(
       `${basename(measurement.entry)} is ${kilobytes(measurement.gzip)} gzip; ${label} must be ≤ ${kilobytes(limit)}`
+    )
+  }
+}
+
+async function checkRequiredProductStyles(measurement) {
+  if (!measurement) return
+
+  const css = await readFile(join(assets.pathname, measurement.entry), "utf8")
+  const requiredSelectors = [
+    ".-translate-y-20{",
+    ".top-3{",
+    ".focus\\:translate-y-0:focus{",
+  ]
+  const missing = requiredSelectors.filter((selector) => !css.includes(selector))
+  if (missing.length > 0) {
+    failures.push(
+      `product CSS source scan is incomplete; missing critical selectors: ${missing.join(", ")}`
     )
   }
 }

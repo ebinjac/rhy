@@ -4,6 +4,7 @@ import { stat } from "node:fs/promises"
 import { createServer } from "node:http"
 import { extname, join, normalize } from "node:path"
 import { Readable } from "node:stream"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { createBrotliCompress, createGzip, constants } from "node:zlib"
 
 import application from "./dist/server/server.js"
@@ -13,8 +14,33 @@ const port = Number.parseInt(process.env.PORT ?? "3000", 10)
 const clientRoot = join(process.cwd(), "apps/web/dist/client")
 const etags = new Map()
 
+const apiBaseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+const identityHeader = (process.env.RHYTHM_IDENTITY_HEADER ?? "X-Rhythm-User").toLowerCase()
+const groupsHeader = (process.env.RHYTHM_GROUPS_HEADER ?? "X-Rhythm-Groups").toLowerCase()
+const verificationHeader = (
+  process.env.RHYTHM_SSO_VERIFIED_HEADER ?? "X-Rhythm-Identity-Verified"
+).toLowerCase()
+const verificationValue = process.env.RHYTHM_SSO_VERIFIED_VALUE ?? "true"
+const requireVerifiedIdentity = process.env.RHYTHM_REQUIRE_VERIFIED_IDENTITY === "true"
+const requestIdentity = new AsyncLocalStorage()
+const nativeFetch = globalThis.fetch.bind(globalThis)
+
+// Server loaders call the Go API directly. Async-local propagation preserves
+// the verified actor for concurrent SSR requests without global mutable state.
+globalThis.fetch = (input, init = {}) => {
+  const target = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
+  if (target.origin !== new URL(apiBaseURL).origin) return nativeFetch(input, init)
+  const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
+  for (const [name, value] of Object.entries(requestIdentity.getStore() ?? {})) headers.set(name, value)
+  return nativeFetch(input, { ...init, headers })
+}
+
 const server = createServer(async (incoming, outgoing) => {
   try {
+    if (incoming.url === "/health" && incoming.method === "GET") {
+      await dependencyHealth(outgoing)
+      return
+    }
     if (incoming.url === "/healthz" || incoming.url === "/livez") {
       outgoing.writeHead(200, {
         "Cache-Control": "no-store",
@@ -25,6 +51,13 @@ const server = createServer(async (incoming, outgoing) => {
     }
     if (incoming.url === "/internal/web-vitals" && incoming.method === "POST") {
       await forwardWebVital(incoming, outgoing)
+      return
+    }
+    if (
+      incoming.url?.startsWith("/api/v1/") ||
+      incoming.url?.startsWith("/hooks/v1/")
+    ) {
+      await proxyAPI(incoming, outgoing)
       return
     }
     if (await serveStatic(incoming, outgoing)) return
@@ -39,7 +72,7 @@ const server = createServer(async (incoming, outgoing) => {
           : Readable.toWeb(incoming),
       duplex: "half",
     })
-    const response = await application.fetch(request)
+    const response = await requestIdentity.run(verifiedIdentity(incoming), () => application.fetch(request))
     await sendResponse(incoming, outgoing, response)
   } catch (error) {
     console.error("rhythm web request failed", error)
@@ -248,8 +281,7 @@ async function forwardWebVital(incoming, outgoing) {
     chunks.push(chunk)
   }
   try {
-    const api = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-    const response = await fetch(`${api}/internal/web-vitals`, {
+    const response = await fetch(`${apiBaseURL}/internal/web-vitals`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: Buffer.concat(chunks),
@@ -262,4 +294,87 @@ async function forwardWebVital(incoming, outgoing) {
     outgoing.writeHead(204, { "Cache-Control": "no-store" })
   }
   outgoing.end()
+}
+
+async function dependencyHealth(outgoing) {
+  try {
+    const response = await fetch(`${apiBaseURL}/readyz`, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(2_500),
+    })
+    const body = await response.text()
+    outgoing.writeHead(response.ok ? 200 : 503, {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+    })
+    outgoing.end(
+      body ||
+        JSON.stringify({
+          status: response.ok ? "ok" : "degraded",
+          service: "rhythm-frontdoor",
+        })
+    )
+  } catch {
+    outgoing.writeHead(503, {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+    })
+    outgoing.end(
+      JSON.stringify({
+        status: "degraded",
+        service: "rhythm-frontdoor",
+        dependency: "api",
+      })
+    )
+  }
+}
+
+async function proxyAPI(incoming, outgoing) {
+  const target = new URL(incoming.url ?? "/", apiBaseURL)
+  const headers = new Headers()
+  for (const [name, value] of Object.entries(incoming.headers)) {
+    if (
+      value === undefined ||
+      name.toLowerCase() === identityHeader ||
+      name.toLowerCase() === groupsHeader ||
+      name.toLowerCase() === verificationHeader ||
+      ["connection", "content-length", "host", "keep-alive", "transfer-encoding", "upgrade"].includes(
+        name.toLowerCase()
+      )
+    ) {
+      continue
+    }
+    headers.set(name, Array.isArray(value) ? value.join(", ") : value)
+  }
+  for (const [name, value] of Object.entries(verifiedIdentity(incoming))) headers.set(name, value)
+  const forwardedFor = String(incoming.socket.remoteAddress ?? "").trim()
+  if (forwardedFor) {
+    const existing = headers.get("x-forwarded-for")
+    headers.set("x-forwarded-for", existing ? `${existing}, ${forwardedFor}` : forwardedFor)
+  }
+  const response = await nativeFetch(target, {
+    method: incoming.method,
+    headers,
+    body:
+      incoming.method === "GET" || incoming.method === "HEAD"
+        ? undefined
+        : Readable.toWeb(incoming),
+    duplex: "half",
+    redirect: "manual",
+    signal: AbortSignal.timeout(30_000),
+  })
+  await sendResponse(incoming, outgoing, response)
+}
+
+function verifiedIdentity(incoming) {
+  if (
+    requireVerifiedIdentity &&
+    String(incoming.headers[verificationHeader] ?? "").trim() !== verificationValue
+  ) {
+    return {}
+  }
+  const identity = String(incoming.headers[identityHeader] ?? "").trim()
+  const groups = String(incoming.headers[groupsHeader] ?? "").trim()
+  if (!identity || !groups || identity.includes("\n") || identity.includes("\r")) return {}
+  return { [identityHeader]: identity, [groupsHeader]: groups }
 }

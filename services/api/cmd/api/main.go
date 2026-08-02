@@ -42,6 +42,10 @@ func main() {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
+	roleAPI := cfg.RuntimeRole == "all" || cfg.RuntimeRole == "api"
+	roleControl := cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "scheduler" || cfg.RuntimeRole == "background"
+	roleWorker := cfg.RuntimeRole == "all" || cfg.RuntimeRole == "worker"
+	roleBrowser := cfg.RuntimeRole == "all" || cfg.RuntimeRole == "browser"
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	checks := make(map[string]func(context.Context) error)
@@ -51,7 +55,7 @@ func main() {
 	var agentRepository agents.Repository
 	var postgresPool *pgxpool.Pool
 	var postgresRunRepository *postgres.RunRepository
-	var redisClient *redis.Client
+	var redisClient redis.UniversalClient
 	if cfg.StorageMode == "postgres" {
 		pool, openErr := postgres.OpenWithOptions(context.Background(), cfg.DatabaseURL, postgres.PoolOptions{
 			MaxConnections:  int32(cfg.DatabaseMaxConns),
@@ -64,6 +68,11 @@ func main() {
 		}
 		defer pool.Close()
 		postgresPool = pool
+		if cfg.RequiredSchemaVersion != "" {
+			checks["schema"] = func(ctx context.Context) error {
+				return postgres.CheckRequiredSchema(ctx, pool, cfg.RequiredSchemaVersion)
+			}
+		}
 		repository = postgres.NewMonitorRepository(pool)
 		postgresRunRepository = postgres.NewRunRepository(pool)
 		runRepository = postgresRunRepository
@@ -76,8 +85,12 @@ func main() {
 		suiteRepository = suites.NewMemoryRepository()
 		agentRepository = agents.NewMemoryRepository()
 	}
-	if cfg.RedisURL != "" {
-		openedRedis, openErr := queue.OpenRedis(context.Background(), cfg.RedisURL)
+	if cfg.RedisURL != "" || len(cfg.RedisAddrs) > 0 {
+		openedRedis, openErr := queue.OpenRedisWithConfig(context.Background(), queue.RedisConfig{
+			URL: cfg.RedisURL, Mode: cfg.RedisMode, Addrs: cfg.RedisAddrs,
+			Username: cfg.RedisUsername, Password: cfg.RedisPassword,
+			DB: cfg.RedisDB, TLS: cfg.RedisTLS,
+		})
 		if openErr != nil {
 			logger.Error("open Redis", "error", openErr)
 			os.Exit(1)
@@ -101,16 +114,23 @@ func main() {
 		executor = runs.NewHTTPExecutorWithResolver(cfg.AllowPrivateTargets, libraryService)
 	}
 	executor.SetTargetHostConcurrency(cfg.TargetHostConcurrency)
+	if policyErr := executor.SetPrivateTargetAllowlist(cfg.PrivateTargetHosts, cfg.PrivateTargetCIDRs); policyErr != nil {
+		logger.Error("configure private target policy", "error", policyErr)
+		os.Exit(1)
+	}
 	if redisClient != nil {
 		executor.SetTargetConcurrencyLimiter(runs.NewRedisTargetLimiter(redisClient))
 	}
 	scriptClient := scripts.NewClient(cfg.ScriptRunnerURL, cfg.ScriptRunnerToken)
 	executor.SetScriptExecutor(scriptClient)
-	checks["script-runner"] = scriptClient.Health
+	if roleAPI || roleWorker {
+		checks["script-runner"] = scriptClient.Health
+	}
 	runService := runs.NewService(monitorService, runRepository, executor)
 	var executionJobService *executionjobs.Service
 	if postgresPool != nil && redisClient != nil {
 		executionJobService = executionjobs.New(postgresPool, redisClient, runService, logger, cfg.WorkerConcurrency)
+		executionJobService.SetMemoryStopPercent(cfg.WorkerMemoryStopPercent)
 	}
 	agentService := agents.New(agentRepository)
 	runService.SetAgentRouter(agentService)
@@ -123,7 +143,7 @@ func main() {
 	var dynatraceService *dynatrace.Service
 	var browserMonitorService *browsermonitors.Service
 	var retentionService *retention.Service
-	if postgresPool != nil && redisClient != nil {
+	if postgresPool != nil && redisClient != nil && roleControl {
 		schedulerService = scheduler.NewWithOptions(
 			postgresPool,
 			redisClient,
@@ -134,7 +154,7 @@ func main() {
 			time.Duration(cfg.SchedulerPollMS)*time.Millisecond,
 		)
 	}
-	if postgresPool != nil {
+	if postgresPool != nil && (roleAPI || roleControl) {
 		auditService = audit.New(postgresPool)
 		notificationService = notifications.New(postgresPool, libraryService, logger)
 		elfService = elf.New(postgresPool, libraryService, cfg.AllowPrivateTargets)
@@ -144,13 +164,16 @@ func main() {
 			dynatrace.NewEnvironmentV2Provider(cfg.DynatraceAllowedHosts, cfg.AllowPrivateTargets),
 		)
 		alertService = alerts.New(postgresPool, elfService)
+	}
+	if postgresPool != nil && (roleAPI || roleControl || roleBrowser) {
 		browserRunner := browsermonitors.NewHTTPRunner(cfg.BrowserRunnerURL, cfg.BrowserRunnerToken)
-		artifactStore, artifactErr := browsermonitors.NewMinIOArtifactStore(
-			cfg.ArtifactStoreURL,
-			cfg.ArtifactAccessKey,
-			cfg.ArtifactSecretKey,
-			cfg.ArtifactBucket,
-		)
+		artifactStore, artifactErr := browsermonitors.NewArtifactStore(context.Background(), browsermonitors.ArtifactStoreConfig{
+			Provider: cfg.ArtifactProvider, Endpoint: cfg.ArtifactStoreURL,
+			Region: cfg.ArtifactRegion, Bucket: cfg.ArtifactBucket, Prefix: cfg.ArtifactPrefix,
+			AccessKey: cfg.ArtifactAccessKey, SecretKey: cfg.ArtifactSecretKey,
+			KMSKeyID: cfg.ArtifactKMSKeyID, PathStyle: cfg.ArtifactPathStyle,
+			AutoCreate: cfg.ArtifactAutoCreate,
+		})
 		if artifactErr != nil {
 			logger.Error("configure browser artifact storage", "error", artifactErr)
 			os.Exit(1)
@@ -159,7 +182,7 @@ func main() {
 			logger.Error("initialize browser artifact storage", "error", artifactErr)
 			os.Exit(1)
 		}
-		if postgresRunRepository != nil {
+		if postgresRunRepository != nil && roleControl {
 			postgresRunRepository.SetWarmEvidenceStore(artifactStore)
 			retentionService = retention.New(postgresPool, postgresRunRepository, artifactStore, logger)
 		}
@@ -174,11 +197,15 @@ func main() {
 			logger.Error("configure browser monitoring", "error", err)
 			os.Exit(1)
 		}
-		if redisClient != nil {
+		if redisClient != nil && roleBrowser {
 			browserMonitorService.ConfigureQueue(redisClient, logger, cfg.BrowserJobConcurrency)
 		}
-		checks["browser-agent"] = browserRunner.Health
+		if roleAPI || roleBrowser {
+			checks["browser-agent"] = browserRunner.Health
+		}
 		checks["artifact-store"] = artifactStore.Ensure
+	}
+	if roleAPI && elfService != nil {
 		if cfg.ELFBootstrapURL != "" {
 			if err := elfService.EnsureDevelopmentSeed(context.Background(), cfg.ELFBootstrapURL, cfg.DevelopmentActorID); err != nil {
 				logger.Warn("bootstrap local ELF resources", "error", err)
@@ -189,6 +216,7 @@ func main() {
 				Host:     cfg.SMTPHost,
 				Port:     cfg.SMTPPort,
 				From:     cfg.SMTPFrom,
+				FromName: cfg.SMTPFromName,
 				Username: cfg.SMTPUsername,
 				Password: cfg.SMTPPassword,
 				To:       cfg.SMTPTo,
@@ -203,10 +231,32 @@ func main() {
 	suiteService.SetAlerts(alertService)
 	suiteService.SetDynatrace(dynatraceService)
 	suiteService.SetBrowser(browserMonitorService)
-	if redisClient != nil {
+	if redisClient != nil && roleControl {
 		suiteService.ConfigureQueue(redisClient, logger, cfg.DeploymentConcurrency)
 	}
-	authenticator := authz.NewDevelopmentAuthenticator(cfg.DevelopmentActorID)
+	var authenticator authz.Authenticator
+	if cfg.AuthMode == "trusted_headers" {
+		trusted, authErr := authz.NewTrustedHeaderAuthenticator(authz.TrustedHeaderConfig{
+			IdentityHeader:    cfg.IdentityHeader,
+			GroupsHeader:      cfg.GroupsHeader,
+			TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+			RoleGroups: map[authz.Role][]string{
+				authz.RoleAdministrator: cfg.AdminGroups,
+				authz.RoleEditor:        cfg.EditorGroups,
+				authz.RoleOperator:      cfg.OperatorGroups,
+				authz.RoleViewer:        cfg.ViewerGroups,
+			},
+		})
+		if authErr != nil {
+			logger.Error("configure trusted-header authentication", "error", authErr)
+			os.Exit(1)
+		}
+		authenticator = trusted
+	} else if cfg.AuthMode == "internal" {
+		authenticator = authz.RejectingAuthenticator{}
+	} else {
+		authenticator = authz.NewDevelopmentAuthenticator(cfg.DevelopmentActorID)
+	}
 
 	fullAPIHandler := api.NewServer(api.Dependencies{
 		Logger:              logger,
@@ -234,7 +284,12 @@ func main() {
 		handler = roleHealthHandler(cfg.RuntimeRole, checks)
 	}
 	handler = api.CompressResponse(handler)
-	metrics := observability.New(postgresPool, redisClient)
+	metrics := observability.New(postgresPool, redisClient, observability.CapacityConfig{
+		WorkerConcurrency:        cfg.ExecutorSlotsPerReplica,
+		MinReplicas:              cfg.ExecutorMinReplicas,
+		MaxReplicas:              cfg.ExecutorMaxReplicas,
+		TargetUtilizationPercent: cfg.ExecutorTargetPercent,
+	})
 	instrumented := metrics.Wrap(handler)
 	rootHandler := http.NewServeMux()
 	rootHandler.Handle("GET /metrics", metrics.Handler())
@@ -252,33 +307,33 @@ func main() {
 
 	shutdownContext, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	if executionJobService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "api" || cfg.RuntimeRole == "scheduler" || cfg.RuntimeRole == "background" || cfg.RuntimeRole == "browser") {
+	if executionJobService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "scheduler" || cfg.RuntimeRole == "background") {
 		executionJobService.StartDispatcher(shutdownContext)
 	}
 	if executionJobService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "worker") {
 		executionJobService.StartWorkers(shutdownContext)
 	}
-	if schedulerService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "scheduler") {
+	if schedulerService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "scheduler") {
 		schedulerService.Start(shutdownContext)
 	}
-	if notificationService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "background") {
+	if notificationService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		notificationService.Start(shutdownContext)
 	}
-	if alertService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "background") {
+	if alertService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		alertService.Start(shutdownContext)
 	}
 	if browserMonitorService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "background" || cfg.RuntimeRole == "browser") {
 		go browserMonitorService.Start(shutdownContext)
 	}
-	if suiteService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "background") {
+	if suiteService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		suiteService.StartQueueWorkers(shutdownContext)
 	}
-	if retentionService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "background") {
+	if retentionService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		retentionService.Start(shutdownContext)
 	}
 
 	go func() {
-		logger.Info("rhythm service listening", "address", cfg.HTTPAddr, "role", cfg.RuntimeRole, "authMode", "development", "storageMode", cfg.StorageMode)
+		logger.Info("rhythm service listening", "address", cfg.HTTPAddr, "role", cfg.RuntimeRole, "authMode", cfg.AuthMode, "storageMode", cfg.StorageMode)
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			logger.Error("api server failed", "error", serveErr)
 			os.Exit(1)
@@ -304,7 +359,7 @@ end
 return 1
 `)
 
-func redisWebhookRateLimiter(client *redis.Client) func(context.Context, string) (bool, error) {
+func redisWebhookRateLimiter(client redis.UniversalClient) func(context.Context, string) (bool, error) {
 	if client == nil {
 		return nil
 	}
@@ -344,5 +399,6 @@ func roleHealthHandler(role string, checks map[string]func(context.Context) erro
 	}
 	mux.HandleFunc("GET /readyz", ready)
 	mux.HandleFunc("GET /healthz", ready)
+	mux.HandleFunc("GET /health", ready)
 	return mux
 }

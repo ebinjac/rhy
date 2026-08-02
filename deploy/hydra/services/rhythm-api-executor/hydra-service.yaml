@@ -1,0 +1,23 @@
+# Console onboarding contract. Replace placeholders before creating the service.
+project: <HYDRA_PROJECT_NAME>
+service: rhythm-api-executor
+description: Rhythm API monitor execution and colocated JavaScript sandbox.
+platform: on-prem
+network: intranet
+maximumEnvironment: e3
+workloadType: regular-application
+persistentStorage: none
+deploymentMethod: rolling
+applicationType: api
+routability:
+  mode: non-routable
+  sso: false
+  automaticFailover: true
+certificates:
+  corporateTrustFromBuildpack: true
+  inboundMutualTLS: false
+  outboundMutualTLS: false
+  messageSigning: false
+workflow: .github/workflows/deploy-rhythm-api-executor.yml
+valuesPath: deploy/hydra/services/rhythm-api-executor/helm
+dockerfile: deploy/hydra/services/rhythm-api-executor/Dockerfile

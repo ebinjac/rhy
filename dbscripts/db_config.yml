@@ -1,0 +1,10 @@
+db_type: postgres
+lq_properties: dbscripts/liquibase.properties
+
+e1:
+  url: jdbc:postgresql://<E1_POSTGRES_HOST>:5432/<E1_DATABASE_NAME>?sslmode=verify-full
+e2:
+  url: jdbc:postgresql://<E2_POSTGRES_HOST>:5432/<E2_DATABASE_NAME>?sslmode=verify-full
+e3:
+  url: jdbc:postgresql://<E3_POSTGRES_HOST>:5432/<E3_DATABASE_NAME>?sslmode=verify-full
+

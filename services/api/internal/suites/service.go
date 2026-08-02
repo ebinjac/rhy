@@ -171,7 +171,7 @@ type Service struct {
 	now        func() time.Time
 	mu         sync.Mutex
 	cancels    map[string]context.CancelFunc
-	queueRedis *redis.Client
+	queueRedis redis.UniversalClient
 	queueLog   *slog.Logger
 	workerID   string
 	queueSlots chan struct{}
@@ -494,11 +494,17 @@ func (s *Service) runStage(ctx context.Context, suite Suite, stage Stage, actor 
 						}
 					}
 				default:
-					monitorRun, err := s.runs.Run(ctx, check.MonitorID, actor, "published")
+					monitorRun, err := s.runs.StartTriggered(ctx, check.MonitorID, actor, "VALIDATION_SUITE")
 					if err != nil {
 						result.FailureCategory, result.FailureReason = "EXECUTION_ERROR", safeError(err)
 					} else {
-						result.MonitorRunID, result.Status, result.FailureCategory, result.FailureReason = monitorRun.ID, string(monitorRun.Status), monitorRun.FailureCategory, monitorRun.FailureReason
+						result.MonitorRunID = monitorRun.ID
+						monitorRun, err = s.runs.WaitForTerminal(ctx, monitorRun.ID, 250*time.Millisecond)
+						if err != nil {
+							result.FailureCategory, result.FailureReason = "EXECUTION_ERROR", safeError(err)
+						} else {
+							result.Status, result.FailureCategory, result.FailureReason = string(monitorRun.Status), monitorRun.FailureCategory, monitorRun.FailureReason
+						}
 					}
 				}
 				result.DurationMS = s.now().Sub(started).Milliseconds()

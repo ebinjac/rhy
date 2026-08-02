@@ -66,6 +66,8 @@ type Input struct {
 	Scope               string            `json:"scope"`
 	Preview             bool              `json:"preview"`
 	AllowPrivateTargets bool              `json:"allowPrivateTargets"`
+	AllowedPrivateHosts []string          `json:"allowedPrivateHosts,omitempty"`
+	AllowedPrivateCIDRs []string          `json:"allowedPrivateCidrs,omitempty"`
 	Variables           map[string]string `json:"variables"`
 	Environment         map[string]string `json:"environment"`
 	Collection          map[string]string `json:"collection"`

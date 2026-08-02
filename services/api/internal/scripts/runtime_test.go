@@ -97,6 +97,26 @@ pm.variables.set("token", response.json().token);
 	}
 }
 
+func TestSendRequestUsesGovernedPrivateCIDR(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"allowed":true}`))
+	}))
+	defer target.Close()
+	code := fmt.Sprintf(`const response = await pm.sendRequest(%q); pm.test("allowed", () => pm.expect(response.json().allowed).to.equal(true));`, target.URL)
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script:              Script{Enabled: true, Code: code, RuntimeVersion: RuntimeVersion},
+		AllowedPrivateCIDRs: []string{"127.0.0.0/8"}, Variables: map[string]string{},
+		Collection: map[string]string{}, Environment: map[string]string{}, Globals: map[string]string{}, TimeoutMS: 2000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" {
+		t.Fatalf("expected governed pm.sendRequest target to succeed, got %#v", result)
+	}
+}
+
 func TestRuntimeRecordsMultipleAuxiliaryRequestsInOrder(t *testing.T) {
 	var hits []string
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

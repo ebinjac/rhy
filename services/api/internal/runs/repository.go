@@ -10,6 +10,14 @@ import (
 
 var ErrAlreadyQueued = errors.New("run is already queued")
 
+type ExecutionSnapshot struct {
+	MonitorName    string     `json:"monitorName"`
+	EnvironmentID  string     `json:"environmentId,omitempty"`
+	RevisionID     string     `json:"revisionId"`
+	RevisionNumber int        `json:"revisionNumber"`
+	Definition     Definition `json:"definition"`
+}
+
 type Repository interface {
 	Save(context.Context, Run) error
 	List(context.Context, string, int) ([]Run, error)
@@ -18,15 +26,17 @@ type Repository interface {
 }
 
 type QueueRequest struct {
-	MonitorID         string    `json:"monitorId"`
-	ActorID           string    `json:"actorId"`
-	Mode              string    `json:"mode"`
-	TriggerType       string    `json:"triggerType,omitempty"`
-	ScheduleID        string    `json:"scheduleId,omitempty"`
-	ConcurrencyPolicy string    `json:"concurrencyPolicy,omitempty"`
-	Deduplication     string    `json:"deduplicationKey,omitempty"`
-	QueuedAt          time.Time `json:"queuedAt"`
-	RecoverySafe      bool      `json:"recoverySafe"`
+	MonitorID         string             `json:"monitorId"`
+	RevisionID        string             `json:"revisionId,omitempty"`
+	ActorID           string             `json:"actorId"`
+	Mode              string             `json:"mode"`
+	TriggerType       string             `json:"triggerType,omitempty"`
+	ScheduleID        string             `json:"scheduleId,omitempty"`
+	ConcurrencyPolicy string             `json:"concurrencyPolicy,omitempty"`
+	Deduplication     string             `json:"deduplicationKey,omitempty"`
+	QueuedAt          time.Time          `json:"queuedAt"`
+	RecoverySafe      bool               `json:"recoverySafe"`
+	Snapshot          *ExecutionSnapshot `json:"snapshot,omitempty"`
 }
 
 // DurableRepository is implemented by persistent repositories that can create

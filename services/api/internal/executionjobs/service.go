@@ -31,16 +31,23 @@ type Runner interface {
 }
 
 type Service struct {
-	pool         *pgxpool.Pool
-	redis        *redis.Client
-	runner       Runner
-	logger       *slog.Logger
-	workerID     string
-	concurrency  int
-	globalSlots  chan struct{}
-	manualSlots  chan struct{}
-	dispatchOnce sync.Once
-	workerOnce   sync.Once
+	pool              *pgxpool.Pool
+	redis             redis.UniversalClient
+	runner            Runner
+	logger            *slog.Logger
+	workerID          string
+	concurrency       int
+	globalSlots       chan struct{}
+	manualSlots       chan struct{}
+	memoryStopPercent int
+	dispatchOnce      sync.Once
+	workerOnce        sync.Once
+}
+
+func (s *Service) SetMemoryStopPercent(percent int) {
+	if percent >= 50 && percent <= 95 {
+		s.memoryStopPercent = percent
+	}
 }
 
 type claimOutcome uint8
@@ -51,7 +58,7 @@ const (
 	claimHandled
 )
 
-func New(pool *pgxpool.Pool, redisClient *redis.Client, runner Runner, logger *slog.Logger, concurrency int) *Service {
+func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, runner Runner, logger *slog.Logger, concurrency int) *Service {
 	if concurrency <= 0 {
 		concurrency = 32
 	}
@@ -100,12 +107,12 @@ func (s *Service) dispatchOutbox(ctx context.Context) {
 			return
 		case <-ticker.C:
 			for {
-				count, err := s.publishOutboxBatch(ctx, 200)
+				count, err := s.publishOutboxBatch(ctx, 500)
 				if err != nil {
 					s.logger.Error("publish execution outbox", "error", err)
 					break
 				}
-				if count < 200 {
+				if count < 500 {
 					break
 				}
 			}
@@ -144,25 +151,36 @@ func (s *Service) publishOutboxBatch(ctx context.Context, limit int) (int, error
 		return 0, err
 	}
 	rows.Close()
+	if len(items) == 0 {
+		return 0, tx.Commit(ctx)
+	}
+	_, publishErr := s.redis.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, candidate := range items {
+			pipe.XAdd(ctx, &redis.XAddArgs{
+				Stream: candidate.stream,
+				Values: map[string]any{"jobId": candidate.jobID},
+				MaxLen: 100000,
+				Approx: true,
+			})
+		}
+		return nil
+	})
+	ids := make([]string, 0, len(items))
 	for _, candidate := range items {
-		if err := s.redis.XAdd(ctx, &redis.XAddArgs{
-			Stream: candidate.stream,
-			Values: map[string]any{"jobId": candidate.jobID},
-			MaxLen: 100000,
-			Approx: true,
-		}).Err(); err != nil {
-			_, _ = tx.Exec(ctx, `
-				UPDATE execution_job_outbox
-				SET publish_attempts=publish_attempts+1,last_error=$2
-				WHERE id=$1`, candidate.id, safeError(err))
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, `
+		ids = append(ids, candidate.id)
+	}
+	if publishErr != nil {
+		_, _ = tx.Exec(ctx, `
 			UPDATE execution_job_outbox
-			SET published_at=NOW(),publish_attempts=publish_attempts+1,last_error=NULL
-			WHERE id=$1`, candidate.id); err != nil {
-			return 0, err
-		}
+			SET publish_attempts=publish_attempts+1,last_error=$2
+			WHERE id=ANY($1::uuid[])`, ids, safeError(publishErr))
+		return 0, publishErr
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE execution_job_outbox
+		SET published_at=NOW(),publish_attempts=publish_attempts+1,last_error=NULL
+		WHERE id=ANY($1::uuid[])`, ids); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
@@ -172,10 +190,23 @@ func (s *Service) publishOutboxBatch(ctx context.Context, limit int) (int, error
 
 func (s *Service) consume(ctx context.Context, stream string, manual bool) {
 	consumerName := s.workerID + "-" + queueSuffix(stream)
+	readCount := int64(min(256, s.concurrency))
 	for ctx.Err() == nil {
+		if cgroupMemoryPressure(s.memoryStopPercent) {
+			timer := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-timer.C:
+				continue
+			}
+		}
 		result, err := s.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group: consumerGroup, Consumer: consumerName,
-			Streams: []string{stream, ">"}, Count: 32, Block: 2 * time.Second,
+			Streams: []string{stream, ">"}, Count: readCount, Block: 2 * time.Second,
 		}).Result()
 		if errors.Is(err, redis.Nil) || errors.Is(err, context.Canceled) {
 			continue
@@ -210,6 +241,34 @@ func (s *Service) consume(ctx context.Context, stream string, manual bool) {
 			}
 		}
 	}
+}
+
+func cgroupMemoryPressure(stopPercent int) bool {
+	if stopPercent <= 0 {
+		return false
+	}
+	current, currentErr := readCgroupUint("/sys/fs/cgroup/memory.current")
+	maximum, maximumErr := readCgroupUint("/sys/fs/cgroup/memory.max")
+	if currentErr != nil || maximumErr != nil || maximum == 0 {
+		current, currentErr = readCgroupUint("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+		maximum, maximumErr = readCgroupUint("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+	}
+	if currentErr != nil || maximumErr != nil || maximum == 0 {
+		return false
+	}
+	return current*100 >= maximum*uint64(stopPercent)
+}
+
+func readCgroupUint(path string) (uint64, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	raw := strings.TrimSpace(string(contents))
+	if raw == "max" {
+		return 0, errors.New("unbounded cgroup memory")
+	}
+	return strconv.ParseUint(raw, 10, 64)
 }
 
 func (s *Service) process(parent context.Context, stream, messageID, jobID string, manual bool) {

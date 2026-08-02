@@ -1,0 +1,28 @@
+name: Migration parity
+
+on:
+  pull_request:
+    paths:
+      - "dbscripts/**"
+      - "services/api/db/migrations/**"
+      - "scripts/check-migration-parity.mjs"
+  push:
+    branches: [main]
+    paths:
+      - "dbscripts/**"
+      - "services/api/db/migrations/**"
+      - "scripts/check-migration-parity.mjs"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify Go and Liquibase migration parity
+        run: node scripts/check-migration-parity.mjs

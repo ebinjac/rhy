@@ -1,0 +1,114 @@
+name: Hydra service contract
+
+on:
+  workflow_call:
+    inputs:
+      project:
+        required: true
+        type: string
+      service:
+        required: true
+        type: string
+      dockerfile:
+        required: true
+        type: string
+      values_path:
+        required: true
+        type: string
+      operation:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      rfc:
+        required: false
+        type: string
+      rollback_version:
+        required: false
+        type: string
+      image_sha256:
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    outputs:
+      project: ${{ steps.configuration.outputs.project }}
+      service: ${{ steps.configuration.outputs.service }}
+      image_name: ${{ steps.configuration.outputs.image_name }}
+      buildfile_path: ${{ steps.configuration.outputs.buildfile_path }}
+      values_file_path: ${{ steps.configuration.outputs.values_file_path }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: configuration
+        name: Publish the service-specific Hydra contract
+        env:
+          HYDRA_PROJECT: ${{ inputs.project }}
+          HYDRA_SERVICE: ${{ inputs.service }}
+          HYDRA_DOCKERFILE: ${{ inputs.dockerfile }}
+          HYDRA_VALUES_PATH: ${{ inputs.values_path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$HYDRA_PROJECT" =~ ^[a-z0-9][a-z0-9-]*$ ]]
+          [[ "$HYDRA_SERVICE" =~ ^rhythm-[a-z0-9-]+$ ]]
+          printf 'project=%s\n' "$HYDRA_PROJECT" >> "$GITHUB_OUTPUT"
+          printf 'service=%s\n' "$HYDRA_SERVICE" >> "$GITHUB_OUTPUT"
+          printf 'image_name=%s-image\n' "$HYDRA_SERVICE" >> "$GITHUB_OUTPUT"
+          printf 'buildfile_path=%s\n' "$HYDRA_DOCKERFILE" >> "$GITHUB_OUTPUT"
+          printf 'values_file_path=%s\n' "$HYDRA_VALUES_PATH" >> "$GITHUB_OUTPUT"
+      - name: Validate service, values, Vault, and workflow separation
+        run: node scripts/check-hydra-deployment.mjs
+      - name: Verify database migration parity
+        run: node scripts/check-migration-parity.mjs
+      - name: Validate the selected values file
+        env:
+          IMAGE_SHA256: ${{ inputs.image_sha256 }}
+          RFC: ${{ inputs.rfc }}
+          VALUES_PATH: ${{ inputs.values_path }}
+          TARGET_ENVIRONMENT: ${{ inputs.environment }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$TARGET_ENVIRONMENT" in
+            e1) test -f "$VALUES_PATH/values_e1.yaml" ;;
+            e2) test -f "$VALUES_PATH/values_e2.yaml" ;;
+            e3)
+              test -f "$VALUES_PATH/values_e3_ipc1.yaml"
+              test -f "$VALUES_PATH/values_e3_ipc2.yaml"
+              [[ "$RFC" =~ ^CHG[0-9]+$ ]]
+              ;;
+            *) echo "Unsupported Hydra environment: $TARGET_ENVIRONMENT" >&2; exit 1 ;;
+          esac
+          if [[ -n "$IMAGE_SHA256" ]]; then
+            [[ "$IMAGE_SHA256" =~ ^sha256:[0-9a-f]{64}$ ]]
+          fi
+      - name: Record the organization-owned deployment handoff
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          The repository-owned service contract is valid. The owning Hydra team
+          must attach its approved EarlyBird, build/push, Twistlock/Prisma,
+          Permit-to-Operate, RFC, and deploy jobs to this workflow entry point.
+          Those internal reusable workflow identifiers were not present in the
+          supplied guide and are intentionally not fabricated here.
+          EOF
+
+  deployment-action-required:
+    if: inputs.operation != 'Build and validate'
+    needs: contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prevent a false successful deployment
+        shell: bash
+        run: |
+          echo "::error::No Hydra deployment was attempted. Replace this guard job with the approved organization-owned Hydra reusable deployment workflow before registering this workflow URL in the Hydra console."
+          exit 1

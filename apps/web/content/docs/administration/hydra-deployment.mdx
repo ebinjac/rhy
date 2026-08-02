@@ -1,0 +1,181 @@
+---
+title: Deploy Rhythm on Hydra
+description: Onboard and deploy Rhythm as four independently managed Hydra services with separate images, Vault scopes, workflows, and scaling policies.
+audience:
+  - platform-administrator
+  - security-administrator
+status: preview
+since: 0.0.1
+lastReviewed: 2026-08-02
+owners:
+  - Rhythm Platform
+keywords:
+  - Hydra
+  - OpenShift
+  - SSO
+  - Vault
+  - Liquibase
+---
+
+# Deploy Rhythm on Hydra
+
+Create Rhythm as four separate services in the same Hydra project. Each service
+has an independent Dockerfile, workflow URL, values set, Vault mount, scaling
+policy, and security boundary.
+
+<Callout type="warn" title="Preview procedure">
+  Complete E1 deployment, identity spoofing, database recovery, Redis failover,
+  S3/KMS, browser certificate, and 2,000-run acceptance testing before E3.
+</Callout>
+
+## Services
+
+| Service | Hydra route | SSO | Steady/max | Responsibility |
+|---|---|---|---:|---|
+| `rhythm-frontdoor` | Routable | Enabled | 2 / 4 | Web, public API, webhooks, identity boundary |
+| `rhythm-control` | Non-routable | Disabled | 1 / 1 | Scheduler, outbox, notifications, orchestration |
+| `rhythm-api-executor` | Non-routable | Disabled | 3 / 12 | API runs and isolated JavaScript |
+| `rhythm-browser-executor` | Non-routable | Disabled | 1 / 4 | Chromium, visual and performance evidence |
+
+All four are On-Prem Intranet regular applications, support E1 through E3, use
+rolling deployment, request no persistent storage, expose only port 8080, and
+serve `/health` on that port.
+
+Only frontdoor receives a GTM route. Use application URL prefix `rhythm`:
+
+```text
+E1  https://rhythm-dev.aexp.com
+E2  https://rhythm-qa.aexp.com
+E3  https://rhythm.aexp.com
+```
+
+Hydra SSO must overwrite/strip client identity headers and set the authoritative
+user and group headers configured for Rhythm. Confirm them through
+`/api/v1/session`. Internal services use `RHYTHM_AUTH_MODE=internal` and must
+not be made GTM-routable.
+
+## Service-to-service DNS
+
+Hydra enables communication inside a project namespace. For zone-resilient
+calls, use:
+
+```text
+http://<service>-svc.<project>.global:8080
+```
+
+The full namespace form is:
+
+```text
+http://<service>-svc.<project>.svc.cluster.local:8080
+```
+
+Rhythm's control and frontdoor values call the browser service through:
+
+```text
+http://rhythm-browser-executor-svc.<HYDRA_PROJECT_NAME>.global:8080
+```
+
+Replace the project placeholder and retain `automaticFailover: true` in each
+destination service's values. Normal API job execution uses Redis Enterprise,
+so executors do not add synchronous service-to-service latency.
+
+## Dockerfiles and corporate trust
+
+Each service owns one Dockerfile:
+
+```text
+deploy/hydra/services/rhythm-frontdoor/Dockerfile
+deploy/hydra/services/rhythm-control/Dockerfile
+deploy/hydra/services/rhythm-api-executor/Dockerfile
+deploy/hydra/services/rhythm-browser-executor/Dockerfile
+```
+
+Every default base uses the approved internal Hydra buildpack catalog. Corporate
+trust comes from the buildpack and Node enables system CA support. The browser
+image installs Chromium and `nss-tools` only from approved corporate RHEL
+repositories. An optional explicit CA import remains available for exceptional
+targets; insecure TLS and Chromium `ignoreHTTPSErrors` remain prohibited.
+
+## Vault per service
+
+Hydra independently mounts this file in every pod:
+
+```text
+/opt/epaas/vault/secrets/secrets
+```
+
+Use the least-privilege inventory next to each service:
+
+- `services/rhythm-frontdoor/vault/secrets.example`
+- `services/rhythm-control/vault/secrets.example`
+- `services/rhythm-api-executor/vault/secrets.example`
+- `services/rhythm-browser-executor/vault/secrets.example`
+
+Do not upload the union of all secrets everywhere. Database, Redis, encryption,
+runner-token, external secret-provider, and SMTP credentials appear only where
+needed. The encryption key must match across services in one environment, and
+the browser runner token must match between callers and browser executors. S3
+uses workload identity—never long-lived AWS access keys.
+
+## Workflow URLs
+
+Register a different workflow URL for every Hydra service:
+
+```text
+.github/workflows/deploy-rhythm-frontdoor.yml
+.github/workflows/deploy-rhythm-control.yml
+.github/workflows/deploy-rhythm-api-executor.yml
+.github/workflows/deploy-rhythm-browser-executor.yml
+```
+
+In GitHub Enterprise the Hydra console URL normally follows this pattern:
+
+```text
+https://github.aexp.com/<ORG>/<REPOSITORY>/actions/workflows/<WORKFLOW_FILE>
+```
+
+Use the corresponding workflow filename for each service; do not point all
+four Hydra services at the frontdoor workflow.
+
+They have independent concurrency and service-specific Dockerfile/value paths.
+The repository validates their contract and migration parity. Before registering
+the URLs for deployment, attach the organization-approved EarlyBird,
+build/push, Twistlock/Prisma, Permit-to-Operate, RFC, and Hydra deployment jobs.
+Their internal reusable-workflow identifiers were not included in the supplied
+guide and are intentionally not guessed.
+
+Runtime values in `/opt/epaas/vault/secrets/secrets` are separate from CI/CD
+credentials. The organization-owned workflow is expected to use its approved
+Hydra, Artifactory, EarlyBird, SonarQube, Twistlock/Prisma, and notification
+secrets from GitHub Actions, never from the application pod's Vault mount.
+
+## Database migration
+
+Use `.github/workflows/deploy-rhythm-database.yml` independently from the four
+service workflows. It verifies exact Go/Liquibase parity and supports validate,
+update SQL, protected update, and status. An E3 update requires a `CHG...` RFC,
+the explicit `APPLY` confirmation, and a PostgreSQL snapshot/PITR point.
+
+Application readiness remains false until Liquibase applies the image's
+`RHYTHM_REQUIRED_SCHEMA_VERSION`. Use expand/contract migrations; never perform
+an automatic destructive database rollback.
+
+## Deployment order
+
+1. Create the four Hydra services using each `hydra-service.yaml` contract.
+2. Configure the four separate Vault scopes in every environment/IPC.
+3. Connect the approved workflow guardrail/deployment jobs.
+4. Apply Liquibase and verify schema readiness.
+5. Deploy control, API executors, browser executors, then frontdoor.
+6. Verify internal global DNS, `/health`, metrics, Redis consumers, S3, browser
+   TLS, SSO identity, and one API and UI run.
+7. Enable schedules gradually and complete the 2,000-run soak.
+
+<Callout type="info" title="Local Compose is unchanged">
+  Continue using `compose.yaml` for local PostgreSQL, Redis, MinIO, the combined
+  development API, script runner, browser agent, and web server. Hydra files do
+  not replace the local developer topology.
+</Callout>
+
+See `deploy/hydra/README.md` for exact console selections, Vault variables,
+workflow inputs, build commands, release gates, and scaling guidance.

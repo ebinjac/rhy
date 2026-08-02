@@ -1,0 +1,62 @@
+apiVersion: rhythm.amex/v1alpha1
+kind: HydraServiceCatalog
+metadata:
+  name: rhythm
+spec:
+  database:
+    engine: liquibase
+    changelog: dbscripts/main_changelog.xml
+    workflow: .github/workflows/deploy-rhythm-database.yml
+    requiredChangeSet: 000030_hydra_capacity
+    deployBeforeApplications: true
+  services:
+    - name: rhythm-control
+      dockerfile: deploy/hydra/services/rhythm-control/Dockerfile
+      valuesPath: deploy/hydra/services/rhythm-control/helm
+      vaultInventory: deploy/hydra/services/rhythm-control/vault/secrets.example
+      workflow: .github/workflows/deploy-rhythm-control.yml
+      routability: non-routable
+      sso: false
+      automaticFailover: true
+      order: 10
+      public: false
+    - name: rhythm-api-executor
+      dockerfile: deploy/hydra/services/rhythm-api-executor/Dockerfile
+      valuesPath: deploy/hydra/services/rhythm-api-executor/helm
+      vaultInventory: deploy/hydra/services/rhythm-api-executor/vault/secrets.example
+      workflow: .github/workflows/deploy-rhythm-api-executor.yml
+      routability: non-routable
+      sso: false
+      automaticFailover: true
+      order: 20
+      public: false
+    - name: rhythm-browser-executor
+      dockerfile: deploy/hydra/services/rhythm-browser-executor/Dockerfile
+      valuesPath: deploy/hydra/services/rhythm-browser-executor/helm
+      vaultInventory: deploy/hydra/services/rhythm-browser-executor/vault/secrets.example
+      workflow: .github/workflows/deploy-rhythm-browser-executor.yml
+      routability: non-routable
+      sso: false
+      automaticFailover: true
+      order: 30
+      public: false
+    - name: rhythm-frontdoor
+      dockerfile: deploy/hydra/services/rhythm-frontdoor/Dockerfile
+      valuesPath: deploy/hydra/services/rhythm-frontdoor/helm
+      vaultInventory: deploy/hydra/services/rhythm-frontdoor/vault/secrets.example
+      workflow: .github/workflows/deploy-rhythm-frontdoor.yml
+      routability: routable-with-sso
+      applicationUrlPrefix: rhythm
+      sso: true
+      automaticFailover: true
+      order: 40
+      public: true
+  environments:
+    - name: e1
+      valuesFile: values_e1.yaml
+    - name: e2
+      valuesFile: values_e2.yaml
+    - name: e3-ipc1
+      valuesFile: values_e3_ipc1.yaml
+    - name: e3-ipc2
+      valuesFile: values_e3_ipc2.yaml

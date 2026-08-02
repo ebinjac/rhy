@@ -8,65 +8,113 @@ import (
 )
 
 type Config struct {
-	HTTPAddr              string
-	RuntimeRole           string
-	WorkerConcurrency     int
-	BrowserJobConcurrency int
-	DeploymentConcurrency int
-	SchedulerBatchSize    int
-	SchedulerPollMS       int
-	TargetHostConcurrency int
-	DatabaseMaxConns      int
-	DatabaseMinConns      int
-	DatabaseTxPooling     bool
-	AllowedOrigin         string
-	DevelopmentActorID    string
-	StorageMode           string
-	DatabaseURL           string
-	RedisURL              string
-	AllowPrivateTargets   bool
-	ScriptRunnerURL       string
-	ScriptRunnerToken     string
-	BrowserRunnerURL      string
-	BrowserRunnerToken    string
-	ArtifactStoreURL      string
-	ArtifactAccessKey     string
-	ArtifactSecretKey     string
-	ArtifactBucket        string
-	ELFBootstrapURL       string
-	SecretsEncryptionKey  string
-	SMTPHost              string
-	SMTPPort              int
-	SMTPFrom              string
-	SMTPUsername          string
-	SMTPPassword          string
-	SMTPTo                []string
-	DynatraceAllowedHosts []string
+	HTTPAddr                string
+	RuntimeRole             string
+	Environment             string
+	AuthMode                string
+	IdentityHeader          string
+	GroupsHeader            string
+	AdminGroups             []string
+	EditorGroups            []string
+	OperatorGroups          []string
+	ViewerGroups            []string
+	TrustedProxyCIDRs       []string
+	WorkerConcurrency       int
+	ExecutorSlotsPerReplica int
+	ExecutorMinReplicas     int
+	ExecutorMaxReplicas     int
+	ExecutorTargetPercent   int
+	WorkerMemoryStopPercent int
+	BrowserJobConcurrency   int
+	DeploymentConcurrency   int
+	SchedulerBatchSize      int
+	SchedulerPollMS         int
+	TargetHostConcurrency   int
+	DatabaseMaxConns        int
+	DatabaseMinConns        int
+	DatabaseTxPooling       bool
+	RequiredSchemaVersion   string
+	AllowedOrigin           string
+	DevelopmentActorID      string
+	StorageMode             string
+	DatabaseURL             string
+	RedisURL                string
+	RedisMode               string
+	RedisAddrs              []string
+	RedisUsername           string
+	RedisPassword           string
+	RedisDB                 int
+	RedisTLS                bool
+	AllowPrivateTargets     bool
+	PrivateTargetHosts      []string
+	PrivateTargetCIDRs      []string
+	ScriptRunnerURL         string
+	ScriptRunnerToken       string
+	BrowserRunnerURL        string
+	BrowserRunnerToken      string
+	ArtifactStoreURL        string
+	ArtifactProvider        string
+	ArtifactRegion          string
+	ArtifactPrefix          string
+	ArtifactKMSKeyID        string
+	ArtifactPathStyle       bool
+	ArtifactAutoCreate      bool
+	ArtifactAccessKey       string
+	ArtifactSecretKey       string
+	ArtifactBucket          string
+	ELFBootstrapURL         string
+	SecretsEncryptionKey    string
+	SMTPHost                string
+	SMTPPort                int
+	SMTPFrom                string
+	SMTPFromName            string
+	SMTPUsername            string
+	SMTPPassword            string
+	SMTPTo                  []string
+	DynatraceAllowedHosts   []string
 }
 
 func Load() (Config, error) {
 	cfg := Config{
-		HTTPAddr:           valueOrDefault("RHYTHM_HTTP_ADDR", ":8080"),
-		RuntimeRole:        strings.ToLower(valueOrDefault("RHYTHM_ROLE", "all")),
-		AllowedOrigin:      valueOrDefault("RHYTHM_ALLOWED_ORIGIN", "http://localhost:3000"),
-		DevelopmentActorID: valueOrDefault("RHYTHM_DEVELOPMENT_ACTOR_ID", "local-admin"),
-		StorageMode:        valueOrDefault("RHYTHM_STORAGE_MODE", "memory"),
-		DatabaseURL:        strings.TrimSpace(os.Getenv("RHYTHM_DATABASE_URL")),
-		RedisURL:           strings.TrimSpace(os.Getenv("RHYTHM_REDIS_URL")),
-		ScriptRunnerURL:    valueOrDefault("RHYTHM_SCRIPT_RUNNER_URL", "http://script-runner:8090"),
-		ScriptRunnerToken:  valueOrDefault("RHYTHM_SCRIPT_RUNNER_TOKEN", "rhythm-local-script-token"),
-		BrowserRunnerURL:   valueOrDefault("RHYTHM_BROWSER_RUNNER_URL", "http://browser-agent:8091"),
-		BrowserRunnerToken: valueOrDefault("RHYTHM_BROWSER_RUNNER_TOKEN", "rhythm-local-browser-token"),
-		ArtifactStoreURL:   valueOrDefault("RHYTHM_ARTIFACT_STORE_URL", "http://minio:9000"),
+		HTTPAddr:              valueOrDefault("RHYTHM_HTTP_ADDR", ":8080"),
+		RuntimeRole:           strings.ToLower(valueOrDefault("RHYTHM_ROLE", "all")),
+		Environment:           strings.ToLower(valueOrDefault("RHYTHM_ENVIRONMENT", "development")),
+		AuthMode:              strings.ToLower(valueOrDefault("RHYTHM_AUTH_MODE", "development")),
+		IdentityHeader:        valueOrDefault("RHYTHM_IDENTITY_HEADER", "X-Rhythm-User"),
+		GroupsHeader:          valueOrDefault("RHYTHM_GROUPS_HEADER", "X-Rhythm-Groups"),
+		AdminGroups:           splitCSV(os.Getenv("RHYTHM_ADMIN_GROUPS")),
+		EditorGroups:          splitCSV(os.Getenv("RHYTHM_EDITOR_GROUPS")),
+		OperatorGroups:        splitCSV(os.Getenv("RHYTHM_OPERATOR_GROUPS")),
+		ViewerGroups:          splitCSV(os.Getenv("RHYTHM_VIEWER_GROUPS")),
+		TrustedProxyCIDRs:     splitCSV(valueOrDefault("RHYTHM_TRUSTED_PROXY_CIDRS", "127.0.0.0/8,::1/128")),
+		AllowedOrigin:         valueOrDefault("RHYTHM_ALLOWED_ORIGIN", "http://localhost:3000"),
+		DevelopmentActorID:    valueOrDefault("RHYTHM_DEVELOPMENT_ACTOR_ID", "local-admin"),
+		StorageMode:           valueOrDefault("RHYTHM_STORAGE_MODE", "memory"),
+		DatabaseURL:           strings.TrimSpace(os.Getenv("RHYTHM_DATABASE_URL")),
+		RequiredSchemaVersion: strings.TrimSpace(os.Getenv("RHYTHM_REQUIRED_SCHEMA_VERSION")),
+		RedisURL:              strings.TrimSpace(os.Getenv("RHYTHM_REDIS_URL")),
+		RedisMode:             strings.ToLower(valueOrDefault("RHYTHM_REDIS_MODE", "single")),
+		RedisAddrs:            splitCSV(os.Getenv("RHYTHM_REDIS_ADDRS")),
+		RedisUsername:         strings.TrimSpace(os.Getenv("RHYTHM_REDIS_USERNAME")),
+		RedisPassword:         os.Getenv("RHYTHM_REDIS_PASSWORD"),
+		PrivateTargetHosts:    splitCSV(os.Getenv("RHYTHM_PRIVATE_TARGET_ALLOWED_HOSTS")),
+		PrivateTargetCIDRs:    splitCSV(os.Getenv("RHYTHM_PRIVATE_TARGET_ALLOWED_CIDRS")),
+		ScriptRunnerURL:       valueOrDefault("RHYTHM_SCRIPT_RUNNER_URL", "http://script-runner:8090"),
+		ScriptRunnerToken:     valueOrDefault("RHYTHM_SCRIPT_RUNNER_TOKEN", "rhythm-local-script-token"),
+		BrowserRunnerURL:      valueOrDefault("RHYTHM_BROWSER_RUNNER_URL", "http://browser-agent:8091"),
+		BrowserRunnerToken:    valueOrDefault("RHYTHM_BROWSER_RUNNER_TOKEN", "rhythm-local-browser-token"),
+		ArtifactStoreURL:      valueOrDefault("RHYTHM_ARTIFACT_STORE_URL", "http://minio:9000"),
+		ArtifactProvider:      strings.ToLower(valueOrDefault("RHYTHM_ARTIFACT_STORE_PROVIDER", "minio")),
+		ArtifactRegion:        valueOrDefault("RHYTHM_ARTIFACT_STORE_REGION", "us-east-1"),
+		ArtifactPrefix:        strings.Trim(strings.TrimSpace(os.Getenv("RHYTHM_ARTIFACT_STORE_PREFIX")), "/"),
+		ArtifactKMSKeyID:      strings.TrimSpace(os.Getenv("RHYTHM_ARTIFACT_STORE_KMS_KEY_ID")),
 		ArtifactAccessKey: firstNonEmpty(
 			os.Getenv("RHYTHM_ARTIFACT_STORE_ACCESS_KEY"),
 			os.Getenv("RHYTHM_ARTIFACT_ACCESS_KEY"),
-			"rhythm",
 		),
 		ArtifactSecretKey: firstNonEmpty(
 			os.Getenv("RHYTHM_ARTIFACT_STORE_SECRET_KEY"),
 			os.Getenv("RHYTHM_ARTIFACT_SECRET_KEY"),
-			"rhythm-local-artifacts",
 		),
 		ArtifactBucket: firstNonEmpty(
 			os.Getenv("RHYTHM_ARTIFACT_STORE_BUCKET"),
@@ -79,15 +127,56 @@ func Load() (Config, error) {
 			os.Getenv("RHYTHM_SECRETS_KEY"),
 			os.Getenv("SECRETS_ENCRYPTION_KEY"),
 		),
-		SMTPHost:              firstNonEmpty(os.Getenv("RHYTHM_SMTP_HOST"), os.Getenv("SMTP_HOST")),
-		SMTPFrom:              firstNonEmpty(os.Getenv("RHYTHM_SMTP_FROM"), os.Getenv("SMTP_FROM")),
+		SMTPHost: firstNonEmpty(os.Getenv("RHYTHM_SMTP_HOST"), os.Getenv("SMTP_HOST")),
+		SMTPFrom: firstNonEmpty(
+			os.Getenv("RHYTHM_SMTP_FROM"),
+			os.Getenv("SMTP_FROM"),
+			os.Getenv("SMTP_FROM_EMAIL"),
+			os.Getenv("RHYTHM_SMTP_FROM_EMAIL"),
+		),
+		SMTPFromName: firstNonEmpty(
+			os.Getenv("RHYTHM_SMTP_FROM_NAME"),
+			os.Getenv("SMTP_FROM_NAME"),
+		),
 		SMTPUsername:          firstNonEmpty(os.Getenv("RHYTHM_SMTP_USERNAME"), os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_USER")),
 		SMTPPassword:          firstNonEmpty(os.Getenv("RHYTHM_SMTP_PASSWORD"), os.Getenv("SMTP_PASSWORD")),
 		SMTPTo:                splitCSV(firstNonEmpty(os.Getenv("RHYTHM_SMTP_TO"), os.Getenv("SMTP_TO"))),
 		DynatraceAllowedHosts: splitCSV(valueOrDefault("RHYTHM_DYNATRACE_ALLOWED_HOSTS", "amex-prod.live.dynatrace.com,amex.live.dynatrace.com")),
 	}
+	// AWS must use the SDK's normal regional endpoint unless an endpoint override
+	// was explicitly supplied. MinIO keeps the local Compose default.
+	if cfg.ArtifactProvider == "s3" && strings.TrimSpace(os.Getenv("RHYTHM_ARTIFACT_STORE_URL")) == "" {
+		cfg.ArtifactStoreURL = ""
+	}
 	var err error
+	if cfg.RedisDB, err = integerInRange("RHYTHM_REDIS_DB", 0, 0, 15); err != nil {
+		return Config{}, err
+	}
+	if cfg.RedisTLS, err = booleanValue("RHYTHM_REDIS_TLS", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.ArtifactPathStyle, err = booleanValue("RHYTHM_ARTIFACT_STORE_PATH_STYLE", cfg.ArtifactProvider == "minio"); err != nil {
+		return Config{}, err
+	}
+	if cfg.ArtifactAutoCreate, err = booleanValue("RHYTHM_ARTIFACT_STORE_AUTO_CREATE", cfg.Environment == "development"); err != nil {
+		return Config{}, err
+	}
 	if cfg.WorkerConcurrency, err = integerInRange("RHYTHM_WORKER_CONCURRENCY", 32, 1, 256); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExecutorSlotsPerReplica, err = integerInRange("RHYTHM_EXECUTOR_SLOTS_PER_REPLICA", 256, 1, 256); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExecutorMinReplicas, err = integerInRange("RHYTHM_EXECUTOR_MIN_REPLICAS", 3, 1, 64); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExecutorMaxReplicas, err = integerInRange("RHYTHM_EXECUTOR_MAX_REPLICAS", 12, cfg.ExecutorMinReplicas, 128); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExecutorTargetPercent, err = integerInRange("RHYTHM_EXECUTOR_TARGET_UTILIZATION_PERCENT", 70, 25, 95); err != nil {
+		return Config{}, err
+	}
+	if cfg.WorkerMemoryStopPercent, err = integerInRange("RHYTHM_WORKER_MEMORY_STOP_PERCENT", 80, 50, 95); err != nil {
 		return Config{}, err
 	}
 	if cfg.BrowserJobConcurrency, err = integerInRange("RHYTHM_BROWSER_JOB_CONCURRENCY", 8, 1, 64); err != nil {
@@ -146,9 +235,36 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("RHYTHM_DATABASE_URL is required when RHYTHM_STORAGE_MODE=postgres")
 	}
 	switch cfg.RuntimeRole {
-	case "all", "api", "scheduler", "worker", "background", "browser":
+	case "all", "api", "control", "scheduler", "worker", "background", "browser":
 	default:
-		return Config{}, fmt.Errorf("RHYTHM_ROLE must be all, api, scheduler, worker, background, or browser")
+		return Config{}, fmt.Errorf("RHYTHM_ROLE must be all, api, control, scheduler, worker, background, or browser")
+	}
+	if cfg.AuthMode != "development" && cfg.AuthMode != "trusted_headers" && cfg.AuthMode != "internal" {
+		return Config{}, fmt.Errorf("RHYTHM_AUTH_MODE must be development, trusted_headers, or internal")
+	}
+	if cfg.Environment != "development" && cfg.AuthMode == "development" {
+		return Config{}, fmt.Errorf("development authentication is not allowed outside the development environment")
+	}
+	if cfg.Environment != "development" && cfg.AllowPrivateTargets {
+		return Config{}, fmt.Errorf("unrestricted private targets are not allowed outside the development environment; configure the governed host or CIDR allowlist")
+	}
+	if cfg.AuthMode == "internal" && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "api") {
+		return Config{}, fmt.Errorf("internal authentication mode cannot serve the public API role")
+	}
+	if cfg.AuthMode == "trusted_headers" && (len(cfg.AdminGroups)+len(cfg.EditorGroups)+len(cfg.OperatorGroups)+len(cfg.ViewerGroups) == 0) {
+		return Config{}, fmt.Errorf("trusted-header authentication requires at least one role group mapping")
+	}
+	if cfg.RedisMode != "single" && cfg.RedisMode != "cluster" {
+		return Config{}, fmt.Errorf("RHYTHM_REDIS_MODE must be single or cluster")
+	}
+	if cfg.RedisMode == "cluster" && cfg.RedisDB != 0 {
+		return Config{}, fmt.Errorf("RHYTHM_REDIS_DB must be 0 in cluster mode")
+	}
+	if cfg.ArtifactProvider != "minio" && cfg.ArtifactProvider != "s3" {
+		return Config{}, fmt.Errorf("RHYTHM_ARTIFACT_STORE_PROVIDER must be minio or s3")
+	}
+	if cfg.Environment != "development" && cfg.ArtifactProvider == "s3" && cfg.ArtifactAutoCreate {
+		return Config{}, fmt.Errorf("production S3 buckets must be provisioned outside Rhythm")
 	}
 	return cfg, nil
 }
@@ -191,6 +307,18 @@ func integerInRange(key string, fallback, minimum, maximum int) (int, error) {
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < minimum || value > maximum {
 		return 0, fmt.Errorf("%s must be an integer between %d and %d", key, minimum, maximum)
+	}
+	return value, nil
+}
+
+func booleanValue(key string, fallback bool) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", key)
 	}
 	return value, nil
 }

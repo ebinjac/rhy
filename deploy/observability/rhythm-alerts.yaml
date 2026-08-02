@@ -26,6 +26,24 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: Rhythm cannot drain its durable execution outbox
+        - alert: RhythmExecutionOutboxLag
+          expr: rhythm_execution_outbox_lag_seconds > 5
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: Rhythm execution outbox publishing is more than five seconds behind
+        - alert: RhythmExecutorUtilization
+          expr: rhythm_execution_worker_utilization > 0.8
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: Rhythm API executors are above 80 percent estimated utilization
+        - alert: RhythmExecutorScalingInsufficient
+          expr: rhythm_execution_required_replicas >= 12 and rhythm_execution_worker_utilization > 0.75
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: Rhythm needs maximum API executor capacity and has little failure headroom
         - alert: RhythmExecutionRedeliveryBacklog
           expr: rhythm_redis_stream_pending > 0
           for: 10m
@@ -60,4 +78,3 @@ spec:
           labels: { severity: critical }
           annotations:
             summary: Rhythm API error rate exceeds one percent
-

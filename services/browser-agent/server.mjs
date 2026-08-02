@@ -23,6 +23,16 @@ const allowPrivateTargets =
       process.env.RHYTHM_ALLOW_PRIVATE_TARGETS ||
       ""
   ).toLowerCase() === "true"
+const allowedPrivateHosts = csv(
+  process.env.RHYTHM_BROWSER_PRIVATE_TARGET_ALLOWED_HOSTS ||
+    process.env.RHYTHM_PRIVATE_TARGET_ALLOWED_HOSTS ||
+    ""
+).map(normalizeHostPattern)
+const allowedPrivateCIDRs = csv(
+  process.env.RHYTHM_BROWSER_PRIVATE_TARGET_ALLOWED_CIDRS ||
+    process.env.RHYTHM_PRIVATE_TARGET_ALLOWED_CIDRS ||
+    ""
+).map(parseCIDR)
 const maximumBodyBytes = 20 * 1024 * 1024
 const maximumConcurrency = Math.max(
   1,
@@ -31,11 +41,18 @@ const maximumConcurrency = Math.max(
 const chromiumSandbox =
   String(process.env.RHYTHM_CHROMIUM_SANDBOX || "true").toLowerCase() !==
   "false"
+const chromiumExecutable = String(
+  process.env.RHYTHM_CHROMIUM_EXECUTABLE_PATH || ""
+).trim()
+const disableDevShm =
+  String(process.env.RHYTHM_CHROMIUM_DISABLE_DEV_SHM_USAGE || "false").toLowerCase() ===
+  "true"
 let activeExecutions = 0
 const browser = await chromium.launch({
   headless: true,
   chromiumSandbox,
-  args: ["--disable-dev-shm-usage"],
+  executablePath: chromiumExecutable || undefined,
+  args: disableDevShm ? ["--disable-dev-shm-usage"] : [],
 })
 
 const server = http.createServer(async (request, response) => {
@@ -251,6 +268,7 @@ async function execute(input) {
           (check) => !check.passed && check.gateMode === "BLOCKING"
         )
       if (blockingFailure) {
+        const metrics = await capturePerformance(page, events)
         const finalArtifact = await captureArtifact(
           page,
           input,
@@ -288,10 +306,15 @@ async function execute(input) {
           artifacts,
           artifactUploader,
           startedAt,
+          metrics,
         })
       }
     }
 
+    // Capture navigation and paint evidence while the target page is still
+    // alive. Artifact masking and upload can outlive pages that close
+    // themselves after completing their workflow.
+    const metrics = await capturePerformance(page, events)
     const finalArtifact = await captureArtifact(
       page,
       input,
@@ -316,9 +339,11 @@ async function execute(input) {
       artifacts,
       artifactUploader,
       startedAt,
+      metrics,
     })
   } catch (error) {
     const category = classifyError(error)
+    const metrics = page ? await capturePerformance(page, events) : undefined
     if (page) {
       const finalArtifact = await captureArtifact(
         page,
@@ -351,6 +376,7 @@ async function execute(input) {
       artifacts,
       artifactUploader,
       startedAt,
+      metrics,
     })
   } finally {
     if (context) await context.close().catch(() => {})
@@ -811,8 +837,16 @@ async function finish({
   artifacts,
   artifactUploader,
   startedAt,
+  metrics: capturedMetrics,
 }) {
-  const metrics = page ? await collectPerformance(page).catch(() => ({})) : {}
+  const metrics =
+    capturedMetrics ??
+    (page
+      ? await capturePerformance(page, events)
+      : {
+          captureState: "NOT_CAPTURED",
+          evidenceType: "SYNTHETIC_LAB",
+        })
   events.push(
     event(
       status === "SUCCESS" || status === "SUCCESS_WITH_WARNINGS"
@@ -857,18 +891,54 @@ async function finish({
   }
 }
 
+async function capturePerformance(page, events) {
+  try {
+    // DOMContentLoaded is the journey's default readiness boundary, but load
+    // and paint entries often arrive shortly afterward. Bound this wait so
+    // slow third-party resources cannot hold a worker slot indefinitely.
+    await page.waitForLoadState("load", { timeout: 3_000 }).catch(() => {})
+    await page.waitForTimeout(100)
+    return await collectPerformance(page)
+  } catch (error) {
+    events.push(
+      event(
+        "PERFORMANCE_CAPTURE_FAILED",
+        "Synthetic performance evidence could not be captured for this execution.",
+        "",
+        "PERFORMANCE_CAPTURE_FAILED"
+      )
+    )
+    process.stderr.write(
+      `${JSON.stringify({
+        level: "warn",
+        message: "Browser performance capture failed",
+        error: safeMessage(error),
+      })}\n`
+    )
+    return {
+      captureState: "NOT_CAPTURED",
+      evidenceType: "SYNTHETIC_LAB",
+    }
+  }
+}
+
 async function collectPerformance(page) {
   return page.evaluate(() => {
-    const state = window.__rhythmPerformance || {
-      fcpMs: null,
-      lcpMs: null,
-      cls: 0,
-      longTasks: [],
-      interactions: [],
-    }
-    const navigation = performance.getEntriesByType("navigation")[0]
-    const resources = performance.getEntriesByType("resource")
-    const tbtMs = (state.longTasks || []).reduce(
+    const state = window.__rhythmPerformance || {}
+    const navigation = window.performance.getEntriesByType("navigation")[0]
+    const resources = window.performance.getEntriesByType("resource")
+    const firstContentfulPaint = window.performance
+      .getEntriesByName("first-contentful-paint")
+      .at(0)
+    const longTasks = Array.isArray(state.longTasks)
+      ? state.longTasks.filter(Number.isFinite)
+      : []
+    const interactions = Array.isArray(state.interactions)
+      ? state.interactions.filter(Number.isFinite)
+      : []
+    const finiteOrNull = (value) =>
+      typeof value === "number" && Number.isFinite(value) ? value : null
+    const tbtMs = longTasks.reduce(
       (total, duration) => total + Math.max(0, duration - 50),
       0
     )
@@ -896,17 +966,23 @@ async function collectPerformance(page) {
         navigation && navigation.loadEventEnd > 0
           ? Math.max(0, navigation.loadEventEnd - navigation.startTime)
           : null,
-      fcpMs: state.fcpMs,
-      lcpMs: state.lcpMs,
-      cls: state.cls,
+      fcpMs:
+        finiteOrNull(state.fcpMs) ??
+        finiteOrNull(firstContentfulPaint?.startTime),
+      lcpMs: finiteOrNull(state.lcpMs),
+      cls: finiteOrNull(state.cls),
       tbtMs,
-      longTaskCount: (state.longTasks || []).length,
-      interactionMs: Math.max(0, ...(state.interactions || [0])),
+      longTaskCount: longTasks.length,
+      interactionMs: interactions.reduce(
+        (maximum, duration) => Math.max(maximum, duration),
+        0
+      ),
       resourceCount: resources.length,
       transferredBytes: resources.reduce(
         (total, item) => total + (item.transferSize || 0),
         0
       ),
+      captureState: "CAPTURED",
       evidenceType: "SYNTHETIC_LAB",
     }
   })
@@ -1148,9 +1224,90 @@ async function validateTarget(raw, allowedOrigins = []) {
   const addresses = await dns.lookup(target.hostname, { all: true })
   if (
     !allowPrivateTargets &&
-    addresses.some((address) => isPrivateAddress(address.address))
+    addresses.some(
+      (address) =>
+        isPrivateAddress(address.address) &&
+        !privateTargetAllowed(target.hostname, address.address)
+    )
   ) {
     throw new Error("Navigation resolved to a private target blocked by policy.")
+  }
+}
+
+function privateTargetAllowed(hostname, address) {
+  const host = hostname.toLowerCase().replace(/\.$/, "")
+  if (
+    allowedPrivateHosts.some(
+      (pattern) =>
+        pattern === host ||
+        (pattern.startsWith("*.") &&
+          host.endsWith(pattern.slice(1)) &&
+          host !== pattern.slice(2))
+    )
+  ) {
+    return true
+  }
+  const parsed = ipValue(address)
+  if (!parsed) return false
+  return allowedPrivateCIDRs.some((cidr) => {
+    if (cidr.bits !== parsed.bits) return false
+    const shift = BigInt(cidr.bits - cidr.prefix)
+    return parsed.value >> shift === cidr.value >> shift
+  })
+}
+
+function csv(value) {
+  return String(value)
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function normalizeHostPattern(value) {
+  const host = String(value).toLowerCase().replace(/\.$/, "")
+  if (host === "*" || (host.includes("*") && !host.startsWith("*."))) {
+    throw new Error(`Invalid browser private-target host pattern: ${value}`)
+  }
+  return host
+}
+
+function parseCIDR(value) {
+  const [address, prefixText, extra] = String(value).split("/")
+  const parsed = ipValue(address)
+  const prefix = Number(prefixText)
+  if (extra !== undefined || !parsed || !Number.isInteger(prefix) || prefix < 0 || prefix > parsed.bits) {
+    throw new Error(`Invalid browser private-target CIDR: ${value}`)
+  }
+  return { ...parsed, prefix }
+}
+
+function ipValue(rawAddress) {
+  const address = String(rawAddress).split("%")[0].toLowerCase()
+  if (net.isIPv4(address)) {
+    return {
+      bits: 32,
+      value: address.split(".").reduce((value, part) => (value << 8n) | BigInt(Number(part)), 0n),
+    }
+  }
+  if (!net.isIPv6(address)) return null
+  let normalized = address
+  const ipv4Match = normalized.match(/(?:^|:)(\d+\.\d+\.\d+\.\d+)$/)
+  if (ipv4Match) {
+    const bytes = ipv4Match[1].split(".").map(Number)
+    normalized = normalized.slice(0, -ipv4Match[1].length) +
+      ((bytes[0] << 8) | bytes[1]).toString(16) + ":" +
+      ((bytes[2] << 8) | bytes[3]).toString(16)
+  }
+  const [leftText, rightText = ""] = normalized.split("::")
+  const left = leftText ? leftText.split(":") : []
+  const right = rightText ? rightText.split(":") : []
+  const groups = normalized.includes("::")
+    ? [...left, ...Array(8 - left.length - right.length).fill("0"), ...right]
+    : left
+  if (groups.length !== 8) return null
+  return {
+    bits: 128,
+    value: groups.reduce((value, part) => (value << 16n) | BigInt(Number.parseInt(part || "0", 16)), 0n),
   }
 }
 

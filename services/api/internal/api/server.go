@@ -116,6 +116,8 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /livez", s.liveness)
 	mux.HandleFunc("GET /readyz", s.readiness)
 	mux.HandleFunc("GET /healthz", s.readiness)
+	mux.HandleFunc("GET /health", s.readiness)
+	mux.HandleFunc("GET /api/v1/session", s.getSession)
 	mux.HandleFunc("GET /api/v1/overview", s.getOverview)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
 	mux.HandleFunc("POST /api/v1/monitors", s.createMonitor)
@@ -2035,7 +2037,16 @@ func (s *server) authorize(next http.Handler) http.Handler {
 }
 
 func isPublicProbe(path string) bool {
-	return path == "/livez" || path == "/readyz" || path == "/healthz"
+	return path == "/livez" || path == "/readyz" || path == "/healthz" || path == "/health"
+}
+
+func (s *server) getSession(w http.ResponseWriter, r *http.Request) {
+	principal, ok := authz.PrincipalFromContext(r.Context())
+	if !ok {
+		s.writeError(w, r, http.StatusUnauthorized, "UNAUTHENTICATED", "Authentication is required.", nil)
+		return
+	}
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: principal, Meta: s.meta(r)})
 }
 
 func (s *server) requestID(next http.Handler) http.Handler {

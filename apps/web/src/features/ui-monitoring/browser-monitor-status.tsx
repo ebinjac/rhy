@@ -116,6 +116,15 @@ export function BrowserRunBadge({ status }: { status: BrowserMonitorStatus }) {
   )
 }
 
+/**
+ * The browser agent emits SUCCESS, while early preview and persisted evidence
+ * used PASSED. Treat both as successful so historical and current runs share
+ * the same operational presentation.
+ */
+export function isSuccessfulBrowserStepStatus(status?: string) {
+  return status === "SUCCESS" || status === "PASSED"
+}
+
 export function formatDuration(value?: number | null) {
   if (value === undefined || value === null) return "Not recorded"
   if (value < 1) return "<1 ms"

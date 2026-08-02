@@ -830,7 +830,7 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 					if ctx.Err() != nil {
 						return
 					}
-					executed, err := s.runs.RunTriggered(ctx, comparisons[index].MonitorID, run.ID, "DEPLOYMENT_VALIDATION")
+					executed, err := s.runs.StartTriggered(ctx, comparisons[index].MonitorID, run.ID, "DEPLOYMENT_VALIDATION")
 					sampleID, _ := id.NewUUID()
 					sample := DeploymentSample{ID: sampleID, MonitorID: comparisons[index].MonitorID, SampleNumber: number, CreatedAt: s.now()}
 					if err != nil {
@@ -838,10 +838,16 @@ func (s *Service) processDeployment(ctx context.Context, run DeploymentRun) {
 						sample.FailureCategory = "EXECUTION_ERROR"
 					} else {
 						sample.MonitorRunID = executed.ID
-						sample.Status = string(executed.Status)
-						sample.DurationMS = executed.DurationMS
-						sample.FailureCategory = executed.FailureCategory
-						if executed.RevisionID != comparisons[index].RevisionID {
+						executed, err = s.runs.WaitForTerminal(ctx, executed.ID, 250*time.Millisecond)
+						if err != nil {
+							sample.Status = "FAILED"
+							sample.FailureCategory = "EXECUTION_ERROR"
+						} else {
+							sample.Status = string(executed.Status)
+							sample.DurationMS = executed.DurationMS
+							sample.FailureCategory = executed.FailureCategory
+						}
+						if err == nil && executed.RevisionID != comparisons[index].RevisionID {
 							sample.Status = "FAILED"
 							sample.FailureCategory = "MONITOR_REVISION_CHANGED"
 						}

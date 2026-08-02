@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"crypto/tls"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -141,7 +142,7 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 		if count > maxAuxRequests {
 			return nil, errors.New("pm.sendRequest exceeded the five-call limit")
 		}
-		response, evidence, err := r.sendRequest(wallContext, raw, input.AllowPrivateTargets)
+		response, evidence, err := r.sendRequest(wallContext, raw, input.AllowPrivateTargets, input.AllowedPrivateHosts, input.AllowedPrivateCIDRs)
 		evidence.URL = mask(evidence.URL, secretValues)
 		mu.Lock()
 		result.AuxiliaryRequests = append(result.AuxiliaryRequests, evidence)
@@ -531,7 +532,7 @@ func convertESModuleBundle(source string) (string, error) {
 	return trimmed[:index] + "\nreturn {" + strings.Join(properties, ",") + "};\n", nil
 }
 
-func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (response map[string]any, evidence AuxiliaryRequest, err error) {
+func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, allowedHosts, allowedCIDRs []string) (response map[string]any, evidence AuxiliaryRequest, err error) {
 	started := time.Now()
 	evidence = AuxiliaryRequest{Source: "pm.sendRequest", Method: http.MethodGet}
 	defer func() {
@@ -568,18 +569,14 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 		evidence.Error = "unsupported scheme"
 		return nil, evidence, errors.New("pm.sendRequest supports HTTP and HTTPS only")
 	}
-	if !allowPrivate {
-		addresses, resolveErr := net.DefaultResolver.LookupIPAddr(ctx, parsed.Hostname())
-		if resolveErr != nil {
-			evidence.Error = "DNS resolution failed"
-			return nil, evidence, errors.New("pm.sendRequest DNS resolution failed")
-		}
-		for _, address := range addresses {
-			if privateIP(address.IP) {
-				evidence.Error = "target blocked by network policy"
-				return nil, evidence, errors.New("pm.sendRequest target is blocked by network policy")
-			}
-		}
+	policy, policyErr := compileAuxiliaryNetworkPolicy(allowPrivate, allowedHosts, allowedCIDRs)
+	if policyErr != nil {
+		evidence.Error = "invalid target policy"
+		return nil, evidence, errors.New("pm.sendRequest target policy is invalid")
+	}
+	if policyErr = policy.validate(ctx, parsed); policyErr != nil {
+		evidence.Error = "target blocked by network policy"
+		return nil, evidence, policyErr
 	}
 	body := strings.NewReader("")
 	if bodyConfig, exists := config["body"].(map[string]any); exists {
@@ -592,8 +589,20 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 	}
 	applySendRequestHeaders(request, config["header"])
 	applySendRequestHeaders(request, config["headers"])
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport.DialContext = policy.dialContext
+	client := *r.client
+	client.Transport = transport
+	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("pm.sendRequest redirect limit exceeded")
+		}
+		return policy.validate(next.Context(), next.URL)
+	}
+	defer transport.CloseIdleConnections()
 	httpStarted := time.Now()
-	httpResponse, doErr := r.client.Do(request)
+	httpResponse, doErr := client.Do(request)
 	if doErr != nil {
 		evidence.DurationMS = time.Since(httpStarted).Milliseconds()
 		evidence.Error = "request failed"
@@ -617,6 +626,92 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool) (
 		headers[key] = strings.Join(values, ", ")
 	}
 	return map[string]any{"code": httpResponse.StatusCode, "status": httpResponse.Status, "body": string(data), "headers": headers}, evidence, nil
+}
+
+type auxiliaryNetworkPolicy struct {
+	allowPrivate bool
+	hosts        []string
+	networks     []*net.IPNet
+}
+
+func compileAuxiliaryNetworkPolicy(allowPrivate bool, hosts, cidrs []string) (auxiliaryNetworkPolicy, error) {
+	policy := auxiliaryNetworkPolicy{allowPrivate: allowPrivate}
+	for _, raw := range hosts {
+		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		if host == "" {
+			continue
+		}
+		if host == "*" || (strings.Contains(host, "*") && !strings.HasPrefix(host, "*.")) {
+			return auxiliaryNetworkPolicy{}, errors.New("invalid allowed host")
+		}
+		policy.hosts = append(policy.hosts, host)
+	}
+	for _, raw := range cidrs {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+		if err != nil {
+			return auxiliaryNetworkPolicy{}, errors.New("invalid allowed CIDR")
+		}
+		policy.networks = append(policy.networks, network)
+	}
+	return policy, nil
+}
+
+func (p auxiliaryNetworkPolicy) validate(ctx context.Context, target *url.URL) error {
+	if target == nil || target.Hostname() == "" || (target.Scheme != "http" && target.Scheme != "https") {
+		return errors.New("pm.sendRequest target is invalid")
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, target.Hostname())
+	if err != nil {
+		return errors.New("pm.sendRequest DNS resolution failed")
+	}
+	for _, address := range addresses {
+		if !p.allowed(target.Hostname(), address.IP) {
+			return errors.New("pm.sendRequest target is blocked by network policy")
+		}
+	}
+	return nil
+}
+
+func (p auxiliaryNetworkPolicy) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range addresses {
+		if !p.allowed(host, candidate.IP) {
+			continue
+		}
+		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+	}
+	return nil, errors.New("pm.sendRequest target has no allowed network address")
+}
+
+func (p auxiliaryNetworkPolicy) allowed(host string, address net.IP) bool {
+	if p.allowPrivate || !privateIP(address) {
+		return true
+	}
+	normalizedHost := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, pattern := range p.hosts {
+		if pattern == normalizedHost {
+			return true
+		}
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := strings.TrimPrefix(pattern, "*")
+			if strings.HasSuffix(normalizedHost, suffix) && normalizedHost != strings.TrimPrefix(suffix, ".") {
+				return true
+			}
+		}
+	}
+	for _, network := range p.networks {
+		if network.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func digest(algorithm, value string) ([]int, error) {

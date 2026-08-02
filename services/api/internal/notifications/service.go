@@ -273,6 +273,7 @@ func (s *Service) email(ctx context.Context, item delivery) error {
 		port = 587
 	}
 	from := strings.TrimSpace(fmt.Sprint(item.Config["from"]))
+	fromName := strings.TrimSpace(fmt.Sprint(item.Config["fromName"]))
 	recipients := mergeRecipients(stringSlice(item.Config["to"]), item.ApplicationEmails)
 	if host == "" || from == "" {
 		return errors.New("email channel requires smtpHost and from")
@@ -294,7 +295,11 @@ func (s *Service) email(ctx context.Context, item delivery) error {
 	}
 	subject := fmt.Sprintf("[%s] %s", item.Severity, item.Title)
 	body := fmt.Sprintf("Monitor: %s\r\nEvent: %s\r\n\r\n%s", item.MonitorName, item.EventType, item.Description)
-	message := []byte("To: " + strings.Join(recipients, ", ") + "\r\nFrom: " + from + "\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body)
+	fromHeader := from
+	if fromName != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", fromName, from)
+	}
+	message := []byte("To: " + strings.Join(recipients, ", ") + "\r\nFrom: " + fromHeader + "\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body)
 	send := s.sendMail
 	if send == nil {
 		send = smtp.SendMail

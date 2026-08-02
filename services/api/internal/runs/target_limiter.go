@@ -42,10 +42,10 @@ return 1
 `)
 
 type RedisTargetLimiter struct {
-	client *redis.Client
+	client redis.UniversalClient
 }
 
-func NewRedisTargetLimiter(client *redis.Client) *RedisTargetLimiter {
+func NewRedisTargetLimiter(client redis.UniversalClient) *RedisTargetLimiter {
 	return &RedisTargetLimiter{client: client}
 }
 

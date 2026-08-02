@@ -1,0 +1,28 @@
+# Console onboarding contract. Replace placeholders before creating the service.
+project: <HYDRA_PROJECT_NAME>
+service: rhythm-frontdoor
+description: Rhythm web experience, public API, webhooks, and SSO boundary.
+platform: on-prem
+network: intranet
+maximumEnvironment: e3
+workloadType: regular-application
+persistentStorage: none
+deploymentMethod: rolling
+applicationType: not-api
+routability:
+  mode: routable-with-sso
+  applicationUrlPrefix: rhythm
+  gdha: active-active-topology-performance
+  gtmHealthcheckPath: /health
+  generatedUrls:
+    e1: https://rhythm-dev.aexp.com
+    e2: https://rhythm-qa.aexp.com
+    e3: https://rhythm.aexp.com
+certificates:
+  corporateTrustFromBuildpack: true
+  inboundMutualTLS: false
+  outboundMutualTLS: false
+  messageSigning: false
+workflow: .github/workflows/deploy-rhythm-frontdoor.yml
+valuesPath: deploy/hydra/services/rhythm-frontdoor/helm
+dockerfile: deploy/hydra/services/rhythm-frontdoor/Dockerfile

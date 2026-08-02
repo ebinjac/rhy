@@ -2,13 +2,59 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// CheckRequiredSchema accepts either the Liquibase change-set ID (for Hydra)
+// or the embedded Go migration filename (for local Compose). This lets the
+// same application image refuse readiness against an older database without
+// making either migration engine silently mutate the schema at startup.
+func CheckRequiredSchema(ctx context.Context, pool *pgxpool.Pool, required string) error {
+	required = strings.TrimSpace(required)
+	if required == "" {
+		return nil
+	}
+	var migrationTable, liquibaseTable *string
+	if err := pool.QueryRow(ctx, `
+		SELECT to_regclass('public.schema_migrations')::text,
+		       to_regclass('public.databasechangelog')::text
+	`).Scan(&migrationTable, &liquibaseTable); err != nil {
+		return fmt.Errorf("inspect schema migration metadata: %w", err)
+	}
+	if migrationTable != nil {
+		var applied bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM schema_migrations
+				WHERE version = $1 OR version = $1 || '.up.sql'
+			)
+		`, required).Scan(&applied); err != nil {
+			return fmt.Errorf("check embedded migration %s: %w", required, err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	if liquibaseTable != nil {
+		var applied bool
+		if err := pool.QueryRow(ctx, `
+			SELECT EXISTS (SELECT 1 FROM databasechangelog WHERE id = $1)
+		`, strings.TrimSuffix(required, ".up.sql")).Scan(&applied); err != nil {
+			return fmt.Errorf("check Liquibase change set %s: %w", required, err)
+		}
+		if applied {
+			return nil
+		}
+	}
+	return errors.New("database schema is older than required revision " + required)
+}
 
 func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return OpenWithOptions(ctx, databaseURL, PoolOptions{})

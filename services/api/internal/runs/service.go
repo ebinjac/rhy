@@ -218,6 +218,32 @@ func (s *Service) Start(ctx context.Context, monitorID, actorID, mode string) (R
 	return s.start(ctx, monitorID, actorID, mode, "", "", "")
 }
 
+func (s *Service) StartTriggered(ctx context.Context, monitorID, actorID, triggerType string) (Run, error) {
+	return s.start(ctx, monitorID, actorID, "published", triggerType, "", "")
+}
+
+func (s *Service) WaitForTerminal(ctx context.Context, runID string, pollInterval time.Duration) (Run, error) {
+	if pollInterval <= 0 {
+		pollInterval = 250 * time.Millisecond
+	}
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		run, err := s.repository.Get(ctx, runID)
+		if err != nil {
+			return Run{}, err
+		}
+		if isTerminalStatus(run.Status) {
+			return run, nil
+		}
+		select {
+		case <-ctx.Done():
+			return run, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
 func (s *Service) StartScheduled(ctx context.Context, monitorID, scheduleID, concurrencyPolicy string, dueAt time.Time) (Run, error) {
 	deduplication := fmt.Sprintf("schedule:%s:%d", scheduleID, dueAt.UTC().Unix())
 	return s.start(ctx, monitorID, scheduleID, "published", "SCHEDULED", scheduleID, deduplication, concurrencyPolicy)
@@ -236,9 +262,11 @@ func (s *Service) start(ctx context.Context, monitorID, actorID, mode, triggerOv
 	run := Run{ID: runID, MonitorID: monitorID, RevisionID: revision.ID, Status: StatusQueued, TriggerType: triggerType, TriggerSource: actorID, CreatedAt: queuedAt, Steps: []StepRun{}, ExecutionContext: map[string]any{"monitorName": monitor.Name, "environmentId": monitor.EnvironmentID, "revisionId": revision.ID, "revisionNumber": revision.RevisionNumber}}
 	appendRunEvent(&run, "RUN_QUEUED", StatusQueued, "Run accepted and queued for execution.", "", nil)
 	request := QueueRequest{
-		MonitorID: monitorID, ActorID: actorID, Mode: mode, TriggerType: triggerOverride,
+		MonitorID: monitorID, RevisionID: revision.ID, ActorID: actorID, Mode: mode, TriggerType: triggerOverride,
 		ScheduleID: scheduleID, Deduplication: deduplication, QueuedAt: queuedAt,
 		RecoverySafe: definitionRecoverySafe(definition),
+		Snapshot: &ExecutionSnapshot{MonitorName: monitor.Name, EnvironmentID: monitor.EnvironmentID,
+			RevisionID: revision.ID, RevisionNumber: revision.RevisionNumber, Definition: definition},
 	}
 	if len(concurrencyPolicy) > 0 {
 		request.ConcurrencyPolicy = concurrencyPolicy[0]
@@ -343,7 +371,7 @@ func (s *Service) ExecuteQueued(ctx context.Context, runID string, request Queue
 			queuedAt = s.now()
 		}
 	}
-	return s.run(ctx, request.MonitorID, request.ActorID, request.Mode, request.TriggerType, runID, &queuedAt)
+	return s.runWithSnapshot(ctx, request.MonitorID, request.ActorID, request.Mode, request.TriggerType, runID, &queuedAt, request.RevisionID, request.Snapshot)
 }
 
 func isTerminalStatus(status Status) bool {
@@ -355,14 +383,23 @@ func isTerminalStatus(status Status) bool {
 }
 
 func (s *Service) resolveExecution(ctx context.Context, monitorID, mode, triggerOverride string) (monitors.Monitor, monitors.Revision, Definition, string, error) {
+	return s.resolveExecutionAtRevision(ctx, monitorID, mode, triggerOverride, "")
+}
+
+func (s *Service) resolveExecutionAtRevision(ctx context.Context, monitorID, mode, triggerOverride, requestedRevisionID string) (monitors.Monitor, monitors.Revision, Definition, string, error) {
 	monitor, err := s.monitors.Get(ctx, monitorID)
 	if err != nil {
 		return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", err
 	}
-	revisionID := monitor.CurrentDraftRevisionID
+	revisionID := strings.TrimSpace(requestedRevisionID)
+	if revisionID == "" {
+		revisionID = monitor.CurrentDraftRevisionID
+	}
 	triggerType := "MANUAL_DRAFT"
 	if mode == "published" {
-		revisionID = monitor.LatestPublishedRevisionID
+		if strings.TrimSpace(requestedRevisionID) == "" {
+			revisionID = monitor.LatestPublishedRevisionID
+		}
 		triggerType = "MANUAL_PUBLISHED"
 		if revisionID == "" {
 			return monitors.Monitor{}, monitors.Revision{}, Definition{}, "", errors.New("monitor has no published revision")
@@ -398,7 +435,36 @@ func (s *Service) resolveExecution(ctx context.Context, monitorID, mode, trigger
 }
 
 func (s *Service) run(ctx context.Context, monitorID, actorID, mode, triggerOverride, requestedRunID string, queuedAt *time.Time) (Run, error) {
-	monitor, revision, definition, triggerType, err := s.resolveExecution(ctx, monitorID, mode, triggerOverride)
+	return s.runAtRevision(ctx, monitorID, actorID, mode, triggerOverride, requestedRunID, queuedAt, "")
+}
+
+func (s *Service) runAtRevision(ctx context.Context, monitorID, actorID, mode, triggerOverride, requestedRunID string, queuedAt *time.Time, requestedRevisionID string) (Run, error) {
+	return s.runWithSnapshot(ctx, monitorID, actorID, mode, triggerOverride, requestedRunID, queuedAt, requestedRevisionID, nil)
+}
+
+func (s *Service) runWithSnapshot(ctx context.Context, monitorID, actorID, mode, triggerOverride, requestedRunID string, queuedAt *time.Time, requestedRevisionID string, snapshot *ExecutionSnapshot) (Run, error) {
+	var monitor monitors.Monitor
+	var revision monitors.Revision
+	var definition Definition
+	var triggerType string
+	var err error
+	if snapshot != nil {
+		if snapshot.RevisionID == "" || len(snapshot.Definition.Steps) == 0 || (requestedRevisionID != "" && requestedRevisionID != snapshot.RevisionID) {
+			return Run{}, errors.New("queued execution snapshot is invalid")
+		}
+		monitor = monitors.Monitor{ID: monitorID, Name: snapshot.MonitorName, EnvironmentID: snapshot.EnvironmentID}
+		revision = monitors.Revision{ID: snapshot.RevisionID, MonitorID: monitorID, RevisionNumber: snapshot.RevisionNumber}
+		definition = snapshot.Definition
+		triggerType = "MANUAL_DRAFT"
+		if mode == "published" {
+			triggerType = "MANUAL_PUBLISHED"
+		}
+		if triggerOverride != "" {
+			triggerType = triggerOverride
+		}
+	} else {
+		monitor, revision, definition, triggerType, err = s.resolveExecutionAtRevision(ctx, monitorID, mode, triggerOverride, requestedRevisionID)
+	}
 	if err != nil {
 		return Run{}, err
 	}

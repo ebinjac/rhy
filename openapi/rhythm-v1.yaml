@@ -51,6 +51,32 @@ paths:
                 $ref: "#/components/schemas/SuccessEnvelope"
         "503":
           description: One or more required dependencies are unavailable
+  /health:
+    get:
+      tags: [Health]
+      security: []
+      operationId: getHydraHealth
+      summary: Check Hydra readiness on the platform-standard endpoint
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Error" }
+  /api/v1/session:
+    get:
+      tags: [Health]
+      operationId: getSession
+      summary: Get the authenticated actor and effective Rhythm roles
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data: { $ref: "#/components/schemas/Principal" }
+        "401": { $ref: "#/components/responses/Error" }
   /api/v1/overview:
     get:
       tags: [Health]
@@ -686,6 +712,15 @@ components:
           properties:
             nextCursor: { type: [string, "null"] }
             limit: { type: integer }
+    Principal:
+      type: object
+      required: [id, roles]
+      properties:
+        id: { type: string, minLength: 1, maxLength: 255 }
+        roles:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [ADMINISTRATOR, EDITOR, OPERATOR, VIEWER] }
     OpenSearchAlertServiceAssignmentInput:
       type: object
       additionalProperties: false

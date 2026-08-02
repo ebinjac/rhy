@@ -56,70 +56,6 @@ services:
       retries: 18
     restart: unless-stopped
 
-  mailpit:
-    image: axllent/mailpit:v1.30.0
-    environment:
-      MP_DATABASE: /data/mailpit.db
-      MP_MAX_MESSAGES: "500"
-    ports:
-      - "${RHYTHM_MAILPIT_PORT:-18025}:8025"
-    volumes:
-      - rhythm_mailpit_data:/data
-    restart: unless-stopped
-
-  opensearch:
-    image: opensearchproject/opensearch:3.7.0
-    environment:
-      discovery.type: single-node
-      DISABLE_SECURITY_PLUGIN: "true"
-      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
-    ports:
-      - "${RHYTHM_OPENSEARCH_PORT:-19200}:9200"
-    volumes:
-      - rhythm_opensearch_data:/usr/share/opensearch/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-    mem_limit: 1g
-    restart: unless-stopped
-
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:3.7.0
-    environment:
-      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
-      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
-    ports:
-      - "${RHYTHM_OPENSEARCH_DASHBOARDS_PORT:-15601}:5601"
-    depends_on:
-      opensearch:
-        condition: service_healthy
-    restart: unless-stopped
-
-  elf-seed:
-    image: curlimages/curl:8.16.0
-    entrypoint: ["/bin/sh", "/seed/seed-elf.sh"]
-    volumes:
-      - ./scripts/seed-elf.sh:/seed/seed-elf.sh:ro
-    depends_on:
-      opensearch:
-        condition: service_healthy
-    restart: "no"
-
-  demo-log-generator:
-    image: curlimages/curl:8.16.0
-    entrypoint: ["/bin/sh", "/generator/generate-demo-logs.sh"]
-    environment:
-      DEMO_LOG_INTERVAL_SECONDS: "10"
-    volumes:
-      - ./scripts/generate-demo-logs.sh:/generator/generate-demo-logs.sh:ro
-    depends_on:
-      elf-seed:
-        condition: service_completed_successfully
-    init: true
-    restart: unless-stopped
-
   migrate:
     image: rhythm-api:local
     build:
@@ -160,13 +96,16 @@ services:
       RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
 
       RHYTHM_ALLOW_PRIVATE_TARGETS: "true"
-      RHYTHM_ELF_BOOTSTRAP_URL: http://opensearch:9200
+      # Optional: point at an external OpenSearch for ELF bootstrap seed. Leave unset when
+      # configuring ELF against a production/shared cluster via the UI.
+      RHYTHM_ELF_BOOTSTRAP_URL: ${RHYTHM_ELF_BOOTSTRAP_URL:-}
       # 32-byte AES key (base64). Local-only default — replace in any shared environment.
       RHYTHM_SECRETS_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
-      # In-stack SMTP catcher for deterministic local alert email tests (no auth).
-      SMTP_HOST: ${SMTP_HOST:-mailpit}
-      SMTP_PORT: ${SMTP_PORT:-1025}
-      SMTP_FROM: ${SMTP_FROM:-rhythm-alerts@localhost}
+      # External SMTP relay (no auth). Override with SMTP_* / RHYTHM_SMTP_* as needed.
+      SMTP_HOST: ${SMTP_HOST:-usazphx-mrlye2-vip.qa.test.com}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_FROM: ${SMTP_FROM:-${SMTP_FROM_EMAIL:-no-reply@rythm.test.com}}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-rythm_support}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_TO: ${SMTP_TO:-}
@@ -177,16 +116,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      mailpit:
-        condition: service_started
       script-runner:
         condition: service_healthy
       browser-agent:
         condition: service_healthy
       minio:
         condition: service_healthy
-      elf-seed:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
       interval: 5s
@@ -218,8 +153,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      elf-seed:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
       interval: 5s
@@ -248,8 +181,6 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-      elf-seed:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
       interval: 5s
@@ -272,16 +203,12 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      mailpit:
-        condition: service_started
       script-runner:
         condition: service_healthy
       browser-agent:
         condition: service_healthy
       minio:
         condition: service_healthy
-      elf-seed:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
       interval: 5s
@@ -381,6 +308,4 @@ services:
 volumes:
   rhythm_postgres_data:
   rhythm_redis_data:
-  rhythm_opensearch_data:
-  rhythm_mailpit_data:
   rhythm_minio_data:

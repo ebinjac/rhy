@@ -1,0 +1,61 @@
+# Hydra values for rhythm-frontdoor in e1.
+# Secrets (PostgreSQL, Redis, encryption, SSO groups, and runner tokens)
+# are injected by Hydra Vault and must not be committed here.
+automaticFailover: true
+
+configMap:
+  EPAAS_ENV: e1
+  ENV: e1
+  RHYTHM_SERVICE_ROLE: frontdoor
+  RHYTHM_ENVIRONMENT: production
+  RHYTHM_STORAGE_MODE: postgres
+  RHYTHM_ARTIFACT_STORE_PROVIDER: s3
+  RHYTHM_ARTIFACT_STORE_PREFIX: e1/rhythm
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "false"
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "false"
+  RHYTHM_REDIS_TLS: "true"
+  RHYTHM_REQUIRED_SCHEMA_VERSION: 000030_hydra_capacity
+  RHYTHM_BROWSER_RUNNER_URL: http://rhythm-browser-executor-svc.<HYDRA_PROJECT_NAME>.global:8080
+  RHYTHM_ALLOWED_ORIGIN: https://rhythm-dev.aexp.com
+  RHYTHM_AUTH_MODE: trusted_headers
+  RHYTHM_IDENTITY_HEADER: X-Rhythm-User
+  RHYTHM_GROUPS_HEADER: X-Rhythm-Groups
+  RHYTHM_REQUIRE_VERIFIED_IDENTITY: "false"
+  RHYTHM_TRUSTED_PROXY_CIDRS: 127.0.0.0/8,::1/128
+  RHYTHM_DATABASE_MAX_CONNS: "16"
+  RHYTHM_SCRIPT_RUNNER_CONCURRENCY: "2"
+
+deployment:
+  lifecycle: {}
+  livenessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /livez
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /health
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    successThreshold: 1
+    timeoutSeconds: 10
+  resourcesLimitsCPU: 2000m
+  resourcesLimitsMemory: 4G
+  resourcesRequestsCPU: 1000m
+  resourcesRequestsMemory: 2G
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+hpa:
+  cpuUtilizationPercentage: 75
+  enabled: true
+  maxReplicas: 4
+  minReplicas: 2

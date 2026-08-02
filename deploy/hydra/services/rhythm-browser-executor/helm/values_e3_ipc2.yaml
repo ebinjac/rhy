@@ -1,0 +1,66 @@
+# Hydra values for rhythm-browser-executor in e3_ipc2.
+# Secrets (PostgreSQL, Redis, encryption, SSO groups, and runner tokens)
+# are injected by Hydra Vault and must not be committed here.
+automaticFailover: true
+
+configMap:
+  EPAAS_ENV: e3_ipc2
+  ENV: e3
+  RHYTHM_SERVICE_ROLE: browser-executor
+  RHYTHM_ENVIRONMENT: production
+  RHYTHM_AUTH_MODE: internal
+  RHYTHM_STORAGE_MODE: postgres
+  RHYTHM_ARTIFACT_STORE_PROVIDER: s3
+  RHYTHM_ARTIFACT_STORE_PREFIX: e3/rhythm
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "false"
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "false"
+  RHYTHM_REDIS_TLS: "true"
+  RHYTHM_REQUIRED_SCHEMA_VERSION: 000030_hydra_capacity
+  RHYTHM_DATABASE_MAX_CONNS: "8"
+  RHYTHM_BROWSER_JOB_CONCURRENCY: "2"
+  RHYTHM_BROWSER_MAX_CONTEXTS: "2"
+  RHYTHM_CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium
+  RHYTHM_CHROMIUM_DISABLE_DEV_SHM_USAGE: "false"
+
+deployment:
+  lifecycle: {}
+  volumeMounts:
+    - name: browser-shm
+      mountPath: /dev/shm
+  volumes:
+    - name: browser-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 1Gi
+  livenessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /livez
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /health
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 60
+    periodSeconds: 15
+    successThreshold: 1
+    timeoutSeconds: 10
+  resourcesLimitsCPU: 4000m
+  resourcesLimitsMemory: 10G
+  resourcesRequestsCPU: 2000m
+  resourcesRequestsMemory: 6G
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+hpa:
+  cpuUtilizationPercentage: 75
+  enabled: true
+  maxReplicas: 4
+  minReplicas: 1

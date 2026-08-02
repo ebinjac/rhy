@@ -15,7 +15,11 @@ keywords:
   - security
 ---
 
-Rhythm separates the web application, API, workers, script runner, PostgreSQL, Redis, and optional local OpenSearch services.
+Rhythm separates public traffic, control-plane orchestration, API execution, and
+Chromium execution. On Hydra, managed PostgreSQL, Redis Enterprise, and AWS S3
+remain outside the application pod footprint. See [Deploy Rhythm on
+Hydra](/docs/administration/hydra-deployment) for the selected four-service
+topology and 2,000-run capacity model.
 
 ## Production boundaries
 

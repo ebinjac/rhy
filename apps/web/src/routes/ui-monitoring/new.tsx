@@ -41,7 +41,10 @@ import type {
 } from "@/lib/api-client/browser-monitoring"
 import { listELFApplications } from "@/lib/api-client/elf"
 import { listConfigurationProfiles } from "@/lib/api-client/monitors"
-import { formatDuration } from "@/features/ui-monitoring/browser-monitor-status"
+import {
+  formatDuration,
+  isSuccessfulBrowserStepStatus,
+} from "@/features/ui-monitoring/browser-monitor-status"
 
 export const Route = createFileRoute("/ui-monitoring/new")({
   loader: async () => {
@@ -659,7 +662,7 @@ function PreviewPanel({
               />
               <PreviewValue
                 label="Steps"
-                value={`${preview.steps.filter((step) => step.status === "PASSED").length} / ${preview.steps.length} passed`}
+                value={`${preview.steps.filter((step) => isSuccessfulBrowserStepStatus(step.status)).length} / ${preview.steps.length} passed`}
               />
               <PreviewValue
                 label="Warnings"

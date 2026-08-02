@@ -7,6 +7,8 @@
     "dev:api": "cd services/api && go run ./cmd/api",
     "dev": "turbo dev",
     "migrate:api": "cd services/api && go run ./cmd/migrate",
+    "migrations:check": "node scripts/check-migration-parity.mjs",
+    "hydra:check": "node scripts/check-hydra-deployment.mjs",
     "test:api": "cd services/api && go test ./...",
     "lint": "turbo lint",
     "format": "turbo format",

@@ -1,0 +1,55 @@
+name: Deploy rhythm-control to Hydra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/api/**"
+      - "deploy/hydra/launcher.mjs"
+      - "deploy/hydra/services/rhythm-control/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "services/api/**"
+      - "deploy/hydra/launcher.mjs"
+      - "deploy/hydra/services/rhythm-control/**"
+  workflow_dispatch:
+    inputs:
+      manual_op:
+        description: Hydra operation
+        type: choice
+        options: [Deploy an image, Switch (b/g), Rollback]
+        default: Deploy an image
+      manual_env:
+        description: Hydra environment
+        type: choice
+        options: [e1, e2, e3]
+        default: e1
+      rfc:
+        description: Required CHG number for E3
+        type: string
+        required: false
+      rollback_version:
+        description: Optional version to restore
+        type: string
+        required: false
+      image_sha256:
+        description: Optional existing image digest
+        type: string
+        required: false
+
+concurrency: deploy_rhythm_control_to_hydra
+
+jobs:
+  service-contract:
+    uses: ./.github/workflows/_hydra-service-contract.yml
+    with:
+      project: ${{ vars.HYDRA_PROJECT_NAME }}
+      service: rhythm-control
+      dockerfile: deploy/hydra/services/rhythm-control/Dockerfile
+      values_path: deploy/hydra/services/rhythm-control/helm
+      operation: ${{ inputs.manual_op || 'Build and validate' }}
+      environment: ${{ inputs.manual_env || 'e1' }}
+      rfc: ${{ inputs.rfc || '' }}
+      rollback_version: ${{ inputs.rollback_version || '' }}
+      image_sha256: ${{ inputs.image_sha256 || '' }}

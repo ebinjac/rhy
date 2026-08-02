@@ -11,7 +11,7 @@ docker compose up --build -d
 docker compose ps
 ```
 
-The stack includes PostgreSQL, Redis, OpenSearch, OpenSearch Dashboards, a continuously running demo-log generator, the database migration job, the Go API, the isolated JavaScript script runner, and the TanStack frontend.
+The stack includes PostgreSQL, Redis, MinIO, the database migration job, the Go API, the isolated JavaScript script runner, the browser agent, and the TanStack frontend. OpenSearch is not bundled — configure ELF against your shared/production cluster in the UI (or optionally set `RHYTHM_ELF_BOOTSTRAP_URL`).
 
 ```text
 Frontend:   http://localhost:3100
@@ -19,16 +19,13 @@ API:        http://localhost:18080
 API health: http://localhost:18080/healthz
 PostgreSQL: localhost:55432
 Redis:      localhost:56379
-OpenSearch: http://localhost:19200
-Dashboards: http://localhost:15601/app/discover
-Mailpit:    http://localhost:18025
 ```
 
-Ports can be overridden with `RHYTHM_WEB_PORT`, `RHYTHM_API_PORT`, `RHYTHM_POSTGRES_PORT`, `RHYTHM_REDIS_PORT`, `RHYTHM_OPENSEARCH_PORT`, `RHYTHM_OPENSEARCH_DASHBOARDS_PORT`, and `RHYTHM_MAILPIT_PORT`.
+Ports can be overridden with `RHYTHM_WEB_PORT`, `RHYTHM_API_PORT`, `RHYTHM_POSTGRES_PORT`, and `RHYTHM_REDIS_PORT`.
 
 Local Compose sets `RHYTHM_SECRETS_ENCRYPTION_KEY` on the API so Configuration → Secrets can store AES-GCM–encrypted values. Override it for any shared environment; without a valid 32-byte key (base64 or hex), only ENV/Vault secret references work.
 
-Local Compose includes [Mailpit](https://mailpit.axllent.org/) and seeds SMTP alert email defaults (`SMTP_HOST=mailpit`, `SMTP_PORT=1025`, `SMTP_FROM=rhythm-alerts@localhost`, no auth). Captured messages are visible at [localhost:18025](http://localhost:18025). Override with `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and optional `SMTP_TO` fallback recipients (or the `RHYTHM_SMTP_*` aliases). Configure channels under **Configuration → Notifications**, and per-application destinations under **Applications**.
+Alert email defaults to the QA SMTP relay (`SMTP_HOST`, `SMTP_PORT=25`, `SMTP_FROM` / `SMTP_FROM_EMAIL`, optional `SMTP_FROM_NAME`) with no authentication. Override those env vars (or `RHYTHM_SMTP_*` aliases) as needed. Configure channels under **Configuration → Notifications**, and per-application destinations under **Applications**.
 
 Useful commands:
 
@@ -39,18 +36,9 @@ docker compose down
 docker compose down -v # also removes local Rhythm data
 ```
 
-### Local ELF demo data
+### ELF / OpenSearch
 
-The `elf-seed` job creates the `app-logs-demo-*` data view and a reproducible baseline covering successful requests, HTTP 4xx/5xx responses, validation errors, slow requests, dependency timeouts, database failures, retries, queue pressure, authentication/authorization events, and deployments. The `demo-log-generator` service then adds a fresh event every ten seconds.
-
-Rhythm registers a **Demo Storefront** application (`CAR-DEMO-1001`), six services, service-specific index overrides, and five ready-to-run queries covering exact hit counts, latency ranges, authentication failures, dependency errors, and an average-latency aggregation. Open **ELF → Settings → Open Dashboards**, or go directly to [OpenSearch Discover](http://localhost:15601/app/discover). The default `app-logs-demo-*` data view and the last-15-minutes time range are preconfigured.
-
-To watch the generator or reload the fixed baseline:
-
-```bash
-docker compose logs -f demo-log-generator
-docker compose run --rm elf-seed
-```
+Configure ELF connection settings in the product (**ELF → Settings**) against your production or shared OpenSearch URL. Local Compose no longer starts OpenSearch, Dashboards, `elf-seed`, or `demo-log-generator`.
 
 The frontend container runs the Vite development server for the current local-development phase. PostgreSQL and Redis data are retained in named Docker volumes.
 
@@ -83,12 +71,30 @@ Primary UI routes:
 
 Runtime safety defaults include private/reserved-address SSRF blocking, DNS revalidation, TLS 1.2 minimum and hostname verification, bounded timeouts/bodies/redirects/retries, idempotency enforcement for unsafe retries, and redaction before persistence.
 
-The Compose profile uses the development authenticator and an Administrator principal (`local-admin`). Production deployments should replace it with the organization identity provider and machine identity for agents before exposure outside a trusted environment.
+The Compose profile uses the development authenticator and an Administrator principal (`local-admin`). Non-development runtimes reject this mode. Hydra uses verified identity headers from the front door, trusted-proxy CIDR enforcement, and corporate group-to-role mappings.
+
+## Deploy to Hydra
+
+Production uses four workload-aligned services backed by managed PostgreSQL,
+Redis Enterprise, AWS S3, Vault, and corporate certificates:
+
+- `rhythm-frontdoor`: two steady web/API pods.
+- `rhythm-control`: one scheduler and background-orchestration pod.
+- `rhythm-api-executor`: three pods scaling to twelve, with 256 run slots each.
+- `rhythm-browser-executor`: one Chromium pod scaling to four.
+
+Start with the [Hydra deployment package](deploy/hydra/README.md). It contains
+four service-owned Dockerfiles, four separate workflow URLs, per-service Vault
+inventories, E1/E2/E3 IPC values, internal Hydra DNS, the predictive-scaling
+contract, and an independent Liquibase workflow. Run `npm run hydra:check` and
+`npm run migrations:check` before every database or application release. The
+production package does not replace or alter local Compose.
 
 ## Run checks
 
 ```bash
 npm run test:api
+npm run migrations:check
 npm run typecheck
 npm run lint --workspace web
 npm run build --workspace web

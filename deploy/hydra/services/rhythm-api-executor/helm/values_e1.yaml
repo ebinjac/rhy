@@ -1,0 +1,68 @@
+# Hydra values for rhythm-api-executor in e1.
+# Secrets (PostgreSQL, Redis, encryption, SSO groups, and runner tokens)
+# are injected by Hydra Vault and must not be committed here.
+automaticFailover: true
+
+configMap:
+  EPAAS_ENV: e1
+  ENV: e1
+  RHYTHM_SERVICE_ROLE: api-executor
+  RHYTHM_ENVIRONMENT: production
+  RHYTHM_AUTH_MODE: internal
+  RHYTHM_STORAGE_MODE: postgres
+  RHYTHM_ARTIFACT_STORE_PROVIDER: s3
+  RHYTHM_ARTIFACT_STORE_PREFIX: e1/rhythm
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "false"
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "false"
+  RHYTHM_REDIS_TLS: "true"
+  RHYTHM_REQUIRED_SCHEMA_VERSION: 000030_hydra_capacity
+  RHYTHM_DATABASE_MAX_CONNS: "12"
+  RHYTHM_WORKER_CONCURRENCY: "256"
+  RHYTHM_SCRIPT_RUNNER_CONCURRENCY: "16"
+  RHYTHM_WORKER_MEMORY_STOP_PERCENT: "80"
+  RHYTHM_TARGET_HOST_CONCURRENCY: "16"
+  RHYTHM_EXECUTOR_MIN_REPLICAS: "3"
+  RHYTHM_EXECUTOR_MAX_REPLICAS: "12"
+  RHYTHM_EXECUTOR_TARGET_UTILIZATION_PERCENT: "70"
+
+deployment:
+  lifecycle: {}
+  livenessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /livez
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 10
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /health
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 30
+    periodSeconds: 15
+    successThreshold: 1
+    timeoutSeconds: 10
+  resourcesLimitsCPU: 4000m
+  resourcesLimitsMemory: 8G
+  resourcesRequestsCPU: 2000m
+  resourcesRequestsMemory: 4G
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+hpa:
+  cpuUtilizationPercentage: 75
+  enabled: true
+  maxReplicas: 12
+  minReplicas: 3
+
+# The Hydra platform team must bind this external desired-replica metric.
+# CPU HPA alone cannot satisfy the 15-second scheduled-start SLO.
+predictiveScaling:
+  enabled: true
+  desiredReplicasMetric: rhythm_execution_required_replicas
+  scaleDownStabilizationSeconds: 600

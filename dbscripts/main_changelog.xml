@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog
+    xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-latest.xsd">
+
+    <property name="migrationRoot" value="services/api/db/migrations"/>
+
+    <changeSet id="000001_monitor_foundation" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000001_monitor_foundation.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000001_monitor_foundation.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000002_manual_runs" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000002_manual_runs.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000002_manual_runs.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000003_alerting" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000003_alerting.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000003_alerting.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000004_configuration_library" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000004_configuration_library.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000004_configuration_library.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000005_step_attempt_diagnostics" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000005_step_attempt_diagnostics.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000005_step_attempt_diagnostics.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000006_validation_suites" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000006_validation_suites.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000006_validation_suites.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000007_execution_agents" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000007_execution_agents.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000007_execution_agents.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000008_notifications" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000008_notifications.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000008_notifications.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000009_telemetry_profiles" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000009_telemetry_profiles.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000009_telemetry_profiles.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000010_rich_run_diagnostics" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000010_rich_run_diagnostics.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000010_rich_run_diagnostics.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000011_pre_request_scripts" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000011_pre_request_scripts.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000011_pre_request_scripts.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000012_elf" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000012_elf.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000012_elf.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000013_application_car_id" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000013_application_car_id.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000013_application_car_id.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000014_single_monitor_application" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000014_single_monitor_application.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000014_single_monitor_application.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000015_elf_raw_response" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000015_elf_raw_response.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000015_elf_raw_response.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000016_opensearch_alert_webhooks" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000016_opensearch_alert_webhooks.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000016_opensearch_alert_webhooks.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000017_deployment_validations" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000017_deployment_validations.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000017_deployment_validations.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000018_application_alert_emails" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000018_application_alert_emails.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000018_application_alert_emails.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000019_elf_encrypted_credential" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000019_elf_encrypted_credential.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000019_elf_encrypted_credential.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000020_test_scripts" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000020_test_scripts.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000020_test_scripts.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000021_dynatrace_infrastructure" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000021_dynatrace_infrastructure.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000021_dynatrace_infrastructure.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000022_dynatrace_direct_scope" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000022_dynatrace_direct_scope.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000022_dynatrace_direct_scope.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000023_browser_monitoring" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000023_browser_monitoring.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000023_browser_monitoring.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000024_scale_foundation" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000024_scale_foundation.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000024_scale_foundation.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000025_operational_performance" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000025_operational_performance.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000025_operational_performance.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000026_browser_execution_queue" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000026_browser_execution_queue.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000026_browser_execution_queue.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000027_deployment_execution_queue" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000027_deployment_execution_queue.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000027_deployment_execution_queue.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000028_keyset_retention_indexes" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000028_keyset_retention_indexes.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000028_keyset_retention_indexes.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000029_suite_execution_queue" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000029_suite_execution_queue.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000029_suite_execution_queue.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000030_hydra_capacity" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000030_hydra_capacity.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000030_hydra_capacity.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+</databaseChangeLog>

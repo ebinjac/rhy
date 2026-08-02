@@ -23,6 +23,7 @@ import {
   BrowserRunBadge,
   formatDuration,
   formatFrequency,
+  isSuccessfulBrowserStepStatus,
 } from "@/features/ui-monitoring/browser-monitor-status"
 import {
   getBrowserMonitor,
@@ -285,7 +286,7 @@ function BrowserMonitorOverview() {
                     <span className="flex size-7 shrink-0 items-center justify-center rounded-md border text-xs tabular-nums">
                       {index + 1}
                     </span>
-                    {step.status === "PASSED" ? (
+                    {isSuccessfulBrowserStepStatus(step.status) ? (
                       <CheckCircle2 className="size-4 shrink-0 text-success" />
                     ) : (
                       <CircleAlert className="size-4 shrink-0 text-destructive" />

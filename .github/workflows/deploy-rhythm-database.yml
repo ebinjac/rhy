@@ -1,0 +1,74 @@
+name: Deploy Rhythm database migrations
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Liquibase operation
+        type: choice
+        options: [Validate configurations, Generate update SQL, Apply update, Show status]
+        default: Validate configurations
+      environment:
+        description: Database environment
+        type: choice
+        options: [e1, e2, e3]
+        default: e1
+      rfc:
+        description: Required CHG number for an E3 update
+        type: string
+        required: false
+      confirm_update:
+        description: Type APPLY to permit a schema update
+        type: string
+        required: false
+
+concurrency: deploy_rhythm_database_migrations
+
+permissions:
+  contents: read
+
+jobs:
+  migrate:
+    runs-on: ${{ vars.HYDRA_DATABASE_RUNNER_LABEL }}
+    environment: hydra-database-${{ inputs.environment }}
+    env:
+      LIQUIBASE_COMMAND_URL: ${{ secrets.LIQUIBASE_URL }}
+      LIQUIBASE_COMMAND_USERNAME: ${{ secrets.LIQUIBASE_USERNAME }}
+      LIQUIBASE_COMMAND_PASSWORD: ${{ secrets.LIQUIBASE_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify Go and Liquibase parity
+        run: node scripts/check-migration-parity.mjs
+      - name: Validate protected runner configuration
+        env:
+          CONFIRM_UPDATE: ${{ inputs.confirm_update }}
+          DATABASE_ENVIRONMENT: ${{ inputs.environment }}
+          DATABASE_OPERATION: ${{ inputs.operation }}
+          RFC: ${{ inputs.rfc }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v liquibase >/dev/null
+          test -n "${LIQUIBASE_COMMAND_URL:-}"
+          test -n "${LIQUIBASE_COMMAND_USERNAME:-}"
+          test -n "${LIQUIBASE_COMMAND_PASSWORD:-}"
+          if [[ "$DATABASE_ENVIRONMENT" == "e3" && "$DATABASE_OPERATION" == "Apply update" ]]; then
+            [[ "$RFC" =~ ^CHG[0-9]+$ ]]
+          fi
+          if [[ "$DATABASE_OPERATION" == "Apply update" ]]; then
+            test "$CONFIRM_UPDATE" = "APPLY"
+          fi
+      - name: Validate Liquibase changelog
+        run: liquibase --defaults-file=dbscripts/liquibase.properties validate
+      - name: Generate update SQL
+        if: inputs.operation == 'Generate update SQL'
+        run: liquibase --defaults-file=dbscripts/liquibase.properties update-sql
+      - name: Apply expand/contract migrations
+        if: inputs.operation == 'Apply update'
+        run: liquibase --defaults-file=dbscripts/liquibase.properties update
+      - name: Show deployment status
+        if: inputs.operation == 'Show status' || inputs.operation == 'Apply update'
+        run: liquibase --defaults-file=dbscripts/liquibase.properties status

@@ -31,6 +31,7 @@ import { PageContainer } from "@/components/page-container"
 import {
   BrowserRunBadge,
   formatDuration,
+  isSuccessfulBrowserStepStatus,
 } from "@/features/ui-monitoring/browser-monitor-status"
 import {
   cancelBrowserRun,
@@ -306,7 +307,7 @@ function BrowserRunDiagnostics() {
                         <span className="flex size-6 items-center justify-center rounded-md border text-[11px]">
                           {index + 1}
                         </span>
-                        {step.status === "PASSED" ? (
+                        {isSuccessfulBrowserStepStatus(step.status) ? (
                           <CheckCircle2 className="size-3.5 text-success" />
                         ) : (
                           <CircleAlert className="size-3.5 text-destructive" />
@@ -321,7 +322,7 @@ function BrowserRunDiagnostics() {
                       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                         <div
                           className={`h-full rounded-full ${
-                            step.status === "PASSED"
+                            isSuccessfulBrowserStepStatus(step.status)
                               ? "bg-primary/70"
                               : "bg-destructive"
                           }`}
@@ -358,7 +359,7 @@ function BrowserRunDiagnostics() {
             {selectedStep?.status ? (
               <span
                 className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                  selectedStep.status === "PASSED"
+                  isSuccessfulBrowserStepStatus(selectedStep.status)
                     ? "bg-success-soft text-success-foreground"
                     : "bg-destructive/10 text-destructive"
                 }`}
@@ -481,6 +482,8 @@ function PerformanceEvidence({
     ["LCP", metrics.lcp, "Largest Contentful Paint in this lab run."],
     ["TBT", metrics.tbt, "Total Blocking Time, a lab responsiveness proxy."],
   ] as const
+  const hasPerformanceEvidence = values.some(([, value]) => value !== null)
+  const captureFailed = readString(run.metrics.captureState) === "NOT_CAPTURED"
   return (
     <div className="mt-4">
       <div className="rounded-lg border border-primary/20 bg-primary/[0.035] px-4 py-3 text-sm">
@@ -491,6 +494,21 @@ function PerformanceEvidence({
           INP.
         </p>
       </div>
+      {!hasPerformanceEvidence ? (
+        <div className="mt-4 flex gap-3 rounded-lg border border-warning/30 bg-warning-soft p-4 text-sm">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+          <div>
+            <p className="font-medium text-warning-foreground">
+              Synthetic performance was not recorded
+            </p>
+            <p className="mt-1 text-xs/5 text-muted-foreground">
+              {captureFailed
+                ? "The browser journey completed, but the agent could not capture its lab-performance evidence. Run the monitor again; the journey outcome remains valid."
+                : "This execution predates performance capture or did not provide compatible browser evidence. Run the monitor again to collect these measurements."}
+            </p>
+          </div>
+        </div>
+      ) : null}
       <div className="mt-4 grid gap-px overflow-hidden rounded-xl border bg-border sm:grid-cols-2 xl:grid-cols-3">
         {values.map(([label, value, help]) => (
           <div className="bg-background p-4" key={label}>

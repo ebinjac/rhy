@@ -2,6 +2,7 @@
   "title": "Administration",
   "pages": [
     "production-architecture",
+    "hydra-deployment",
     "configuration-library",
     "secret-providers",
     "certificates-and-keystores",

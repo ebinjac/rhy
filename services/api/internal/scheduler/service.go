@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -47,11 +48,11 @@ type Service struct {
 	pollInterval time.Duration
 }
 
-func New(pool *pgxpool.Pool, redisClient *redis.Client, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger) *Service {
+func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger) *Service {
 	return NewWithOptions(pool, redisClient, monitorService, runService, logger, 1000, 500*time.Millisecond)
 }
 
-func NewWithOptions(pool *pgxpool.Pool, _ *redis.Client, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger, batchSize int, pollInterval time.Duration) *Service {
+func NewWithOptions(pool *pgxpool.Pool, _ redis.UniversalClient, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger, batchSize int, pollInterval time.Duration) *Service {
 	if batchSize <= 0 {
 		batchSize = 1000
 	}
@@ -199,38 +200,121 @@ func (s *Service) enqueueDue(ctx context.Context) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	rows, err := tx.Query(ctx, `SELECT s.id::text, s.monitor_id::text, s.schedule_type, COALESCE(s.expression,''), COALESCE(s.interval_seconds,0), s.timezone, s.jitter_seconds, s.concurrency_policy, s.missed_run_policy, s.active, s.next_run_at FROM monitor_schedules s JOIN monitors m ON m.id=s.monitor_id WHERE s.active=TRUE AND s.next_run_at<=NOW() AND m.enabled=TRUE AND m.deleted_at IS NULL ORDER BY s.next_run_at FOR UPDATE OF s SKIP LOCKED LIMIT $1`, s.batchSize)
+	rows, err := tx.Query(ctx, `
+		SELECT s.id::text,s.monitor_id::text,s.schedule_type,COALESCE(s.expression,''),
+			COALESCE(s.interval_seconds,0),s.timezone,s.jitter_seconds,s.concurrency_policy,
+			s.missed_run_policy,s.active,s.next_run_at,m.name,COALESCE(m.environment_id::text,''),
+			m.latest_published_revision_id::text,r.revision_number,r.definition_json
+		FROM monitor_schedules s
+		JOIN monitors m ON m.id=s.monitor_id
+		JOIN monitor_revisions r ON r.id=m.latest_published_revision_id
+		WHERE s.active=TRUE AND s.next_run_at<=NOW() AND m.enabled=TRUE AND m.deleted_at IS NULL
+		ORDER BY s.next_run_at FOR UPDATE OF s SKIP LOCKED LIMIT $1`, s.batchSize)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	var due []Config
+	type dueSchedule struct {
+		Config
+		MonitorName, EnvironmentID, RevisionID string
+		RevisionNumber                         int
+		Definition                             runs.Definition
+	}
+	var due []dueSchedule
 	for rows.Next() {
-		var item Config
-		if err := rows.Scan(&item.ID, &item.MonitorID, &item.Type, &item.Expression, &item.IntervalSeconds, &item.Timezone, &item.JitterSeconds, &item.ConcurrencyPolicy, &item.MissedRunPolicy, &item.Active, &item.NextRunAt); err != nil {
+		var item dueSchedule
+		var definitionJSON []byte
+		if err := rows.Scan(&item.ID, &item.MonitorID, &item.Type, &item.Expression, &item.IntervalSeconds, &item.Timezone, &item.JitterSeconds, &item.ConcurrencyPolicy, &item.MissedRunPolicy, &item.Active, &item.NextRunAt, &item.MonitorName, &item.EnvironmentID, &item.RevisionID, &item.RevisionNumber, &definitionJSON); err != nil {
 			return err
+		}
+		if err := json.Unmarshal(definitionJSON, &item.Definition); err != nil {
+			return fmt.Errorf("decode scheduled monitor definition: %w", err)
 		}
 		due = append(due, item)
 	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	batch := &pgx.Batch{}
+	queuedAt := time.Now().UTC()
+	queuedCommands := 0
 	for _, item := range due {
 		if item.NextRunAt == nil {
 			continue
 		}
-		if _, err := s.runs.StartScheduled(ctx, item.MonitorID, item.ID, item.ConcurrencyPolicy, *item.NextRunAt); err != nil && !errors.Is(err, runs.ErrAlreadyQueued) {
-			return fmt.Errorf("queue scheduled run: %w", err)
+		runID, err := id.NewUUID()
+		if err != nil {
+			return err
 		}
+		eventID, err := id.NewUUID()
+		if err != nil {
+			return err
+		}
+		jobID, err := id.NewUUID()
+		if err != nil {
+			return err
+		}
+		outboxID, err := id.NewUUID()
+		if err != nil {
+			return err
+		}
+		deduplication := fmt.Sprintf("schedule:%s:%d", item.ID, item.NextRunAt.UTC().Unix())
+		request := runs.QueueRequest{
+			MonitorID: item.MonitorID, RevisionID: item.RevisionID, ActorID: item.ID, Mode: "published", TriggerType: "SCHEDULED",
+			ScheduleID: item.ID, ConcurrencyPolicy: item.ConcurrencyPolicy,
+			Deduplication: deduplication, QueuedAt: queuedAt, RecoverySafe: false,
+			Snapshot: &runs.ExecutionSnapshot{MonitorName: item.MonitorName, EnvironmentID: item.EnvironmentID,
+				RevisionID: item.RevisionID, RevisionNumber: item.RevisionNumber, Definition: item.Definition},
+		}
+		payload, _ := json.Marshal(request)
+		executionContext, _ := json.Marshal(map[string]any{
+			"monitorName": item.MonitorName, "environmentId": item.EnvironmentID,
+			"revisionId": item.RevisionID, "revisionNumber": item.RevisionNumber,
+		})
+		batch.Queue(`
+			INSERT INTO monitor_runs(
+				id,monitor_id,revision_id,status,trigger_type,trigger_source,warning_count,
+				queue_delay_ms,created_at,execution_context_json,alert_impact_json,setup_script_json)
+			VALUES($1,$2,$3,'QUEUED','SCHEDULED',$4,0,0,$5,$6,'{}'::jsonb,'{}'::jsonb)`,
+			runID, item.MonitorID, item.RevisionID, item.ID, queuedAt, executionContext)
+		batch.Queue(`
+			INSERT INTO run_events(id,monitor_run_id,sequence,event_type,status,message,details_json,occurred_at,duration_ms)
+			VALUES($1,$2,1,'RUN_QUEUED','QUEUED','Run accepted and queued for execution.','{}'::jsonb,$3,0)`,
+			eventID, runID, queuedAt)
+		batch.Queue(`
+			INSERT INTO execution_jobs(
+				id,run_id,job_type,queue_class,priority,status,payload_json,deduplication_key,
+				available_at,created_at,updated_at)
+			VALUES($1,$2,'API_MONITOR_RUN','scheduled',10,'QUEUED',$3,$4,$5,$5,$5)`,
+			jobID, runID, payload, deduplication, queuedAt)
+		batch.Queue(`
+			INSERT INTO execution_job_outbox(id,job_id,stream_name,payload_json,available_at)
+			VALUES($1::uuid,$2::uuid,'rhythm:execution:scheduled',jsonb_build_object('jobId',($2::uuid)::text),$3)`,
+			outboxID, jobID, queuedAt)
 		nextFrom := *item.NextRunAt
 		initial := false
 		if item.MissedRunPolicy == "SKIP" && time.Since(*item.NextRunAt) > s.pollInterval {
 			nextFrom = time.Now().UTC()
 			initial = item.Type == "INTERVAL"
 		}
-		next, err := s.next(item, nextFrom, initial)
+		next, err := s.next(item.Config, nextFrom, initial)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE monitor_schedules SET next_run_at=$2, updated_at=NOW() WHERE id=$1`, item.ID, next); err != nil {
-			return err
+		batch.Queue(`UPDATE monitor_schedules SET next_run_at=$2,updated_at=$3 WHERE id=$1`, item.ID, next, queuedAt)
+		queuedCommands += 5
+	}
+	if queuedCommands > 0 {
+		results := tx.SendBatch(ctx, batch)
+		for range queuedCommands {
+			if _, err := results.Exec(); err != nil {
+				_ = results.Close()
+				return fmt.Errorf("batch scheduled run enqueue: %w", err)
+			}
+		}
+		if err := results.Close(); err != nil {
+			return fmt.Errorf("close scheduled enqueue batch: %w", err)
 		}
 	}
 	return tx.Commit(ctx)

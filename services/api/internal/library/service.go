@@ -603,6 +603,7 @@ type SMTPDefaults struct {
 	Host     string
 	Port     int
 	From     string
+	FromName string
 	Username string
 	Password string
 	To       []string
@@ -630,13 +631,23 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 		if decodeErr := json.Unmarshal(existingConfigJSON, &existingConfig); decodeErr != nil {
 			return Profile{}, false, decodeErr
 		}
+		existingHost := strings.TrimSpace(fmt.Sprint(existingConfig["smtpHost"]))
+		legacyHosts := map[string]bool{
+			"smtp.freesmtpservers.com": true,
+			"mailpit":                  true,
+			"localhost":                true,
+			"127.0.0.1":                true,
+		}
 		if existingName == "Local SMTP" &&
 			existingDescription == seededDescription &&
-			strings.EqualFold(strings.TrimSpace(fmt.Sprint(existingConfig["smtpHost"])), "smtp.freesmtpservers.com") &&
-			!strings.EqualFold(host, "smtp.freesmtpservers.com") {
+			legacyHosts[strings.ToLower(existingHost)] &&
+			!strings.EqualFold(host, existingHost) {
 			existingConfig["smtpHost"] = host
 			existingConfig["smtpPort"] = port
 			existingConfig["from"] = from
+			if fromName := strings.TrimSpace(defaults.FromName); fromName != "" {
+				existingConfig["fromName"] = fromName
+			}
 			encoded, encodeErr := json.Marshal(existingConfig)
 			if encodeErr != nil {
 				return Profile{}, false, encodeErr
@@ -655,6 +666,9 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 		"smtpHost": host,
 		"smtpPort": port,
 		"from":     from,
+	}
+	if fromName := strings.TrimSpace(defaults.FromName); fromName != "" {
+		config["fromName"] = fromName
 	}
 	if len(defaults.To) > 0 {
 		to := make([]any, 0, len(defaults.To))

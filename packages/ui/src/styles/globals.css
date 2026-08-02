@@ -29,10 +29,14 @@
 }
 
 @custom-variant dark (&:is(.dark *));
-@source "../../../apps/**/*.{ts,tsx}";
-@source not "../../../apps/web/src/components/docs/**/*.{ts,tsx}";
-@source not "../../../apps/web/src/routes/docs/**/*.{ts,tsx}";
-@source "../../../components/**/*.{ts,tsx}";
+/*
+ * These paths are resolved from packages/ui/src/styles/globals.css.
+ * Keep the product application in Tailwind's scan boundary; otherwise
+ * route-specific utilities disappear from production builds.
+ */
+@source "../../../../apps/**/*.{ts,tsx}";
+@source not "../../../../apps/web/src/components/docs/**/*.{ts,tsx}";
+@source not "../../../../apps/web/src/routes/docs/**/*.{ts,tsx}";
 @source "../**/*.{ts,tsx}";
 
 :root {

@@ -24,7 +24,7 @@ const (
 	suiteConsumerGroup        = "rhythm-suite-workers"
 )
 
-func (s *Service) ConfigureQueue(redisClient *redis.Client, logger *slog.Logger, concurrency int) {
+func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog.Logger, concurrency int) {
 	if redisClient == nil {
 		return
 	}

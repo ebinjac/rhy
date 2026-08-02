@@ -287,6 +287,23 @@ func TestHTTPExecutorBlocksPrivateTargetsByDefault(t *testing.T) {
 	}
 }
 
+func TestHTTPExecutorAllowsGovernedPrivateCIDR(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer target.Close()
+	executor := NewHTTPExecutor(false)
+	if err := executor.SetPrivateTargetAllowlist(nil, []string{"127.0.0.0/8"}); err != nil {
+		t.Fatalf("configure target policy: %v", err)
+	}
+	step := StepDefinition{ID: "private-allowlisted", Name: "Allowlisted target", Type: "HTTP_REQUEST", Enabled: true,
+		Request: RequestConfig{Method: "GET", URL: target.URL, Settings: SettingsConfig{TimeoutMS: 1000}}}
+	if result := executor.Execute(context.Background(), step); result.Status != StatusSuccess {
+		t.Fatalf("expected allowlisted private target to succeed, got %#v", result)
+	}
+}
+
 func TestHTTPExecutorFailsAnAssertion(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
 	defer target.Close()

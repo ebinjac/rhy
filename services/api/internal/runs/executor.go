@@ -66,14 +66,17 @@ func int64FromAny(value any) int64 {
 }
 
 type HTTPExecutor struct {
-	allowPrivate  bool
-	resolver      RuntimeResolver
-	scripts       scripts.Executor
-	hostMu        sync.Mutex
-	hostLimit     int
-	hostSlots     map[string]chan struct{}
-	targetLimiter TargetConcurrencyLimiter
-	caCache       sync.Map
+	allowPrivate    bool
+	privateHosts    []string
+	privateCIDRs    []string
+	privateNetworks []*net.IPNet
+	resolver        RuntimeResolver
+	scripts         scripts.Executor
+	hostMu          sync.Mutex
+	hostLimit       int
+	hostSlots       map[string]chan struct{}
+	targetLimiter   TargetConcurrencyLimiter
+	caCache         sync.Map
 }
 
 type TLSMaterial struct {
@@ -114,6 +117,34 @@ func NewHTTPExecutorWithResolver(allowPrivate bool, resolver RuntimeResolver) *H
 }
 
 func (e *HTTPExecutor) SetScriptExecutor(executor scripts.Executor) { e.scripts = executor }
+
+func (e *HTTPExecutor) SetPrivateTargetAllowlist(hosts, cidrs []string) error {
+	normalizedHosts := make([]string, 0, len(hosts))
+	for _, raw := range hosts {
+		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		if host == "" {
+			continue
+		}
+		if host == "*" || (strings.Contains(host, "*") && !strings.HasPrefix(host, "*.")) {
+			return fmt.Errorf("private target host %q must be exact or use a leading *. wildcard", raw)
+		}
+		normalizedHosts = append(normalizedHosts, host)
+	}
+	normalizedCIDRs := make([]string, 0, len(cidrs))
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, raw := range cidrs {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(raw))
+		if err != nil {
+			return fmt.Errorf("private target CIDR %q is invalid", raw)
+		}
+		normalizedCIDRs = append(normalizedCIDRs, network.String())
+		networks = append(networks, network)
+	}
+	e.privateHosts = normalizedHosts
+	e.privateCIDRs = normalizedCIDRs
+	e.privateNetworks = networks
+	return nil
+}
 
 func (e *HTTPExecutor) SetTargetHostConcurrency(limit int) {
 	if limit < 1 {
@@ -200,7 +231,7 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		if secretErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_POLICY_VIOLATION", secretErr.Error(), started)
 		}
-		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: scopeValues(workflowValues, "variables."), Environment: scopeValues(workflowValues, "environment."), Collection: scopeValues(workflowValues, "collection."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
+		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: scopeValues(workflowValues, "variables."), Environment: scopeValues(workflowValues, "environment."), Collection: scopeValues(workflowValues, "collection."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
 		if scriptErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_RUNTIME_LOST", "JavaScript runner could not complete the script.", started)
 		}
@@ -386,6 +417,8 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 			Request:             scriptRequest(requestConfig),
 			Response:            &scripts.Response{Code: response.StatusCode, Status: response.Status, Headers: responseHeaders, Body: string(body), ResponseTimeMS: int64FromAny(result.Timing["apiResponseTimeMs"]), ResponseSize: len(body), ContentType: response.Header.Get("Content-Type"), Truncated: truncated},
 			AllowPrivateTargets: e.allowPrivate,
+			AllowedPrivateHosts: e.privateHosts,
+			AllowedPrivateCIDRs: e.privateCIDRs,
 			TimeoutMS:           scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS),
 			Info:                scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "test", Iteration: 0, IterationCount: 1, RuntimeVersion: scripts.RuntimeVersion},
 		})
@@ -526,7 +559,7 @@ func (e *HTTPExecutor) ExecuteSetupScript(ctx context.Context, script scripts.Sc
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_POLICY_VIOLATION", ErrorMessage: err.Error()}, workflowValues
 	}
-	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: scopeValues(workflowValues, "variables."), Collection: scopeValues(workflowValues, "collection."), Environment: scopeValues(workflowValues, "environment."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, AllowPrivateTargets: e.allowPrivate, TimeoutMS: timeoutMS, Info: info})
+	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: scopeValues(workflowValues, "variables."), Collection: scopeValues(workflowValues, "collection."), Environment: scopeValues(workflowValues, "environment."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, TimeoutMS: timeoutMS, Info: info})
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_RUNTIME_LOST", ErrorMessage: "JavaScript runner could not complete the setup script."}, workflowValues
 	}
@@ -1517,7 +1550,7 @@ func (e *HTTPExecutor) validateTarget(target *url.URL) error {
 		return fmt.Errorf("resolve target host: %w", err)
 	}
 	for _, address := range addresses {
-		if forbiddenIP(address.IP) {
+		if forbiddenIP(address.IP) && !e.privateTargetAllowed(target.Hostname(), address.IP) {
 			return errors.New("target resolves to a private or reserved network address")
 		}
 	}
@@ -1534,12 +1567,36 @@ func (e *HTTPExecutor) safeDialContext(ctx context.Context, network, address str
 		return nil, err
 	}
 	for _, candidate := range addresses {
-		if !e.allowPrivate && forbiddenIP(candidate.IP) {
+		if !e.allowPrivate && forbiddenIP(candidate.IP) && !e.privateTargetAllowed(host, candidate.IP) {
 			continue
 		}
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
 	}
 	return nil, errors.New("target has no allowed network address")
+}
+
+func (e *HTTPExecutor) privateTargetAllowed(host string, address net.IP) bool {
+	if e.allowPrivate {
+		return true
+	}
+	normalizedHost := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, pattern := range e.privateHosts {
+		if pattern == normalizedHost {
+			return true
+		}
+		if strings.HasPrefix(pattern, "*.") {
+			suffix := strings.TrimPrefix(pattern, "*")
+			if strings.HasSuffix(normalizedHost, suffix) && normalizedHost != strings.TrimPrefix(suffix, ".") {
+				return true
+			}
+		}
+	}
+	for _, network := range e.privateNetworks {
+		if network.Contains(address) {
+			return true
+		}
+	}
+	return false
 }
 
 func executeActions(actions []ActionConfig, seed map[string]string) (map[string]string, error) {

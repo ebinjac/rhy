@@ -59,7 +59,7 @@ type Service struct {
 	now           func() time.Time
 	cancelMu      sync.Mutex
 	cancels       map[string]context.CancelFunc
-	queueRedis    *redis.Client
+	queueRedis    redis.UniversalClient
 	logger        *slog.Logger
 	workerID      string
 	jobSlots      chan struct{}
@@ -86,7 +86,7 @@ func New(pool *pgxpool.Pool, profiles *library.Service, runner Runner, artifacts
 	}, nil
 }
 
-func (s *Service) ConfigureQueue(redisClient *redis.Client, logger *slog.Logger, concurrency int) {
+func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog.Logger, concurrency int) {
 	if redisClient == nil {
 		return
 	}

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,16 +23,49 @@ type Metrics struct {
 	activeRequests    prometheus.Gauge
 	webVitals         *prometheus.HistogramVec
 	pool              *pgxpool.Pool
-	redis             *redis.Client
+	redis             redis.UniversalClient
 	jobDepth          *prometheus.Desc
 	oldestJobAge      *prometheus.Desc
 	outboxDepth       *prometheus.Desc
 	scheduleLag       *prometheus.Desc
 	redisStreamLength *prometheus.Desc
 	redisPending      *prometheus.Desc
+	scheduledDue      *prometheus.Desc
+	requiredReplicas  *prometheus.Desc
+	activeSlots       *prometheus.Desc
+	availableSlots    *prometheus.Desc
+	workerUtilization *prometheus.Desc
+	outboxLag         *prometheus.Desc
+	workerConcurrency int
+	minReplicas       int
+	maxReplicas       int
+	targetUtilization float64
 }
 
-func New(pool *pgxpool.Pool, redisClient *redis.Client) *Metrics {
+type CapacityConfig struct {
+	WorkerConcurrency        int
+	MinReplicas              int
+	MaxReplicas              int
+	TargetUtilizationPercent int
+}
+
+func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, capacityOptions ...CapacityConfig) *Metrics {
+	capacity := CapacityConfig{WorkerConcurrency: 256, MinReplicas: 3, MaxReplicas: 12, TargetUtilizationPercent: 70}
+	if len(capacityOptions) > 0 {
+		capacity = capacityOptions[0]
+	}
+	if capacity.WorkerConcurrency < 1 {
+		capacity.WorkerConcurrency = 256
+	}
+	if capacity.MinReplicas < 1 {
+		capacity.MinReplicas = 3
+	}
+	if capacity.MaxReplicas < capacity.MinReplicas {
+		capacity.MaxReplicas = capacity.MinReplicas
+	}
+	if capacity.TargetUtilizationPercent < 1 {
+		capacity.TargetUtilizationPercent = 70
+	}
 	metrics := &Metrics{
 		registry: prometheus.NewRegistry(),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -84,6 +118,29 @@ func New(pool *pgxpool.Pool, redisClient *redis.Client) *Metrics {
 			"rhythm_redis_stream_pending", "Redis execution entries pending acknowledgement.",
 			[]string{"queue_class"}, nil,
 		),
+		scheduledDue: prometheus.NewDesc(
+			"rhythm_scheduled_runs_due_lookahead", "Enabled schedules due within the forecast window.",
+			[]string{"window_seconds"}, nil,
+		),
+		requiredReplicas: prometheus.NewDesc(
+			"rhythm_execution_required_replicas", "API executor replicas required for active and imminent scheduled work.", nil, nil,
+		),
+		activeSlots: prometheus.NewDesc(
+			"rhythm_execution_active_slots", "API monitor jobs currently leased to executors.", nil, nil,
+		),
+		availableSlots: prometheus.NewDesc(
+			"rhythm_execution_available_slots", "Estimated free execution slots at the recommended replica count.", nil, nil,
+		),
+		workerUtilization: prometheus.NewDesc(
+			"rhythm_execution_worker_utilization", "Estimated utilization at the recommended API executor replica count.", nil, nil,
+		),
+		outboxLag: prometheus.NewDesc(
+			"rhythm_execution_outbox_lag_seconds", "Age of the oldest unpublished execution outbox record.", nil, nil,
+		),
+		workerConcurrency: capacity.WorkerConcurrency,
+		minReplicas:       capacity.MinReplicas,
+		maxReplicas:       capacity.MaxReplicas,
+		targetUtilization: float64(capacity.TargetUtilizationPercent) / 100,
 	}
 	metrics.registry.MustRegister(
 		metrics.requests,
@@ -198,6 +255,12 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	ch <- m.scheduleLag
 	ch <- m.redisStreamLength
 	ch <- m.redisPending
+	ch <- m.scheduledDue
+	ch <- m.requiredReplicas
+	ch <- m.activeSlots
+	ch <- m.availableSlots
+	ch <- m.workerUtilization
+	ch <- m.outboxLag
 }
 
 func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
@@ -253,8 +316,10 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 			rows.Close()
 		}
 		var outbox int64
-		if m.pool.QueryRow(ctx, `SELECT COUNT(*) FROM execution_job_outbox WHERE published_at IS NULL`).Scan(&outbox) == nil {
+		var oldestOutboxAge float64
+		if m.pool.QueryRow(ctx, `SELECT COUNT(*),COALESCE(EXTRACT(EPOCH FROM (NOW()-MIN(created_at))),0) FROM execution_job_outbox WHERE published_at IS NULL`).Scan(&outbox, &oldestOutboxAge) == nil {
 			ch <- prometheus.MustNewConstMetric(m.outboxDepth, prometheus.GaugeValue, float64(outbox))
+			ch <- prometheus.MustNewConstMetric(m.outboxLag, prometheus.GaugeValue, oldestOutboxAge)
 		}
 		var lag float64
 		if m.pool.QueryRow(ctx, `
@@ -264,6 +329,32 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 			  AND s.next_run_at<NOW()`).Scan(&lag) == nil {
 			ch <- prometheus.MustNewConstMetric(m.scheduleLag, prometheus.GaugeValue, lag)
 		}
+		var active int64
+		_ = m.pool.QueryRow(ctx, `SELECT COUNT(*) FROM execution_jobs WHERE job_type='API_MONITOR_RUN' AND status='LEASED'`).Scan(&active)
+		lookahead := map[int]int64{}
+		for _, window := range []int{15, 30, 60, 90} {
+			var due int64
+			if m.pool.QueryRow(ctx, `
+					SELECT COUNT(*) FROM monitor_schedules s JOIN monitors m ON m.id=s.monitor_id
+					WHERE s.active=TRUE AND m.enabled=TRUE AND m.deleted_at IS NULL
+					  AND s.next_run_at<=NOW()+($1::text || ' seconds')::interval`, window).Scan(&due) == nil {
+				lookahead[window] = due
+				ch <- prometheus.MustNewConstMetric(m.scheduledDue, prometheus.GaugeValue, float64(due), strconv.Itoa(window))
+			}
+		}
+		usablePerReplica := max(1, int(math.Floor(float64(m.workerConcurrency)*m.targetUtilization)))
+		required := int(math.Ceil(float64(active+lookahead[15]) / float64(usablePerReplica)))
+		required = max(m.minReplicas, min(m.maxReplicas, required))
+		capacity := required * m.workerConcurrency
+		available := max(0, capacity-int(active))
+		utilization := 0.0
+		if capacity > 0 {
+			utilization = float64(active) / float64(capacity)
+		}
+		ch <- prometheus.MustNewConstMetric(m.requiredReplicas, prometheus.GaugeValue, float64(required))
+		ch <- prometheus.MustNewConstMetric(m.activeSlots, prometheus.GaugeValue, float64(active))
+		ch <- prometheus.MustNewConstMetric(m.availableSlots, prometheus.GaugeValue, float64(available))
+		ch <- prometheus.MustNewConstMetric(m.workerUtilization, prometheus.GaugeValue, utilization)
 	}
 	if m.redis != nil {
 		for queueClass, target := range map[string]struct {
