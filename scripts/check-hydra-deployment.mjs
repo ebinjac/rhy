@@ -47,6 +47,9 @@ for (const service of services) {
   if (/=(?!<)[^\s#]+/m.test(vault)) {
     failures.push(`${service.name} Vault example contains a non-placeholder value`)
   }
+  if (/^RHYTHM_REDIS_(?:URL|USERNAME|PASSWORD)=/m.test(vault)) {
+    failures.push(`${service.name} must not require Redis while PostgreSQL is the selected queue backend`)
+  }
   for (const environment of environments) {
     const valuesPath = join(directory, "helm", `values_${environment}.yaml`)
     if (!existsSync(valuesPath)) {
@@ -60,6 +63,18 @@ for (const service of services) {
     if (!values.includes("path: /health") || !values.includes("port: 8080")) {
       failures.push(`${service.name} values_${environment}.yaml must probe /health on 8080`)
     }
+    if (!values.includes("RHYTHM_QUEUE_BACKEND: postgres")) {
+      failures.push(`${service.name} values_${environment}.yaml must default to the PostgreSQL queue`)
+    }
+    if (!values.includes('RHYTHM_UNRESTRICTED_OUTBOUND: "true"')) {
+      failures.push(`${service.name} values_${environment}.yaml must enable unrestricted outbound access`)
+    }
+    if (service.name === "rhythm-frontdoor" && !values.includes("RHYTHM_AUTH_MODE: anonymous")) {
+      failures.push(`${service.name} values_${environment}.yaml must use anonymous access`)
+    }
+    if (/RHYTHM_(?:IDENTITY_HEADER|GROUPS_HEADER|REQUIRE_VERIFIED_IDENTITY|TRUSTED_PROXY_CIDRS)/.test(values)) {
+      failures.push(`${service.name} values_${environment}.yaml still configures header authentication`)
+    }
     if (values.includes("http://rhythm-browser-executor:8080")) {
       failures.push(`${service.name} values_${environment}.yaml uses a non-Hydra service address`)
     }
@@ -67,6 +82,9 @@ for (const service of services) {
 }
 
 const catalog = readFileSync(join(root, "deploy/hydra/service-catalog.yaml"), "utf8")
+if (catalog.includes("routable-with-sso") || /\bsso:\s*true\b/.test(catalog)) {
+  failures.push("service catalog must expose the frontdoor without SSO")
+}
 for (const service of services) {
   if (!catalog.includes(`deploy/hydra/services/${service.name}/Dockerfile`)) {
     failures.push(`service catalog does not reference ${service.name}'s Dockerfile`)

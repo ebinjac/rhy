@@ -53,7 +53,8 @@ import {
 } from "@/lib/api-client/dynatrace"
 import { formatDateTime } from "@/lib/format-date"
 
-type View = "overview" | "connection" | "resources" | "metrics" | "rules" | "history"
+type View =
+  "overview" | "connection" | "resources" | "metrics" | "rules" | "history"
 
 const views: Array<{ value: View; label: string }> = [
   { value: "overview", label: "Overview" },
@@ -173,11 +174,7 @@ export function DynatraceWorkspace({
                 disabled={pending}
                 onClick={() => void prepareDynatrace()}
               >
-                {pending ? (
-                  <LoaderCircle className="animate-spin" />
-                ) : (
-                  <Plus />
-                )}
+                {pending ? <LoaderCircle className="animate-spin" /> : <Plus />}
                 Choose management zone and resources
               </Button>
             </div>
@@ -203,9 +200,7 @@ export function DynatraceWorkspace({
         </div>
         <Button
           nativeButton={false}
-          render={
-            <Link search={{ kind: "telemetry" }} to="/configuration" />
-          }
+          render={<Link search={{ kind: "telemetry" }} to="/configuration" />}
           size="sm"
           variant="outline"
         >
@@ -302,9 +297,7 @@ export function DynatraceWorkspace({
             />
           )
         ) : null}
-        {view === "history" ? (
-          <HistoryPanel runs={environmentRuns} />
-        ) : null}
+        {view === "history" ? <HistoryPanel runs={environmentRuns} /> : null}
       </div>
     </section>
   )
@@ -429,7 +422,7 @@ function ManagementZoneEditor({
               addDraft()
             }
           }}
-          placeholder='Zone name, e.g. AI_Firewall'
+          placeholder="Zone name, e.g. AI_Firewall"
           value={draft}
         />
         <Button
@@ -474,12 +467,9 @@ function ConfigurationEditor({
   const [hydra, setHydra] = useState(
     existing?.platforms.includes("HYDRA") ?? true
   )
-  const [tims, setTims] = useState(
-    existing?.platforms.includes("TIMS") ?? true
-  )
+  const [tims, setTims] = useState(existing?.platforms.includes("TIMS") ?? true)
   const [hydraCpuMetric, setHydraCpuMetric] = useState(
-    existing?.metricMappings.hydraCpu ??
-      "builtin:containers.cpu.usagePercent"
+    existing?.metricMappings.hydraCpu ?? "builtin:containers.cpu.usagePercent"
   )
   const [hydraMemoryMetric, setHydraMemoryMetric] = useState(
     existing?.metricMappings.hydraMemory ??
@@ -656,13 +646,13 @@ function ConfigurationEditor({
         </Field>
         <Field
           label="Credential override"
-          help="Optional secret:// alias. Leave empty to inherit the connection credential."
+          help="Optional encrypted secret alias. Leave empty to inherit the connection credential."
         >
           <Input
             autoComplete="off"
             className="font-mono"
             onChange={(event) => setCredentialSecretRef(event.target.value)}
-            placeholder="secret://application-dynatrace-token"
+            placeholder="application-dynatrace-token"
             value={credentialSecretRef}
           />
         </Field>
@@ -694,10 +684,10 @@ function ConfigurationEditor({
           <div>
             <h4 className="font-medium">Management zones</h4>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Enter the Dynatrace management zone name for this application
-              (for example <span className="font-mono">AI_Firewall</span>).
-              After saving, use Resources to load more zones from Dynatrace or
-              refine the selection.
+              Enter the Dynatrace management zone name for this application (for
+              example <span className="font-mono">AI_Firewall</span>). After
+              saving, use Resources to load more zones from Dynatrace or refine
+              the selection.
             </p>
           </div>
         </div>
@@ -814,9 +804,7 @@ function ConfigurationEditor({
       ) : null}
       <div className="mt-5 flex justify-end">
         <Button
-          disabled={
-            pending || !connectionProfileId || (!hydra && !tims)
-          }
+          disabled={pending || !connectionProfileId || (!hydra && !tims)}
           onClick={() => void save()}
         >
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}
@@ -853,8 +841,7 @@ function DynatraceOverview({
     {
       label: "Metrics",
       ready: Boolean(
-        configuration.metricMappings.cpu ||
-          configuration.metricMappings.memory
+        configuration.metricMappings.cpu || configuration.metricMappings.memory
       ),
       detail: [
         configuration.metricMappings.cpu ? "CPU" : "",
@@ -937,8 +924,7 @@ function DynatraceOverview({
             <Description
               label="Management zones"
               value={
-                configuration.managementZones.join(", ") ||
-                "No zone selected"
+                configuration.managementZones.join(", ") || "No zone selected"
               }
             />
             <Description
@@ -996,7 +982,9 @@ function ResourcePanel({
     ])
   }
 
-  function toggleApplicationService(service: ELFApplicationContract["services"][number]) {
+  function toggleApplicationService(
+    service: ELFApplicationContract["services"][number]
+  ) {
     setMappings((current) => {
       const selected = current.some(
         (mapping) =>
@@ -1175,8 +1163,8 @@ function ResourcePanel({
       <div>
         <h3 className="text-xl font-semibold">Choose infrastructure scope</h3>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Select a management zone first, then choose registered services or
-          add TIMS servers. Only the resulting intersection is queried.
+          Select a management zone first, then choose registered services or add
+          TIMS servers. Only the resulting intersection is queried.
         </p>
       </div>
 
@@ -1216,13 +1204,13 @@ function ResourcePanel({
 
       <div className="mt-6">
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-        <div>
-          <h4 className="font-medium">2. Services and servers</h4>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Application services become Hydra workload mappings. TIMS servers
-            can be selected by host group, host name, tag, or entity ID.
-          </p>
-        </div>
+          <div>
+            <h4 className="font-medium">2. Services and servers</h4>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Application services become Hydra workload mappings. TIMS servers
+              can be selected by host group, host name, tag, or entity ID.
+            </p>
+          </div>
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={pending || !selectedZones.length}
@@ -1338,9 +1326,7 @@ function ResourcePanel({
                           ...item,
                           platform: value ?? "HYDRA",
                           entityType:
-                            value === "TIMS"
-                              ? "HOST"
-                              : "KUBERNETES_WORKLOAD",
+                            value === "TIMS" ? "HOST" : "KUBERNETES_WORKLOAD",
                         }
                       : item
                   )
@@ -1444,7 +1430,9 @@ function ResourcePanel({
           Save mappings
         </Button>
         <Button
-          disabled={pending || !mappings.some((mapping) => mapping.value.trim())}
+          disabled={
+            pending || !mappings.some((mapping) => mapping.value.trim())
+          }
           onClick={() => void runPreview()}
           variant="outline"
         >
@@ -1461,7 +1449,9 @@ function ResourcePanel({
                 conflicts · {preview.unmatchedRules.length} unmatched rules
               </p>
             </div>
-            {preview.truncated ? <Badge variant="secondary">Truncated</Badge> : null}
+            {preview.truncated ? (
+              <Badge variant="secondary">Truncated</Badge>
+            ) : null}
           </div>
           <div className="mt-3 divide-y border-y">
             {preview.included.map((entity) => (
@@ -1541,9 +1531,7 @@ function MetricsPanel({
     await router.invalidate()
   }
 
-  const selectedRun = latestRun?.platform
-    ?.split(",")
-    .includes(platform)
+  const selectedRun = latestRun?.platform?.split(",").includes(platform)
     ? latestRun
     : undefined
   const cards = ["CPU", "MEMORY"].map((metric) => ({
@@ -1583,7 +1571,10 @@ function MetricsPanel({
               setPlatform((value as "HYDRA" | "TIMS") ?? "HYDRA")
             }
           >
-            <SelectTrigger aria-label="Infrastructure platform" className="w-36">
+            <SelectTrigger
+              aria-label="Infrastructure platform"
+              className="w-36"
+            >
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -1662,11 +1653,7 @@ function MetricsPanel({
             <QueryFact
               label="Resolution"
               value={
-                window === "24h"
-                  ? platform === "TIMS"
-                    ? "1d"
-                    : "1h"
-                  : "10m"
+                window === "24h" ? (platform === "TIMS" ? "1d" : "1h") : "10m"
               }
             />
           </div>
@@ -1687,8 +1674,7 @@ function MetricsPanel({
           </div>
           <p className="text-xs leading-5 text-muted-foreground">
             Rhythm sends these selectors together for one absolute time window.
-            The credential remains masked and is never included in this
-            preview.
+            The credential remains masked and is never included in this preview.
           </p>
         </div>
       </details>
@@ -1764,8 +1750,8 @@ function MetricsPanel({
           <Activity className="mx-auto size-6 text-muted-foreground" />
           <p className="mt-3 font-medium">No infrastructure evidence yet</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Run the selected {platform === "HYDRA" ? "container" : "host"}{" "}
-            query to collect bounded evidence for this platform.
+            Run the selected {platform === "HYDRA" ? "container" : "host"} query
+            to collect bounded evidence for this platform.
           </p>
         </div>
       )}
@@ -1777,7 +1763,7 @@ function QueryFact({ label, value }: { label: string; value: string }) {
   return (
     <div>
       <p className="text-xs font-medium text-muted-foreground">{label}</p>
-      <p className="mt-1 break-all font-mono text-xs">{value}</p>
+      <p className="mt-1 font-mono text-xs break-all">{value}</p>
     </div>
   )
 }
@@ -1874,8 +1860,7 @@ function RulesPanel({
                 label={`Rule ${index + 1} statistic`}
                 onChange={(value) =>
                   updateRule(setRules, index, {
-                    statistic:
-                      value as DynatraceRuleContract["statistic"],
+                    statistic: value as DynatraceRuleContract["statistic"],
                   })
                 }
                 options={["AVERAGE", "MAXIMUM", "LATEST", "P50", "P95"]}
@@ -1907,23 +1892,17 @@ function RulesPanel({
                 label={`Rule ${index + 1} comparison`}
                 onChange={(value) =>
                   updateRule(setRules, index, {
-                    comparison:
-                      value as DynatraceRuleContract["comparison"],
+                    comparison: value as DynatraceRuleContract["comparison"],
                   })
                 }
-                options={[
-                  "ABSOLUTE",
-                  "BASELINE_ABSOLUTE",
-                  "BASELINE_PERCENT",
-                ]}
+                options={["ABSOLUTE", "BASELINE_ABSOLUTE", "BASELINE_PERCENT"]}
                 value={rule.comparison}
               />
               <RuleSelect
                 label={`Rule ${index + 1} gate mode`}
                 onChange={(value) =>
                   updateRule(setRules, index, {
-                    gateMode:
-                      value as DynatraceRuleContract["gateMode"],
+                    gateMode: value as DynatraceRuleContract["gateMode"],
                   })
                 }
                 options={["ADVISORY", "BLOCKING"]}
@@ -2051,13 +2030,7 @@ function SummaryCard({
   )
 }
 
-function MetricValue({
-  label,
-  value,
-}: {
-  label: string
-  value?: number
-}) {
+function MetricValue({ label, value }: { label: string; value?: number }) {
   return (
     <div>
       <p className="text-xs text-muted-foreground">{label}</p>
@@ -2151,7 +2124,9 @@ function ToggleCard({
     <button
       aria-pressed={active}
       className={`min-h-20 border p-3 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none ${
-        active ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"
+        active
+          ? "border-primary bg-primary/5"
+          : "border-border hover:bg-muted/50"
       }`}
       onClick={onClick}
       type="button"

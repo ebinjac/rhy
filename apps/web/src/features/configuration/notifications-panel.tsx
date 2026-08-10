@@ -264,8 +264,8 @@ export function NotificationsPanel({
                 addresses on the channel catch alerts without an app mapping.
               </li>
               <li>
-                SMTP credentials and webhook URLs can be typed here (encrypted at
-                rest) or linked from Secrets — values are never shown again
+                SMTP credentials and webhook URLs can be typed here (encrypted
+                at rest) or linked from Secrets — values are never shown again
                 after save.
               </li>
             </ul>
@@ -285,7 +285,8 @@ export function NotificationsPanel({
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field label="Name">
-              <Input aria-label="Name"
+              <Input
+                aria-label="Name"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="Local SMTP"
@@ -311,7 +312,8 @@ export function NotificationsPanel({
               </Select>
             </Field>
             <Field label="Description" wide>
-              <Input aria-label="Description"
+              <Input
+                aria-label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Primary alert email path for local development"
@@ -323,7 +325,8 @@ export function NotificationsPanel({
                   label="SMTP host"
                   help="Use mailpit for local Docker. Use your provider hostname in production."
                 >
-                  <Input aria-label="SMTP host"
+                  <Input
+                    aria-label="SMTP host"
                     className="font-mono"
                     value={smtpHost}
                     onChange={(event) => setSmtpHost(event.target.value)}
@@ -331,7 +334,8 @@ export function NotificationsPanel({
                   />
                 </Field>
                 <Field label="SMTP port">
-                  <Input aria-label="SMTP port"
+                  <Input
+                    aria-label="SMTP port"
                     className="font-mono"
                     value={smtpPort}
                     onChange={(event) => setSmtpPort(event.target.value)}
@@ -339,7 +343,8 @@ export function NotificationsPanel({
                   />
                 </Field>
                 <Field label="From address">
-                  <Input aria-label="From address"
+                  <Input
+                    aria-label="From address"
                     className="font-mono"
                     value={from}
                     onChange={(event) => setFrom(event.target.value)}
@@ -350,7 +355,8 @@ export function NotificationsPanel({
                   label="Fallback recipients (optional)"
                   help="Comma-separated. Used when an alert has no application destination emails."
                 >
-                  <Input aria-label="Fallback recipients (optional)"
+                  <Input
+                    aria-label="Fallback recipients (optional)"
                     value={fallbackTo}
                     onChange={(event) => setFallbackTo(event.target.value)}
                     placeholder="oncall@example.com"
@@ -369,7 +375,10 @@ export function NotificationsPanel({
                     }}
                     items={authModeLabels}
                   >
-                    <SelectTrigger aria-label="SMTP authentication" className="h-9 w-full">
+                    <SelectTrigger
+                      aria-label="SMTP authentication"
+                      className="h-9 w-full"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -389,7 +398,8 @@ export function NotificationsPanel({
                       label="Username"
                       help="Stored encrypted on this channel. Leave empty if the provider only needs a password."
                     >
-                      <Input aria-label="Username"
+                      <Input
+                        aria-label="Username"
                         className="font-mono"
                         value={username}
                         onChange={(event) => setUsername(event.target.value)}
@@ -401,7 +411,8 @@ export function NotificationsPanel({
                       label="Password"
                       help="Encrypted at rest. Never returned after save."
                     >
-                      <Input aria-label="Password"
+                      <Input
+                        aria-label="Password"
                         className="font-mono"
                         type="password"
                         value={password}
@@ -462,8 +473,8 @@ export function NotificationsPanel({
             <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
               <ShieldCheck className="size-3.5" /> Auth is optional. Typed
               passwords are encrypted with the same key as Secrets; existing
-              secret aliases are linked without typing{" "}
-              <code className="font-mono">secret://</code>.
+              encrypted secrets can be selected by alias without re-entering
+              their values.
             </p>
           ) : null}
           {message ? (
@@ -563,7 +574,8 @@ export function NotificationsPanel({
               : ""
           )
           const hasUrl =
-            profile.config.hasUrl === true || Boolean(profile.config.urlSecretRef)
+            profile.config.hasUrl === true ||
+            Boolean(profile.config.urlSecretRef)
           return (
             <article className="rounded-xl border p-5" key={profile.id}>
               <div className="flex items-start gap-3">

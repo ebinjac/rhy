@@ -30,11 +30,11 @@ func TestValidateNotificationEmailRejectsLeftoverPlaintextPassword(t *testing.T)
 	}
 }
 
-func TestValidateNotificationEmailRequiresSecretAlias(t *testing.T) {
+func TestValidateNotificationEmailRejectsInvalidSecretAlias(t *testing.T) {
 	err := validateNotification("EMAIL", map[string]any{
 		"smtpHost":          "smtp.example.com",
 		"from":              "alerts@example.com",
-		"passwordSecretRef": "plain-password",
+		"passwordSecretRef": "invalid\npassword",
 	})
 	if err == nil {
 		t.Fatal("expected passwordSecretRef alias validation")
@@ -86,15 +86,15 @@ func TestPrepareNotificationConfigKeepsSecretRefs(t *testing.T) {
 		"smtpHost":          "smtp.example.com",
 		"from":              "alerts@example.com",
 		"usernameSecretRef": "smtp-username",
-		"passwordSecretRef": "secret://smtp-password",
+		"passwordSecretRef": "smtp-password",
 	}, nil)
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if stored["usernameSecretRef"] != "secret://smtp-username" {
+	if stored["usernameSecretRef"] != "smtp-username" {
 		t.Fatalf("username ref: %#v", stored["usernameSecretRef"])
 	}
-	if stored["passwordSecretRef"] != "secret://smtp-password" {
+	if stored["passwordSecretRef"] != "smtp-password" {
 		t.Fatalf("password ref: %#v", stored["passwordSecretRef"])
 	}
 }
@@ -105,7 +105,7 @@ func TestPrepareNotificationConfigPreservesExistingOnUpdate(t *testing.T) {
 		"smtpHost":          "smtp.example.com",
 		"from":              "alerts@example.com",
 		"encryptedPassword": "v1:keep-me",
-		"usernameSecretRef": "secret://existing-user",
+		"usernameSecretRef": "existing-user",
 	}
 	stored, err := service.prepareNotificationConfig("EMAIL", map[string]any{
 		"smtpHost": "smtp.example.com",
@@ -118,7 +118,7 @@ func TestPrepareNotificationConfigPreservesExistingOnUpdate(t *testing.T) {
 	if stored["encryptedPassword"] != "v1:keep-me" {
 		t.Fatalf("expected preserved password cipher, got %#v", stored)
 	}
-	if stored["usernameSecretRef"] != "secret://existing-user" {
+	if stored["usernameSecretRef"] != "existing-user" {
 		t.Fatalf("expected preserved username ref, got %#v", stored)
 	}
 	if stored["smtpPort"] != 465 {
@@ -140,14 +140,14 @@ func TestPrepareNotificationConfigRequiresEncryptionKey(t *testing.T) {
 
 func TestRedactNotificationConfigNeverLeaksCredentials(t *testing.T) {
 	redacted := redactNotificationConfig(map[string]any{
-		"smtpHost":           "smtp.example.com",
-		"from":               "alerts@example.com",
-		"username":           "should-not-leak",
-		"password":           "also-secret",
-		"encryptedUsername":  "v1:user-cipher",
-		"encryptedPassword":  "v1:pass-cipher",
-		"usernameSecretRef":  "secret://smtp-user",
-		"passwordSecretRef":  "secret://smtp-pass",
+		"smtpHost":          "smtp.example.com",
+		"from":              "alerts@example.com",
+		"username":          "should-not-leak",
+		"password":          "also-secret",
+		"encryptedUsername": "v1:user-cipher",
+		"encryptedPassword": "v1:pass-cipher",
+		"usernameSecretRef": "smtp-user",
+		"passwordSecretRef": "smtp-pass",
 	})
 	encoded, _ := json.Marshal(redacted)
 	payload := string(encoded)
@@ -166,7 +166,7 @@ func TestRedactNotificationConfigNeverLeaksCredentials(t *testing.T) {
 	if redacted["hasUsername"] != true || redacted["hasPassword"] != true {
 		t.Fatalf("expected hasUsername/hasPassword markers, got %#v", redacted)
 	}
-	if redacted["usernameSecretRef"] != "secret://smtp-user" {
+	if redacted["usernameSecretRef"] != "smtp-user" {
 		t.Fatalf("secret refs should remain visible as aliases: %#v", redacted)
 	}
 	if redacted["smtpHost"] != "smtp.example.com" {
@@ -219,7 +219,7 @@ func TestPrepareWebhookNotificationConfigKeepsSecretRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
-	if stored["urlSecretRef"] != "secret://slack-webhook" {
+	if stored["urlSecretRef"] != "slack-webhook" {
 		t.Fatalf("url ref: %#v", stored["urlSecretRef"])
 	}
 }
@@ -228,7 +228,7 @@ func TestRedactNotificationConfigWebhook(t *testing.T) {
 	redacted := redactNotificationConfig(map[string]any{
 		"url":          "https://should-not-leak",
 		"encryptedUrl": "v1:url-cipher",
-		"urlSecretRef": "secret://slack-webhook",
+		"urlSecretRef": "slack-webhook",
 	})
 	encoded, _ := json.Marshal(redacted)
 	payload := string(encoded)
@@ -240,7 +240,7 @@ func TestRedactNotificationConfigWebhook(t *testing.T) {
 	if redacted["hasUrl"] != true {
 		t.Fatalf("expected hasUrl, got %#v", redacted)
 	}
-	if redacted["urlSecretRef"] != "secret://slack-webhook" {
+	if redacted["urlSecretRef"] != "slack-webhook" {
 		t.Fatalf("secret refs should remain visible: %#v", redacted)
 	}
 }

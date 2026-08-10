@@ -7,7 +7,7 @@ func TestPrepareProxyConfigNormalizesRoutingAndSecrets(t *testing.T) {
 		"url":               "https://Proxy.Example.com:8443/",
 		"noProxy":           " localhost, *.Internal,\nlocalhost ",
 		"usernameSecretRef": "proxy-user",
-		"passwordSecretRef": "secret://proxy-password",
+		"passwordSecretRef": "proxy-password",
 	})
 	if err != nil {
 		t.Fatalf("prepare proxy: %v", err)
@@ -15,7 +15,7 @@ func TestPrepareProxyConfigNormalizesRoutingAndSecrets(t *testing.T) {
 	if profileType != "HTTPS" || config["host"] != "proxy.example.com" || config["port"] != "8443" {
 		t.Fatalf("unexpected proxy metadata: %#v", config)
 	}
-	if config["usernameSecretRef"] != "secret://proxy-user" || config["noProxyCount"] != 2 {
+	if config["usernameSecretRef"] != "proxy-user" || config["noProxyCount"] != 2 {
 		t.Fatalf("proxy references or bypass rules were not normalized: %#v", config)
 	}
 }

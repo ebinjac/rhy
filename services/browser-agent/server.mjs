@@ -17,12 +17,19 @@ const token =
   "rhythm-local-browser-token"
 const imageVersion =
   process.env.RHYTHM_BROWSER_AGENT_IMAGE_VERSION || "playwright-1.62.0"
-const allowPrivateTargets =
+const unrestrictedOutbound =
   String(
-    process.env.RHYTHM_BROWSER_ALLOW_PRIVATE_TARGETS ||
-      process.env.RHYTHM_ALLOW_PRIVATE_TARGETS ||
+    process.env.RHYTHM_BROWSER_UNRESTRICTED_OUTBOUND ||
+      process.env.RHYTHM_UNRESTRICTED_OUTBOUND ||
       ""
   ).toLowerCase() === "true"
+const allowPrivateTargets =
+  unrestrictedOutbound ||
+  String(
+      process.env.RHYTHM_BROWSER_ALLOW_PRIVATE_TARGETS ||
+        process.env.RHYTHM_ALLOW_PRIVATE_TARGETS ||
+        ""
+    ).toLowerCase() === "true"
 const allowedPrivateHosts = csv(
   process.env.RHYTHM_BROWSER_PRIVATE_TARGET_ALLOWED_HOSTS ||
     process.env.RHYTHM_PRIVATE_TARGET_ALLOWED_HOSTS ||
@@ -1216,6 +1223,7 @@ async function validateTarget(raw, allowedOrigins = []) {
     throw new Error("Only HTTP and HTTPS browser targets are allowed.")
   }
   if (
+    !unrestrictedOutbound &&
     allowedOrigins.length &&
     !allowedOrigins.some((origin) => new URL(origin).origin === target.origin)
   ) {

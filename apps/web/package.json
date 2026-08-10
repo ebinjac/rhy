@@ -11,7 +11,8 @@
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "test:a11y": "playwright test tests/accessibility.spec.ts",
-    "test:docs": "playwright test tests/docs.spec.ts"
+    "test:docs": "playwright test tests/docs.spec.ts",
+    "test:smoke": "playwright test tests/product-smoke.spec.ts --project=desktop-light"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

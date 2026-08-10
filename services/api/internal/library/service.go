@@ -5,10 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"os"
 	"strings"
 	"time"
 
@@ -45,19 +41,11 @@ type Input struct {
 }
 type Service struct {
 	pool       *pgxpool.Pool
-	httpClient *http.Client
-	vaultAddr  string
-	vaultToken string
 	secretsKey []byte
 }
 
 func New(pool *pgxpool.Pool, secretsEncryptionKey string) (*Service, error) {
-	service := &Service{
-		pool:       pool,
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		vaultAddr:  strings.TrimRight(strings.TrimSpace(os.Getenv("RHYTHM_VAULT_ADDR")), "/"),
-		vaultToken: strings.TrimSpace(os.Getenv("RHYTHM_VAULT_TOKEN")),
-	}
+	service := &Service{pool: pool}
 	if trimmed := strings.TrimSpace(secretsEncryptionKey); trimmed != "" {
 		key, err := secretscrypto.ParseKey(trimmed)
 		if err != nil {
@@ -105,6 +93,12 @@ func (s *Service) List(ctx context.Context, kind string) ([]Profile, error) {
 		}
 		switch kind {
 		case "SECRET_REFERENCE":
+			provider := strings.ToUpper(strings.TrimSpace(fmt.Sprint(item.Config["provider"])))
+			if provider != "LOCAL" && provider != "STORED" && provider != "RHYTHM" && provider != "INLINE" {
+				// External providers were removed. Preserve legacy rows in storage
+				// for audit/recovery, but do not expose them as selectable secrets.
+				continue
+			}
 			item.Config = redactSecretConfig(item.Config)
 		case "CERTIFICATE":
 			item.Config = redactCertificateConfig(item.Config)
@@ -131,9 +125,7 @@ func (s *Service) Create(ctx context.Context, kind string, input Input, actor st
 			return Profile{}, err
 		}
 		input.Config = prepared
-		if input.ProfileType == "" {
-			input.ProfileType = profileType
-		}
+		input.ProfileType = profileType
 	} else if input.ProfileType == "" {
 		return Profile{}, fmt.Errorf("name and profileType are required")
 	}
@@ -235,9 +227,7 @@ func (s *Service) Update(ctx context.Context, profileID string, input Input, act
 				return Profile{}, prepErr
 			}
 			existing.Config = prepared
-			if existing.ProfileType == "" {
-				existing.ProfileType = profileType
-			}
+			existing.ProfileType = profileType
 		case "NOTIFICATION":
 			prepared, prepErr := s.prepareNotificationConfig(existing.ProfileType, input.Config, existing.Config)
 			if prepErr != nil {
@@ -322,8 +312,10 @@ func validateNotification(profileType string, config map[string]any) error {
 	case "SLACK", "WEBHOOK":
 		reference := strings.TrimSpace(fmt.Sprint(config["urlSecretRef"]))
 		encrypted := strings.TrimSpace(fmt.Sprint(config["encryptedUrl"]))
-		if reference != "" && reference != "<nil>" && !strings.HasPrefix(reference, "secret://") {
-			return errors.New("urlSecretRef must be a secret:// alias")
+		if reference != "" && reference != "<nil>" {
+			if _, err := normalizeSecretAlias(reference); err != nil {
+				return fmt.Errorf("urlSecretRef: %w", err)
+			}
 		}
 		if (reference == "" || reference == "<nil>") && (encrypted == "" || encrypted == "<nil>") {
 			return errors.New("webhook channels require a URL secret or encrypted URL")
@@ -338,11 +330,15 @@ func validateNotification(profileType string, config map[string]any) error {
 		if plaintext := firstString(config, "username", "password"); plaintext != "" {
 			return errors.New("raw SMTP credentials must be encrypted before storage")
 		}
-		if usernameRef := strings.TrimSpace(fmt.Sprint(config["usernameSecretRef"])); usernameRef != "" && usernameRef != "<nil>" && !strings.HasPrefix(usernameRef, "secret://") {
-			return errors.New("usernameSecretRef must be a secret:// alias")
+		if usernameRef := strings.TrimSpace(fmt.Sprint(config["usernameSecretRef"])); usernameRef != "" && usernameRef != "<nil>" {
+			if _, err := normalizeSecretAlias(usernameRef); err != nil {
+				return fmt.Errorf("usernameSecretRef: %w", err)
+			}
 		}
-		if passwordRef := strings.TrimSpace(fmt.Sprint(config["passwordSecretRef"])); passwordRef != "" && passwordRef != "<nil>" && !strings.HasPrefix(passwordRef, "secret://") {
-			return errors.New("passwordSecretRef must be a secret:// alias")
+		if passwordRef := strings.TrimSpace(fmt.Sprint(config["passwordSecretRef"])); passwordRef != "" && passwordRef != "<nil>" {
+			if _, err := normalizeSecretAlias(passwordRef); err != nil {
+				return fmt.Errorf("passwordSecretRef: %w", err)
+			}
 		}
 	default:
 		return errors.New("notification profileType must be SLACK, WEBHOOK, or EMAIL")
@@ -397,15 +393,17 @@ func (s *Service) prepareWebhookNotificationConfig(config map[string]any, existi
 		}
 		stored["encryptedUrl"] = ciphertext
 	case urlRef != "":
-		if !strings.HasPrefix(urlRef, "secret://") {
-			urlRef = "secret://" + urlRef
+		var err error
+		urlRef, err = normalizeSecretAlias(urlRef)
+		if err != nil {
+			return nil, err
 		}
 		stored["urlSecretRef"] = urlRef
 	case existing != nil:
 		if cipher := strings.TrimSpace(fmt.Sprint(existing["encryptedUrl"])); cipher != "" && cipher != "<nil>" {
 			stored["encryptedUrl"] = cipher
 		} else if ref := strings.TrimSpace(fmt.Sprint(existing["urlSecretRef"])); ref != "" && ref != "<nil>" {
-			stored["urlSecretRef"] = ref
+			stored["urlSecretRef"], _ = normalizeSecretAlias(ref)
 		}
 	}
 	return stored, nil
@@ -453,15 +451,17 @@ func (s *Service) prepareEmailNotificationConfig(config map[string]any, existing
 		}
 		stored["encryptedUsername"] = ciphertext
 	case usernameRef != "":
-		if !strings.HasPrefix(usernameRef, "secret://") {
-			usernameRef = "secret://" + usernameRef
+		var err error
+		usernameRef, err = normalizeSecretAlias(usernameRef)
+		if err != nil {
+			return nil, err
 		}
 		stored["usernameSecretRef"] = usernameRef
 	case existing != nil:
 		if cipher := strings.TrimSpace(fmt.Sprint(existing["encryptedUsername"])); cipher != "" && cipher != "<nil>" {
 			stored["encryptedUsername"] = cipher
 		} else if ref := strings.TrimSpace(fmt.Sprint(existing["usernameSecretRef"])); ref != "" && ref != "<nil>" {
-			stored["usernameSecretRef"] = ref
+			stored["usernameSecretRef"], _ = normalizeSecretAlias(ref)
 		}
 	}
 
@@ -475,15 +475,17 @@ func (s *Service) prepareEmailNotificationConfig(config map[string]any, existing
 		}
 		stored["encryptedPassword"] = ciphertext
 	case passwordRef != "":
-		if !strings.HasPrefix(passwordRef, "secret://") {
-			passwordRef = "secret://" + passwordRef
+		var err error
+		passwordRef, err = normalizeSecretAlias(passwordRef)
+		if err != nil {
+			return nil, err
 		}
 		stored["passwordSecretRef"] = passwordRef
 	case existing != nil:
 		if cipher := strings.TrimSpace(fmt.Sprint(existing["encryptedPassword"])); cipher != "" && cipher != "<nil>" {
 			stored["encryptedPassword"] = cipher
 		} else if ref := strings.TrimSpace(fmt.Sprint(existing["passwordSecretRef"])); ref != "" && ref != "<nil>" {
-			stored["passwordSecretRef"] = ref
+			stored["passwordSecretRef"], _ = normalizeSecretAlias(ref)
 		}
 	}
 
@@ -690,7 +692,7 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 		}, actor); createErr != nil && !strings.Contains(createErr.Error(), "already exists") {
 			return Profile{}, false, createErr
 		}
-		config["usernameSecretRef"] = "secret://" + secretName
+		config["usernameSecretRef"] = secretName
 	}
 	if password := strings.TrimSpace(defaults.Password); password != "" {
 		secretName := "smtp-password"
@@ -701,7 +703,7 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 		}, actor); createErr != nil && !strings.Contains(createErr.Error(), "already exists") {
 			return Profile{}, false, createErr
 		}
-		config["passwordSecretRef"] = "secret://" + secretName
+		config["passwordSecretRef"] = secretName
 	}
 	profile, err := s.Create(ctx, "notifications", Input{
 		Name:        "Local SMTP",
@@ -715,12 +717,17 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 	return profile, true, nil
 }
 
-// prepareSecretConfig validates input, encrypts LOCAL values, and returns storage-safe config plus a derived profile type.
+// prepareSecretConfig validates and encrypts every application-managed secret.
+// External providers are intentionally unsupported: a secret created in
+// Rhythm always has encrypted database material.
 func (s *Service) prepareSecretConfig(config map[string]any) (map[string]any, string, error) {
 	if config == nil {
 		return nil, "", fmt.Errorf("secret configuration is required")
 	}
 	provider := strings.ToUpper(strings.TrimSpace(fmt.Sprint(config["provider"])))
+	if provider == "" {
+		provider = "LOCAL"
+	}
 	switch provider {
 	case "LOCAL", "STORED", "RHYTHM", "INLINE":
 		plaintext := firstString(config, "value", "secret", "password", "token")
@@ -739,52 +746,9 @@ func (s *Service) prepareSecretConfig(config map[string]any) (map[string]any, st
 			"cipher":         "AES-GCM",
 			"encryptedValue": ciphertext,
 		}, "LOCAL", nil
-	case "ENV", "ENVIRONMENT":
-		path := strings.TrimSpace(fmt.Sprint(config["externalPath"]))
-		if path == "" {
-			return nil, "", fmt.Errorf("environment secrets require externalPath (env var name)")
-		}
-		if looksLikeSecretValueKey(config) {
-			return nil, "", fmt.Errorf("environment secrets must not include plaintext values; set the variable on the API process")
-		}
-		return map[string]any{
-			"provider":     "ENV",
-			"externalPath": path,
-		}, "ENV", nil
-	case "VAULT", "HASHICORP_VAULT":
-		path := strings.TrimSpace(fmt.Sprint(config["externalPath"]))
-		if path == "" {
-			return nil, "", fmt.Errorf("Vault secrets require externalPath")
-		}
-		if looksLikeSecretValueKey(config) {
-			return nil, "", fmt.Errorf("Vault secrets must not include plaintext values")
-		}
-		stored := map[string]any{
-			"provider":     "VAULT",
-			"externalPath": path,
-		}
-		if field := strings.TrimSpace(fmt.Sprint(config["field"])); field != "" && field != "<nil>" {
-			stored["field"] = field
-		}
-		if namespace := strings.TrimSpace(fmt.Sprint(config["namespace"])); namespace != "" && namespace != "<nil>" {
-			stored["namespace"] = namespace
-		}
-		return stored, "VAULT", nil
 	default:
-		return nil, "", fmt.Errorf("secret provider must be LOCAL, ENV, or VAULT")
+		return nil, "", fmt.Errorf("only encrypted database secrets are supported")
 	}
-}
-
-func looksLikeSecretValueKey(config map[string]any) bool {
-	for key := range config {
-		lower := strings.ToLower(key)
-		if lower == "value" || lower == "secret" || lower == "password" || lower == "token" || strings.Contains(lower, "privatekey") {
-			if strings.TrimSpace(fmt.Sprint(config[key])) != "" && fmt.Sprint(config[key]) != "<nil>" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func firstString(config map[string]any, keys ...string) string {
@@ -804,10 +768,9 @@ func redactSecretConfig(config map[string]any) map[string]any {
 	if config == nil {
 		return map[string]any{}
 	}
-	redacted := make(map[string]any, len(config))
 	provider := strings.ToUpper(strings.TrimSpace(fmt.Sprint(config["provider"])))
 	hasMaterial := false
-	for key, value := range config {
+	for key := range config {
 		lower := strings.ToLower(key)
 		switch lower {
 		case "value", "secret", "password", "token", "encryptedvalue", "ciphertext", "privatekey":
@@ -819,14 +782,11 @@ func redactSecretConfig(config map[string]any) map[string]any {
 				continue
 			}
 		}
-		redacted[key] = value
 	}
 	if provider == "LOCAL" || provider == "STORED" || provider == "RHYTHM" || provider == "INLINE" || hasMaterial {
-		redacted["provider"] = "LOCAL"
-		redacted["hasValue"] = true
-		redacted["cipher"] = "AES-GCM"
+		return map[string]any{"provider": "LOCAL", "hasValue": true, "cipher": "AES-GCM"}
 	}
-	return redacted
+	return map[string]any{"provider": "UNSUPPORTED", "hasValue": false, "migrationRequired": true}
 }
 
 type scanner interface{ Scan(...any) error }
@@ -844,9 +804,12 @@ func scan(row scanner) (Profile, error) {
 }
 
 func (s *Service) ResolveSecret(ctx context.Context, reference string) (string, error) {
-	identifier := strings.TrimSpace(strings.TrimPrefix(reference, "secret://"))
+	identifier, err := normalizeSecretAlias(reference)
+	if err != nil {
+		return "", err
+	}
 	var configJSON []byte
-	err := s.pool.QueryRow(ctx, `SELECT config_json FROM configuration_profiles WHERE kind='SECRET_REFERENCE' AND active=TRUE AND (id::text=$1 OR name=$1)`, identifier).Scan(&configJSON)
+	err = s.pool.QueryRow(ctx, `SELECT config_json FROM configuration_profiles WHERE kind='SECRET_REFERENCE' AND active=TRUE AND (id::text=$1 OR name=$1)`, identifier).Scan(&configJSON)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", fmt.Errorf("secret reference %q was not found", identifier)
 	}
@@ -858,24 +821,11 @@ func (s *Service) ResolveSecret(ctx context.Context, reference string) (string, 
 		return "", err
 	}
 	provider := strings.ToUpper(fmt.Sprint(config["provider"]))
-	externalPath := fmt.Sprint(config["externalPath"])
 	switch provider {
 	case "LOCAL", "STORED", "RHYTHM", "INLINE":
 		return s.resolveLocalSecret(identifier, config)
-	case "ENV", "ENVIRONMENT":
-		value, ok := os.LookupEnv(externalPath)
-		if !ok {
-			return "", fmt.Errorf("environment-backed secret %q is unavailable", identifier)
-		}
-		return value, nil
-	case "VAULT", "HASHICORP_VAULT":
-		return s.resolveVaultSecret(ctx, identifier, externalPath, config)
 	default:
-		// Legacy rows that somehow stored a plaintext value without a recognized provider.
-		if plaintext := firstString(config, "value", "secret", "password", "token"); plaintext != "" {
-			return plaintext, nil
-		}
-		return "", fmt.Errorf("secret provider %q is not available in this deployment", provider)
+		return "", fmt.Errorf("secret %q uses an unsupported legacy provider; recreate it as an encrypted stored secret", identifier)
 	}
 }
 
@@ -895,58 +845,6 @@ func (s *Service) resolveLocalSecret(identifier string, config map[string]any) (
 		return plaintext, nil
 	}
 	return "", fmt.Errorf("stored secret %q has no encrypted value", identifier)
-}
-
-func (s *Service) resolveVaultSecret(ctx context.Context, identifier, externalPath string, config map[string]any) (string, error) {
-	if s.vaultAddr == "" || s.vaultToken == "" {
-		return "", errors.New("Vault-backed secrets require RHYTHM_VAULT_ADDR and RHYTHM_VAULT_TOKEN")
-	}
-	base, err := url.Parse(s.vaultAddr)
-	if err != nil || (base.Scheme != "http" && base.Scheme != "https") || base.Host == "" {
-		return "", errors.New("RHYTHM_VAULT_ADDR is invalid")
-	}
-	cleanPath := strings.TrimPrefix(strings.TrimSpace(externalPath), "/")
-	cleanPath = strings.TrimPrefix(cleanPath, "v1/")
-	if cleanPath == "" || strings.Contains(cleanPath, "..") {
-		return "", fmt.Errorf("Vault path for secret %q is invalid", identifier)
-	}
-	base.Path = strings.TrimRight(base.Path, "/") + "/v1/" + cleanPath
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, base.String(), nil)
-	if err != nil {
-		return "", errors.New("create Vault secret request")
-	}
-	request.Header.Set("X-Vault-Token", s.vaultToken)
-	if namespace := strings.TrimSpace(fmt.Sprint(config["namespace"])); namespace != "" && namespace != "<nil>" {
-		request.Header.Set("X-Vault-Namespace", namespace)
-	}
-	response, err := s.httpClient.Do(request)
-	if err != nil {
-		return "", fmt.Errorf("Vault secret %q is unavailable", identifier)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("Vault secret %q returned HTTP %d", identifier, response.StatusCode)
-	}
-	var payload struct {
-		Data map[string]any `json:"data"`
-	}
-	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&payload); err != nil {
-		return "", fmt.Errorf("Vault secret %q returned an invalid response", identifier)
-	}
-	// KV v2 wraps secret fields in data.data; KV v1 returns fields in data.
-	fields := payload.Data
-	if nested, ok := payload.Data["data"].(map[string]any); ok {
-		fields = nested
-	}
-	field := strings.TrimSpace(fmt.Sprint(config["field"]))
-	if field == "" || field == "<nil>" {
-		field = "value"
-	}
-	value, ok := fields[field]
-	if !ok || value == nil {
-		return "", fmt.Errorf("Vault secret %q does not contain field %q", identifier, field)
-	}
-	return fmt.Sprint(value), nil
 }
 
 func (s *Service) ResolveTLSProfile(ctx context.Context, certificateProfileID, caProfileID string) (runs.TLSMaterial, error) {
@@ -1047,7 +945,7 @@ func (s *Service) ResolveEnvironmentProfile(ctx context.Context, profileID strin
 	if configured, ok := profile.Config["variables"].(map[string]any); ok {
 		for key, raw := range configured {
 			value := strings.TrimSpace(fmt.Sprint(raw))
-			if strings.HasPrefix(value, "secret://") {
+			if sensitiveKeyName(key) {
 				value, err = s.ResolveSecret(ctx, value)
 				if err != nil {
 					return runs.EnvironmentMaterial{}, fmt.Errorf("resolve environment variable %q: %w", key, err)

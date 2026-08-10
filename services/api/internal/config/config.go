@@ -33,6 +33,7 @@ type Config struct {
 	DatabaseMaxConns        int
 	DatabaseMinConns        int
 	DatabaseTxPooling       bool
+	QueueBackend            string
 	RequiredSchemaVersion   string
 	AllowedOrigin           string
 	DevelopmentActorID      string
@@ -46,6 +47,7 @@ type Config struct {
 	RedisDB                 int
 	RedisTLS                bool
 	AllowPrivateTargets     bool
+	UnrestrictedOutbound    bool
 	PrivateTargetHosts      []string
 	PrivateTargetCIDRs      []string
 	ScriptRunnerURL         string
@@ -79,7 +81,7 @@ func Load() (Config, error) {
 		HTTPAddr:              valueOrDefault("RHYTHM_HTTP_ADDR", ":8080"),
 		RuntimeRole:           strings.ToLower(valueOrDefault("RHYTHM_ROLE", "all")),
 		Environment:           strings.ToLower(valueOrDefault("RHYTHM_ENVIRONMENT", "development")),
-		AuthMode:              strings.ToLower(valueOrDefault("RHYTHM_AUTH_MODE", "development")),
+		AuthMode:              strings.ToLower(valueOrDefault("RHYTHM_AUTH_MODE", "anonymous")),
 		IdentityHeader:        valueOrDefault("RHYTHM_IDENTITY_HEADER", "X-Rhythm-User"),
 		GroupsHeader:          valueOrDefault("RHYTHM_GROUPS_HEADER", "X-Rhythm-Groups"),
 		AdminGroups:           splitCSV(os.Getenv("RHYTHM_ADMIN_GROUPS")),
@@ -91,6 +93,7 @@ func Load() (Config, error) {
 		DevelopmentActorID:    valueOrDefault("RHYTHM_DEVELOPMENT_ACTOR_ID", "local-admin"),
 		StorageMode:           valueOrDefault("RHYTHM_STORAGE_MODE", "memory"),
 		DatabaseURL:           strings.TrimSpace(os.Getenv("RHYTHM_DATABASE_URL")),
+		QueueBackend:          strings.ToLower(strings.TrimSpace(os.Getenv("RHYTHM_QUEUE_BACKEND"))),
 		RequiredSchemaVersion: strings.TrimSpace(os.Getenv("RHYTHM_REQUIRED_SCHEMA_VERSION")),
 		RedisURL:              strings.TrimSpace(os.Getenv("RHYTHM_REDIS_URL")),
 		RedisMode:             strings.ToLower(valueOrDefault("RHYTHM_REDIS_MODE", "single")),
@@ -224,6 +227,22 @@ func Load() (Config, error) {
 		}
 		cfg.AllowPrivateTargets = allowed
 	}
+	if cfg.UnrestrictedOutbound, err = booleanValue("RHYTHM_UNRESTRICTED_OUTBOUND", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.UnrestrictedOutbound {
+		cfg.AllowPrivateTargets = true
+	}
+	if cfg.QueueBackend == "" {
+		switch {
+		case cfg.RedisURL != "" || len(cfg.RedisAddrs) > 0:
+			cfg.QueueBackend = "redis"
+		case cfg.StorageMode == "postgres":
+			cfg.QueueBackend = "postgres"
+		default:
+			cfg.QueueBackend = "memory"
+		}
+	}
 
 	if !strings.HasPrefix(cfg.HTTPAddr, ":") && !strings.Contains(cfg.HTTPAddr, ":") {
 		return Config{}, fmt.Errorf("RHYTHM_HTTP_ADDR must be a host:port or :port value")
@@ -239,14 +258,11 @@ func Load() (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("RHYTHM_ROLE must be all, api, control, scheduler, worker, background, or browser")
 	}
-	if cfg.AuthMode != "development" && cfg.AuthMode != "trusted_headers" && cfg.AuthMode != "internal" {
-		return Config{}, fmt.Errorf("RHYTHM_AUTH_MODE must be development, trusted_headers, or internal")
+	if cfg.AuthMode != "anonymous" && cfg.AuthMode != "development" && cfg.AuthMode != "trusted_headers" && cfg.AuthMode != "internal" {
+		return Config{}, fmt.Errorf("RHYTHM_AUTH_MODE must be anonymous, development, trusted_headers, or internal")
 	}
 	if cfg.Environment != "development" && cfg.AuthMode == "development" {
 		return Config{}, fmt.Errorf("development authentication is not allowed outside the development environment")
-	}
-	if cfg.Environment != "development" && cfg.AllowPrivateTargets {
-		return Config{}, fmt.Errorf("unrestricted private targets are not allowed outside the development environment; configure the governed host or CIDR allowlist")
 	}
 	if cfg.AuthMode == "internal" && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "api") {
 		return Config{}, fmt.Errorf("internal authentication mode cannot serve the public API role")
@@ -259,6 +275,15 @@ func Load() (Config, error) {
 	}
 	if cfg.RedisMode == "cluster" && cfg.RedisDB != 0 {
 		return Config{}, fmt.Errorf("RHYTHM_REDIS_DB must be 0 in cluster mode")
+	}
+	if cfg.QueueBackend != "memory" && cfg.QueueBackend != "postgres" && cfg.QueueBackend != "redis" {
+		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND must be memory, postgres, or redis")
+	}
+	if cfg.QueueBackend == "postgres" && cfg.StorageMode != "postgres" {
+		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND=postgres requires RHYTHM_STORAGE_MODE=postgres")
+	}
+	if cfg.QueueBackend == "redis" && cfg.RedisURL == "" && len(cfg.RedisAddrs) == 0 {
+		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND=redis requires RHYTHM_REDIS_URL or RHYTHM_REDIS_ADDRS")
 	}
 	if cfg.ArtifactProvider != "minio" && cfg.ArtifactProvider != "s3" {
 		return Config{}, fmt.Errorf("RHYTHM_ARTIFACT_STORE_PROVIDER must be minio or s3")

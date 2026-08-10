@@ -9,7 +9,7 @@ owners: [Rhythm Platform]
 keywords: [architecture, workers, agents]
 ---
 
-Rhythm separates authoring and policy from execution. The API persists immutable revisions and queues work. Workers execute monitors, while isolated agents provide governed access to target networks. PostgreSQL stores durable state and Redis coordinates asynchronous work.
+Rhythm separates authoring and execution. The API persists immutable revisions and durable jobs. Workers execute monitors, while isolated agents reach target networks. PostgreSQL stores durable state and is the default queue transport; Redis Streams can be selected later for higher-throughput coordination.
 
 The JavaScript runner receives bounded, masked input and creates a fresh VM for every script. ELF searches use the configured OpenSearch connection and store only sanitized, bounded evidence.
 
@@ -21,4 +21,4 @@ The JavaScript runner receives bounded, masked input and creates a fresh VM for 
 
 `Web → API → ELF proxy → OpenSearch → sanitized evidence → gate decision`
 
-<SecurityNote>Workers and agents enforce DNS re-resolution, SSRF, proxy, TLS, timeout, cancellation, and capture policy at execution time.</SecurityNote>
+<SecurityNote>Workers and agents allow all HTTP and HTTPS destinations, including private networks and cross-origin browser navigation. TLS verification, proxy behavior, timeouts, cancellation, masking, and capture policies still apply.</SecurityNote>

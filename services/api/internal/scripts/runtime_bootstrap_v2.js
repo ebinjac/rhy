@@ -1551,9 +1551,9 @@ globalThis.pm = {
   vault: {
     get: (alias) => Promise.resolve(__host.vaultGet(String(alias))),
     set: () =>
-      Promise.reject(__blocked("Vault writes are blocked by Rhythm policy.")),
+      Promise.reject(__blocked("Secret writes are blocked by Rhythm policy.")),
     unset: () =>
-      Promise.reject(__blocked("Vault writes are blocked by Rhythm policy.")),
+      Promise.reject(__blocked("Secret writes are blocked by Rhythm policy.")),
   },
   request: __request,
   response: __pmResponse,

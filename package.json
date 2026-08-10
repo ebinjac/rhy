@@ -10,6 +10,8 @@
     "migrations:check": "node scripts/check-migration-parity.mjs",
     "hydra:check": "node scripts/check-hydra-deployment.mjs",
     "test:api": "cd services/api && go test ./...",
+    "test:scenarios": "node --test --test-concurrency=1 tests/scenarios/**/*.test.mjs",
+    "test:scenarios:ci": "node tests/scenarios/run-ci.mjs",
     "lint": "turbo lint",
     "format": "turbo format",
     "typecheck": "turbo typecheck",

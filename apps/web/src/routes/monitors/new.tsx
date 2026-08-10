@@ -55,6 +55,7 @@ import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
 import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
 import { EditorLoading } from "@/components/editor-loading"
 import { PageContainer } from "@/components/page-container"
+import { DraftPreviewStatus } from "@/features/monitors/draft-preview-status"
 import {
   initialRequestDefinition,
   normalizeDefinitionScripts,
@@ -519,12 +520,21 @@ function NewMonitorPage() {
             className="hidden items-center gap-2 text-xs text-muted-foreground md:flex"
             role="status"
           >
-            <Save className="size-3.5" />{" "}
-            {createdMonitorId
-              ? "Monitor saved"
-              : isDirty
-                ? "Unsaved changes"
-                : "Not started"}
+            {previewing ? (
+              <>
+                <LoaderCircle className="size-3.5 animate-spin text-primary" />
+                <span className="text-foreground/80">Walking journey…</span>
+              </>
+            ) : (
+              <>
+                <Save className="size-3.5" />{" "}
+                {createdMonitorId
+                  ? "Monitor saved"
+                  : isDirty
+                    ? "Unsaved changes"
+                    : "Not started"}
+              </>
+            )}
           </div>
           <div className="col-span-2 grid grid-cols-3 gap-2 md:col-auto md:flex">
             <Button
@@ -616,82 +626,14 @@ function NewMonitorPage() {
             </AlertDescription>
           </Alert>
         ) : null}
-        {preview || previewError ? (
-          <Alert
-            className="mb-5"
-            role="status"
-            aria-live="polite"
-            variant={
-              previewError || preview?.status === "FAILED"
-                ? "destructive"
-                : "default"
-            }
-          >
-            {previewError || preview?.status === "FAILED" ? (
-              <CircleAlert />
-            ) : (
-              <ShieldCheck />
-            )}
-            <AlertTitle>
-              {previewError
-                ? "Draft preview failed"
-                : preview?.status === "SUCCESS"
-                  ? "Draft request succeeded"
-                  : `Draft preview ${preview?.status.toLowerCase().replaceAll("_", " ")}`}
-            </AlertTitle>
-            <AlertDescription>
-              {previewError ? (
-                previewError
-              ) : preview ? (
-                <div className="space-y-3">
-                  <p>
-                    {preview.steps.length} step
-                    {preview.steps.length === 1 ? "" : "s"} executed in{" "}
-                    {preview.durationMs.toLocaleString()} ms.{" "}
-                    {preview.failureReason ||
-                      "This real execution was not persisted and did not change the monitor."}
-                  </p>
-                  <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-                    {preview.steps.map((previewStep) => (
-                      <li
-                        key={previewStep.stepDefinitionId}
-                        className="flex items-center justify-between gap-3 rounded-md border bg-background/70 p-2"
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium">
-                            {previewStep.stepName}
-                          </span>
-                          <span className="block text-xs text-muted-foreground">
-                            {previewStep.status} ·{" "}
-                            {previewStep.durationMs.toLocaleString()} ms
-                            {previewStep.errorMessage
-                              ? ` · ${previewStep.errorMessage}`
-                              : ""}
-                          </span>
-                        </span>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() =>
-                            setFocusTarget({
-                              requestKey: Date.now(),
-                              stepId: previewStep.stepDefinitionId,
-                              section: previewFailureSection(previewStep),
-                              field: "section",
-                            })
-                          }
-                        >
-                          Edit
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-            </AlertDescription>
-          </Alert>
-        ) : null}
+        <DraftPreviewStatus
+          previewing={previewing}
+          preview={preview}
+          previewError={previewError}
+          definition={definition}
+          onEditStep={setFocusTarget}
+          failureSection={previewFailureSection}
+        />
         {formError ? (
           <Alert
             ref={errorSummaryRef}
@@ -722,8 +664,9 @@ function NewMonitorPage() {
           </Alert>
         ) : null}
 
+        <div className="space-y-3">
         <section
-          className="mb-5 rounded-xl border bg-muted/20"
+          className="rounded-xl border bg-muted/15"
           aria-labelledby="monitor-details-heading"
         >
           <button
@@ -757,7 +700,7 @@ function NewMonitorPage() {
               id="monitor-details-panel"
               className="space-y-3 border-t bg-background px-4 py-3"
             >
-              <div className="grid gap-x-3 gap-y-2.5 md:grid-cols-2">
+              <div className="grid items-start gap-x-4 gap-y-3 md:grid-cols-2">
                 <Field
                   className="gap-1.5"
                   data-invalid={Boolean(fieldErrors.name)}
@@ -780,21 +723,6 @@ function NewMonitorPage() {
                   <FieldError id="monitor-name-error">
                     {fieldErrors.name}
                   </FieldError>
-                  <p
-                    id="monitor-slug-preview"
-                    className="text-xs text-muted-foreground"
-                  >
-                    API identifier{" "}
-                    <span className="font-mono text-foreground/70">
-                      {resolvedSlug(values.name, values.slug) || "—"}
-                    </span>
-                    {slugEdited ? (
-                      <span className="text-muted-foreground">
-                        {" "}
-                        · customized
-                      </span>
-                    ) : null}
-                  </p>
                 </Field>
                 <Field className="gap-1.5">
                   <FieldLabel htmlFor="monitor-application">
@@ -843,8 +771,20 @@ function NewMonitorPage() {
                   </span>
                 </Field>
               </div>
+              <p
+                id="monitor-slug-preview"
+                className="text-xs text-muted-foreground"
+              >
+                API identifier{" "}
+                <span className="font-mono text-foreground/70">
+                  {resolvedSlug(values.name, values.slug) || "—"}
+                </span>
+                {slugEdited ? (
+                  <span className="text-muted-foreground"> · customized</span>
+                ) : null}
+              </p>
 
-              <div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
                 <button
                   type="button"
                   className="inline-flex min-h-11 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground sm:min-h-7"
@@ -857,58 +797,6 @@ function NewMonitorPage() {
                   />
                   Customize API identifier
                 </button>
-                {slugAdvancedOpen ? (
-                  <Field
-                    id="monitor-slug-advanced"
-                    className="mt-2 max-w-xl gap-1.5"
-                    data-invalid={Boolean(fieldErrors.slug)}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <FieldLabel htmlFor="monitor-slug">Slug</FieldLabel>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs"
-                        onClick={regenerateSlug}
-                        disabled={!values.name.trim()}
-                      >
-                        <RefreshCw data-icon="inline-start" />
-                        Regenerate from name
-                      </Button>
-                    </div>
-                    <Input
-                      id="monitor-slug"
-                      className="font-mono"
-                      value={values.slug}
-                      onChange={(event) => {
-                        setSlugEdited(true)
-                        updateValue("slug", event.target.value)
-                      }}
-                      aria-invalid={Boolean(fieldErrors.slug)}
-                      aria-describedby={
-                        fieldErrors.slug
-                          ? "monitor-slug-hint monitor-slug-error"
-                          : "monitor-slug-hint"
-                      }
-                      placeholder="protected-payment-journey"
-                      title="Stable API identifier"
-                    />
-                    <span
-                      id="monitor-slug-hint"
-                      className="text-xs text-muted-foreground"
-                    >
-                      Stable API identifier. Editing stops auto-sync until you
-                      regenerate.
-                    </span>
-                    <FieldError id="monitor-slug-error">
-                      {fieldErrors.slug}
-                    </FieldError>
-                  </Field>
-                ) : null}
-              </div>
-
-              <div>
                 <button
                   type="button"
                   className="inline-flex min-h-11 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground sm:min-h-7"
@@ -924,212 +812,258 @@ function NewMonitorPage() {
                     · owner, tags, description
                   </span>
                 </button>
-                {moreDetailsOpen ? (
-                  <div
-                    id="monitor-more-details"
-                    className="mt-2.5 grid gap-x-3 gap-y-2.5 md:grid-cols-2"
-                  >
-                    <Field
-                      className="gap-1.5"
-                      data-invalid={Boolean(fieldErrors.ownerId)}
-                    >
-                      <FieldLabel htmlFor="monitor-owner">
-                        Owner{" "}
-                        <span className="font-normal text-muted-foreground">
-                          Optional
-                        </span>
-                      </FieldLabel>
-                      <Input
-                        id="monitor-owner"
-                        value={values.ownerId}
-                        onChange={(event) =>
-                          updateValue("ownerId", event.target.value)
-                        }
-                        aria-invalid={Boolean(fieldErrors.ownerId)}
-                        aria-describedby={
-                          fieldErrors.ownerId ? "monitor-owner-error" : undefined
-                        }
-                        placeholder="Payments SRE"
-                      />
-                      <FieldError id="monitor-owner-error">
-                        {fieldErrors.ownerId}
-                      </FieldError>
-                    </Field>
-                    <Field
-                      className="gap-1.5"
-                      data-invalid={Boolean(fieldErrors.tags)}
-                    >
-                      <FieldLabel htmlFor="monitor-tags">
-                        Tags{" "}
-                        <span className="font-normal text-muted-foreground">
-                          Optional
-                        </span>
-                      </FieldLabel>
-                      <Input
-                        id="monitor-tags"
-                        value={values.tags}
-                        onChange={(event) =>
-                          updateValue("tags", event.target.value)
-                        }
-                        aria-invalid={Boolean(fieldErrors.tags)}
-                        aria-describedby={
-                          fieldErrors.tags ? "monitor-tags-error" : undefined
-                        }
-                        placeholder="payments, critical"
-                      />
-                      <FieldError id="monitor-tags-error">
-                        {fieldErrors.tags}
-                      </FieldError>
-                    </Field>
-                    <Field
-                      className="gap-1.5 md:col-span-2"
-                      data-invalid={Boolean(fieldErrors.description)}
-                    >
-                      <FieldLabel htmlFor="monitor-description">
-                        Description{" "}
-                        <span className="font-normal text-muted-foreground">
-                          Optional
-                        </span>
-                      </FieldLabel>
-                      <Textarea
-                        id="monitor-description"
-                        rows={2}
-                        className="min-h-9 resize-y py-1.5"
-                        value={values.description}
-                        onChange={(event) =>
-                          updateValue("description", event.target.value)
-                        }
-                        aria-invalid={Boolean(fieldErrors.description)}
-                        aria-describedby={
-                          fieldErrors.description
-                            ? "monitor-description-error"
-                            : undefined
-                        }
-                        placeholder="Business journey and the outcome it protects"
-                      />
-                      <FieldError id="monitor-description-error">
-                        {fieldErrors.description}
-                      </FieldError>
-                    </Field>
-                  </div>
-                ) : null}
               </div>
+              {slugAdvancedOpen ? (
+                <Field
+                  id="monitor-slug-advanced"
+                  className="max-w-xl gap-1.5"
+                  data-invalid={Boolean(fieldErrors.slug)}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <FieldLabel htmlFor="monitor-slug">Slug</FieldLabel>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 px-2 text-xs"
+                      onClick={regenerateSlug}
+                      disabled={!values.name.trim()}
+                    >
+                      <RefreshCw data-icon="inline-start" />
+                      Regenerate from name
+                    </Button>
+                  </div>
+                  <Input
+                    id="monitor-slug"
+                    className="font-mono"
+                    value={values.slug}
+                    onChange={(event) => {
+                      setSlugEdited(true)
+                      updateValue("slug", event.target.value)
+                    }}
+                    aria-invalid={Boolean(fieldErrors.slug)}
+                    aria-describedby={
+                      fieldErrors.slug
+                        ? "monitor-slug-hint monitor-slug-error"
+                        : "monitor-slug-hint"
+                    }
+                    placeholder="protected-payment-journey"
+                    title="Stable API identifier"
+                  />
+                  <span
+                    id="monitor-slug-hint"
+                    className="text-xs text-muted-foreground"
+                  >
+                    Stable API identifier. Editing stops auto-sync until you
+                    regenerate.
+                  </span>
+                  <FieldError id="monitor-slug-error">
+                    {fieldErrors.slug}
+                  </FieldError>
+                </Field>
+              ) : null}
+              {moreDetailsOpen ? (
+                <div
+                  id="monitor-more-details"
+                  className="grid gap-x-4 gap-y-3 md:grid-cols-2"
+                >
+                  <Field
+                    className="gap-1.5"
+                    data-invalid={Boolean(fieldErrors.ownerId)}
+                  >
+                    <FieldLabel htmlFor="monitor-owner">
+                      Owner{" "}
+                      <span className="font-normal text-muted-foreground">
+                        Optional
+                      </span>
+                    </FieldLabel>
+                    <Input
+                      id="monitor-owner"
+                      value={values.ownerId}
+                      onChange={(event) =>
+                        updateValue("ownerId", event.target.value)
+                      }
+                      aria-invalid={Boolean(fieldErrors.ownerId)}
+                      aria-describedby={
+                        fieldErrors.ownerId ? "monitor-owner-error" : undefined
+                      }
+                      placeholder="Payments SRE"
+                    />
+                    <FieldError id="monitor-owner-error">
+                      {fieldErrors.ownerId}
+                    </FieldError>
+                  </Field>
+                  <Field
+                    className="gap-1.5"
+                    data-invalid={Boolean(fieldErrors.tags)}
+                  >
+                    <FieldLabel htmlFor="monitor-tags">
+                      Tags{" "}
+                      <span className="font-normal text-muted-foreground">
+                        Optional
+                      </span>
+                    </FieldLabel>
+                    <Input
+                      id="monitor-tags"
+                      value={values.tags}
+                      onChange={(event) =>
+                        updateValue("tags", event.target.value)
+                      }
+                      aria-invalid={Boolean(fieldErrors.tags)}
+                      aria-describedby={
+                        fieldErrors.tags ? "monitor-tags-error" : undefined
+                      }
+                      placeholder="payments, critical"
+                    />
+                    <FieldError id="monitor-tags-error">
+                      {fieldErrors.tags}
+                    </FieldError>
+                  </Field>
+                  <Field
+                    className="gap-1.5 md:col-span-2"
+                    data-invalid={Boolean(fieldErrors.description)}
+                  >
+                    <FieldLabel htmlFor="monitor-description">
+                      Description{" "}
+                      <span className="font-normal text-muted-foreground">
+                        Optional
+                      </span>
+                    </FieldLabel>
+                    <Textarea
+                      id="monitor-description"
+                      rows={2}
+                      className="min-h-9 resize-y py-1.5"
+                      value={values.description}
+                      onChange={(event) =>
+                        updateValue("description", event.target.value)
+                      }
+                      aria-invalid={Boolean(fieldErrors.description)}
+                      aria-describedby={
+                        fieldErrors.description
+                          ? "monitor-description-error"
+                          : undefined
+                      }
+                      placeholder="Business journey and the outcome it protects"
+                    />
+                    <FieldError id="monitor-description-error">
+                      {fieldErrors.description}
+                    </FieldError>
+                  </Field>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </section>
 
         <section
-          className="mb-5 rounded-xl border bg-background"
+          className="rounded-xl border bg-background"
           aria-labelledby="monitor-schedule-heading"
         >
-          <div
-            className={`grid gap-4 p-4 xl:items-end ${
-              schedule.type === "INTERVAL"
-                ? "xl:grid-cols-[minmax(260px,1fr)_12rem_13rem_minmax(260px,310px)]"
-                : "xl:grid-cols-[minmax(260px,1fr)_12rem_minmax(260px,310px)]"
-            }`}
-          >
-            <div className="flex min-w-0 items-start gap-3 xl:self-center">
-              <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
-                <CalendarClock className="size-4" />
+          <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-end lg:justify-between lg:gap-6">
+            <div className="flex min-w-0 items-start gap-3 lg:max-w-xs lg:shrink-0">
+              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary">
+                <CalendarClock className="size-3.5" />
               </span>
-              <div>
+              <div className="min-w-0">
                 <h2
                   id="monitor-schedule-heading"
                   className="text-sm font-semibold"
                 >
                   Run schedule
                 </h2>
-                <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
-                  Choose how often Rhythm runs this monitor. You can change
-                  advanced scheduling options after creation.
+                <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                  How often this monitor runs after enablement.
                 </p>
               </div>
             </div>
-            <Field className="w-full">
-              <FieldLabel htmlFor="schedule-mode">Run frequency</FieldLabel>
-              <Select
-                value={schedule.type}
-                onValueChange={(value) => {
-                  if (value == null) return
-                  setSchedule((current) => ({
-                    ...current,
-                    type: value,
-                  }))
-                  setScheduleAnchor(Date.now())
-                  if (!createdMonitorId) setFormError("")
-                }}
-                items={{
-                  INTERVAL: "On an interval",
-                  MANUAL: "Manual only",
-                }}
-              >
-                <SelectTrigger id="schedule-mode" className="h-9 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="INTERVAL">On an interval</SelectItem>
-                  <SelectItem value="MANUAL">Manual only</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-            {schedule.type === "INTERVAL" ? (
-              <Field className="w-full">
-                <FieldLabel htmlFor="schedule-frequency">Repeat</FieldLabel>
+            <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+              <Field className="w-full sm:w-44">
+                <FieldLabel htmlFor="schedule-mode">Run frequency</FieldLabel>
                 <Select
-                  value={String(schedule.intervalSeconds ?? 300)}
+                  value={schedule.type}
                   onValueChange={(value) => {
                     if (value == null) return
                     setSchedule((current) => ({
                       ...current,
-                      intervalSeconds: Number(value),
+                      type: value,
                     }))
                     setScheduleAnchor(Date.now())
                     if (!createdMonitorId) setFormError("")
                   }}
-                  items={Object.fromEntries(
-                    frequencyOptions.map(([seconds, label]) => [
-                      String(seconds),
-                      label,
-                    ])
-                  )}
+                  items={{
+                    INTERVAL: "On an interval",
+                    MANUAL: "Manual only",
+                  }}
                 >
-                  <SelectTrigger id="schedule-frequency" className="h-9 w-full">
+                  <SelectTrigger id="schedule-mode" className="h-9 w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {frequencyOptions.map(([seconds, label]) => (
-                      <SelectItem key={seconds} value={String(seconds)}>
-                        {label}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="INTERVAL">On an interval</SelectItem>
+                    <SelectItem value="MANUAL">Manual only</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
-            ) : null}
-            <div className="flex min-h-20 w-full items-center justify-between gap-4 rounded-lg bg-muted/45 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">Enable after creation</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {enabled
-                    ? schedule.type === "INTERVAL"
-                      ? "Publishes and starts the schedule."
-                      : "Publishes for manual runs."
-                    : "Keeps this monitor as a draft."}
-                </p>
+              {schedule.type === "INTERVAL" ? (
+                <Field className="w-full sm:w-40">
+                  <FieldLabel htmlFor="schedule-frequency">Repeat</FieldLabel>
+                  <Select
+                    value={String(schedule.intervalSeconds ?? 300)}
+                    onValueChange={(value) => {
+                      if (value == null) return
+                      setSchedule((current) => ({
+                        ...current,
+                        intervalSeconds: Number(value),
+                      }))
+                      setScheduleAnchor(Date.now())
+                      if (!createdMonitorId) setFormError("")
+                    }}
+                    items={Object.fromEntries(
+                      frequencyOptions.map(([seconds, label]) => [
+                        String(seconds),
+                        label,
+                      ])
+                    )}
+                  >
+                    <SelectTrigger id="schedule-frequency" className="h-9 w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {frequencyOptions.map(([seconds, label]) => (
+                        <SelectItem key={seconds} value={String(seconds)}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+              ) : null}
+              <div className="flex h-9 w-full items-center justify-between gap-3 rounded-lg bg-muted/45 px-3 sm:ml-auto sm:w-auto sm:min-w-[15.5rem]">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium leading-none">
+                    Enable after creation
+                  </p>
+                  <p className="mt-1 truncate text-[11px] text-muted-foreground">
+                    {enabled
+                      ? schedule.type === "INTERVAL"
+                        ? "Publishes and starts the schedule."
+                        : "Publishes for manual runs."
+                      : "Keeps this monitor as a draft."}
+                  </p>
+                </div>
+                <Switch
+                  checked={enabled}
+                  onCheckedChange={(checked) => {
+                    setEnabled(checked)
+                    setScheduleAnchor(Date.now())
+                    if (!createdMonitorId) setFormError("")
+                  }}
+                  aria-label="Enable monitor after creation"
+                />
               </div>
-              <Switch
-                checked={enabled}
-                onCheckedChange={(checked) => {
-                  setEnabled(checked)
-                  setScheduleAnchor(Date.now())
-                  if (!createdMonitorId) setFormError("")
-                }}
-                aria-label="Enable monitor after creation"
-              />
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t bg-muted/20 px-4 py-3 text-xs">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-muted/15 px-4 py-2.5 text-xs">
             <span className="font-medium">Next run</span>
             <span
               className={
@@ -1149,59 +1083,63 @@ function NewMonitorPage() {
             ) : null}
           </div>
         </section>
+        </div>
 
-        <div className="mb-3 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-          <div>
-            <h2
-              id="request-workbench-heading"
-              className="scroll-mt-36 text-lg font-semibold"
-            >
-              Request workbench
-            </h2>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Build an ordered workflow. Extracted outputs can be referenced by
-              later request templates.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
+        <section
+          className="mt-8"
+          aria-labelledby="request-workbench-heading"
+        >
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <h2
+                id="request-workbench-heading"
+                className="scroll-mt-36 text-lg font-semibold tracking-tight"
+              >
+                Request workbench
+              </h2>
+              <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+                Build an ordered workflow. Extracted outputs can be referenced
+                by later request templates.
+              </p>
+              <div
+                className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"
+                role="status"
+              >
+                {readiness.ready ? (
+                  <ShieldCheck className="size-3.5 text-success-foreground" />
+                ) : (
+                  <CircleAlert className="size-3.5 text-warning-foreground" />
+                )}
+                {readiness.label}
+              </div>
+            </div>
             <Button
               type="button"
               variant="outline"
-              className="min-h-11 sm:min-h-8"
+              className="min-h-11 shrink-0 sm:min-h-8"
               onClick={() => setImportOpen(true)}
               disabled={isSubmitting || previewing || Boolean(createdMonitorId)}
             >
               <Upload /> Import Postman or cURL
             </Button>
-            <div
-              className="flex items-center gap-2 text-xs text-muted-foreground"
-              role="status"
-            >
-              {readiness.ready ? (
-                <ShieldCheck className="size-4 text-success-foreground" />
-              ) : (
-                <CircleAlert className="size-4 text-warning-foreground" />
-              )}
-              {readiness.label}
-            </div>
           </div>
-        </div>
 
-        <Suspense
-          fallback={
-            <EditorLoading label="Loading request workbench…" />
-          }
-        >
-          <RequestWorkbench
-            value={definition}
-            onChange={updateDefinition}
-            secrets={secrets}
-            preview={preview}
-            focusTarget={focusTarget}
-          />
-        </Suspense>
+          <Suspense
+            fallback={
+              <EditorLoading label="Loading request workbench…" />
+            }
+          >
+            <RequestWorkbench
+              value={definition}
+              onChange={updateDefinition}
+              secrets={secrets}
+              preview={preview}
+              focusTarget={focusTarget}
+            />
+          </Suspense>
+        </section>
 
-        <div className="mt-5 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-8 flex flex-col gap-3 border-t pt-5 sm:flex-row sm:items-center sm:justify-between">
           <p className="max-w-2xl text-xs leading-5 text-muted-foreground">
             {enabled
               ? "Rhythm will validate and publish revision 1, enable the monitor, and activate its schedule in one step."

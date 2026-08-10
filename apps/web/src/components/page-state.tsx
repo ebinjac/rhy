@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router"
 import { Button } from "@workspace/ui/components/button"
 import { Skeleton } from "@workspace/ui/components/skeleton"
 import { ArrowLeft, CircleAlert, RefreshCw } from "lucide-react"
+import { useEffect } from "react"
 
 import { PageContainer } from "@/components/page-container"
 
@@ -27,6 +28,15 @@ export function RouteErrorState({
   error: Error
   reset: () => void
 }) {
+  const chunkLoadError = isChunkLoadError(error)
+
+  useEffect(() => {
+    console.error("Rhythm route error", error)
+    if (chunkLoadError && markChunkRecoveryAttempt()) {
+      window.location.reload()
+    }
+  }, [chunkLoadError, error])
+
   return (
     <main className="mx-auto max-w-2xl px-4 py-16 md:px-6">
       <CircleAlert aria-hidden="true" className="size-7 text-destructive" />
@@ -35,7 +45,9 @@ export function RouteErrorState({
         {safeErrorMessage(error)}
       </p>
       <div className="mt-6 flex flex-wrap gap-2">
-        <Button onClick={reset}>
+        <Button
+          onClick={chunkLoadError ? () => window.location.reload() : reset}
+        >
           <RefreshCw data-icon="inline-start" />
           Retry
         </Button>
@@ -73,6 +85,9 @@ export function NotFoundState() {
 }
 
 function safeErrorMessage(error: Error) {
+  if (isChunkLoadError(error)) {
+    return "Rhythm was updated while this page was open. Reload the page to use the latest application files."
+  }
   if (/permission|forbidden|unauthor/i.test(error.message)) {
     return "You do not have permission to view this resource. Ask an administrator for access."
   }
@@ -94,4 +109,31 @@ function safeErrorMessage(error: Error) {
     return "Rhythm could not display this page correctly. Your data was not changed. Retry once, or reload the page if the problem continues."
   }
   return "Rhythm could not complete this page request. Your data was not changed. Try again."
+}
+
+const chunkRecoveryKey = "rhythm:chunk-recovery"
+
+function isChunkLoadError(error: Error) {
+  return /chunkloaderror|loading chunk|dynamically imported module|importing a module script|module script failed|preload.*failed/i.test(
+    `${error.name} ${error.message}`
+  )
+}
+
+function markChunkRecoveryAttempt() {
+  try {
+    const now = Date.now()
+    const stored = JSON.parse(
+      window.sessionStorage.getItem(chunkRecoveryKey) ?? "null"
+    ) as { count?: number; at?: number } | null
+    const recent = stored?.at && now - stored.at < 60_000
+    const count = recent ? Number(stored?.count ?? 0) : 0
+    if (count >= 2) return false
+    window.sessionStorage.setItem(
+      chunkRecoveryKey,
+      JSON.stringify({ count: count + 1, at: now })
+    )
+    return true
+  } catch {
+    return false
+  }
 }

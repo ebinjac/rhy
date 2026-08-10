@@ -4,13 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
 )
-
-var environmentVariableName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
 
 func prepareEnvironmentConfig(profileType string, config map[string]any) (map[string]any, string, error) {
 	stage := strings.ToUpper(strings.TrimSpace(profileType))
@@ -38,11 +35,15 @@ func prepareEnvironmentConfig(profileType string, config map[string]any) (map[st
 		for rawKey, rawValue := range raw {
 			key := strings.TrimSpace(rawKey)
 			value := strings.TrimSpace(fmt.Sprint(rawValue))
-			if !environmentVariableName.MatchString(key) {
-				return nil, "", fmt.Errorf("environment variable %q has an invalid name", key)
+			if key == "" {
+				return nil, "", errors.New("environment variable name is required")
 			}
-			if sensitiveKeyName(key) && value != "" && !strings.HasPrefix(value, "secret://") {
-				return nil, "", fmt.Errorf("sensitive environment variable %q must use a secret:// reference", key)
+			if sensitiveKeyName(key) && value != "" {
+				alias, aliasErr := normalizeSecretAlias(value)
+				if aliasErr != nil {
+					return nil, "", fmt.Errorf("sensitive environment variable %q: %w", key, aliasErr)
+				}
+				value = alias
 			}
 			variables[key] = value
 		}
@@ -200,16 +201,21 @@ func prepareTelemetryConfig(profileType string, config map[string]any) (map[stri
 func requiredSecretRef(config map[string]any, key, label string) (string, error) {
 	value := strings.TrimSpace(firstString(config, key))
 	if value == "" {
-		return "", fmt.Errorf("%s secret reference is required", label)
+		return "", fmt.Errorf("%s secret alias is required", label)
 	}
-	if !strings.HasPrefix(value, "secret://") {
-		value = "secret://" + value
+	alias, err := normalizeSecretAlias(value)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", label, err)
 	}
-	alias := strings.TrimSpace(strings.TrimPrefix(value, "secret://"))
+	return alias, nil
+}
+
+func normalizeSecretAlias(value string) (string, error) {
+	alias := strings.TrimSpace(value)
 	if alias == "" || strings.IndexFunc(alias, unicode.IsControl) >= 0 {
-		return "", fmt.Errorf("%s must refer to a valid secret name or ID", label)
+		return "", errors.New("must refer to a valid encrypted secret name or ID")
 	}
-	return "secret://" + alias, nil
+	return alias, nil
 }
 
 func authSummary(authType string, fields map[string]any) map[string]any {
@@ -239,8 +245,9 @@ func sensitiveKeyName(key string) bool {
 
 func countSecretReferences(values map[string]any) int {
 	count := 0
-	for _, value := range values {
-		if strings.HasPrefix(strings.TrimSpace(fmt.Sprint(value)), "secret://") {
+	for key, value := range values {
+		if strings.TrimSpace(fmt.Sprint(value)) != "" &&
+			(sensitiveKeyName(key) || strings.Contains(strings.ToLower(key), "secretref")) {
 			count++
 		}
 	}

@@ -69,7 +69,7 @@ External bundles are downloaded only from the governed registry, limited to 2 MB
 ## Supported context
 
 - Variables: `pm.variables`, `pm.environment`, `pm.collectionVariables`, `pm.globals`, and read-only `pm.iterationData`.
-- Secrets: asynchronous read-only `pm.vault.get`.
+- Secrets: asynchronous read-only `pm.vault.get`, backed by Rhythm's encrypted PostgreSQL secret store.
 - Requests and cookies: `pm.request`, `pm.cookies`, and `pm.cookies.jar()`.
 - Responses: `pm.response` in Tests, including status, headers, body, size, time, JSON, and text helpers.
 - Execution: `pm.execution.skipRequest`, bounded `pm.execution.setNextRequest`, and `pm.execution.location`.
@@ -81,7 +81,7 @@ External bundles are downloaded only from the governed registry, limited to 2 MB
 
 `pm.message` is specific to gRPC On message scripts. `pm.mock` and persistent mock state are specific to Postman code mocks. `pm.execution.runRequest` requires saved Postman collection requests; use `pm.sendRequest` for governed auxiliary HTTP in Rhythm. Rhythm keeps these APIs discoverable but returns `SCRIPT_CONTEXT_UNAVAILABLE` when an HTTP monitor has no equivalent context.
 
-<SecurityNote>The `rhythm-js-2` runtime uses a fresh VM for each execution. It has no filesystem, host process, environment variables, unrestricted `fetch`, `XMLHttpRequest`, or cross-run global state. Use `pm.sendRequest` for governed HTTP. Vault writes remain blocked.</SecurityNote>
+<SecurityNote>The `rhythm-js-2` runtime uses a fresh VM for each execution. It has no filesystem, host process, environment variables, unrestricted `fetch`, `XMLHttpRequest`, or cross-run global state. Use `pm.sendRequest` for governed HTTP. Application-secret writes from scripts remain blocked.</SecurityNote>
 
 ## Limits
 
@@ -92,4 +92,4 @@ External bundles are downloaded only from the governed registry, limited to 2 MB
 - Five `pm.sendRequest` calls and 2 MB per auxiliary response.
 - 100 workflow step executions when `setNextRequest` creates loops.
 
-<FailureExample>Preview uses masked vault placeholders and a sample response for Tests. A successful preview does not prove that a target host, external package registry, or runtime secret will be available to the selected execution agent.</FailureExample>
+<FailureExample>Preview uses masked secret placeholders and a sample response for Tests. A successful preview does not prove that a target host, external package registry, or runtime secret will be available to the selected execution agent.</FailureExample>

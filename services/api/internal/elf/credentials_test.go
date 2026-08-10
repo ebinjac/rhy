@@ -14,7 +14,7 @@ type memorySecrets struct {
 }
 
 func (m memorySecrets) ResolveSecret(_ context.Context, reference string) (string, error) {
-	alias := strings.TrimPrefix(strings.TrimSpace(reference), "secret://")
+	alias := strings.TrimSpace(reference)
 	value, ok := m.values[alias]
 	if !ok {
 		return "", errSecretMissing(alias)
@@ -50,7 +50,7 @@ func TestRedactSettingsNeverLeaksCredentialMaterial(t *testing.T) {
 		AuthMode:            "BEARER",
 		Credential:          "plaintext-token",
 		EncryptedCredential: "v1:cipher-blob",
-		CredentialSecretRef: "secret://elf-token",
+		CredentialSecretRef: "elf-token",
 		HasCredential:       true,
 	}
 	redacted := redactSettings(item)
@@ -63,7 +63,7 @@ func TestRedactSettingsNeverLeaksCredentialMaterial(t *testing.T) {
 	if !redacted.HasCredential {
 		t.Fatal("expected hasCredential")
 	}
-	if redacted.CredentialSecretRef != "secret://elf-token" {
+	if redacted.CredentialSecretRef != "elf-token" {
 		t.Fatalf("secret alias should remain visible: %#v", redacted)
 	}
 }

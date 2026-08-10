@@ -48,3 +48,37 @@ func TestInternalAuthenticationCannotExposePublicAPI(t *testing.T) {
 		t.Fatalf("expected internal authentication role guard, got %v", err)
 	}
 }
+
+func TestPostgresStorageDefaultsToPostgresQueueAndAnonymousUnrestrictedAccess(t *testing.T) {
+	t.Setenv("RHYTHM_STORAGE_MODE", "postgres")
+	t.Setenv("RHYTHM_DATABASE_URL", "postgres://rhythm:test@postgres/rhythm")
+	t.Setenv("RHYTHM_QUEUE_BACKEND", "")
+	t.Setenv("RHYTHM_REDIS_URL", "")
+	t.Setenv("RHYTHM_REDIS_ADDRS", "")
+	t.Setenv("RHYTHM_AUTH_MODE", "")
+	t.Setenv("RHYTHM_UNRESTRICTED_OUTBOUND", "")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("load PostgreSQL-only configuration: %v", err)
+	}
+	if config.QueueBackend != "postgres" {
+		t.Fatalf("queue backend=%q, want postgres", config.QueueBackend)
+	}
+	if config.AuthMode != "anonymous" {
+		t.Fatalf("auth mode=%q, want anonymous", config.AuthMode)
+	}
+	if !config.UnrestrictedOutbound || !config.AllowPrivateTargets {
+		t.Fatal("expected unrestricted outbound execution")
+	}
+}
+
+func TestRedisQueueRequiresRedisConnection(t *testing.T) {
+	t.Setenv("RHYTHM_QUEUE_BACKEND", "redis")
+	t.Setenv("RHYTHM_REDIS_URL", "")
+	t.Setenv("RHYTHM_REDIS_ADDRS", "")
+	_, err := Load()
+	if err == nil || !strings.Contains(err.Error(), "requires RHYTHM_REDIS_URL") {
+		t.Fatalf("expected Redis connection validation, got %v", err)
+	}
+}

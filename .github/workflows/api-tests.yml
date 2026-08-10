@@ -1,0 +1,46 @@
+name: API tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Go API unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/api/go.mod
+          cache-dependency-path: services/api/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run API unit tests
+        run: npm run test:api
+
+  # Full compose + test-target e2e is manual/nightly for now.
+  # Enable via workflow_dispatch when a stack is available, or promote to
+  # a scheduled job once the CI runner can bring up docker compose.
+  scenarios:
+    name: API scenarios (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Run scenario suite
+        run: npm run test:scenarios:ci
+        # Defaults are applied in tests/scenarios/run-ci.mjs.
+        # Override via repository variables when a live stack is available.
+        env:
+          RHYTHM_API_URL: ${{ vars.RHYTHM_API_URL }}
+          RHYTHM_TEST_TARGET_URL: ${{ vars.RHYTHM_TEST_TARGET_URL }}

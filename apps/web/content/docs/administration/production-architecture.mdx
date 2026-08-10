@@ -16,24 +16,24 @@ keywords:
 ---
 
 Rhythm separates public traffic, control-plane orchestration, API execution, and
-Chromium execution. On Hydra, managed PostgreSQL, Redis Enterprise, and AWS S3
+Chromium execution. On Hydra, managed PostgreSQL and AWS S3
 remain outside the application pod footprint. See [Deploy Rhythm on
 Hydra](/docs/administration/hydra-deployment) for the selected four-service
 topology and 2,000-run capacity model.
 
 ## Production boundaries
 
-- The API owns authenticated definitions, revisions, evidence, and policy.
+- The API owns definitions, revisions, evidence, and execution state.
 - Workers execute scheduled and manual runs with cancellation propagation.
 - The script runner uses a fresh sandbox for every JavaScript execution.
-- PostgreSQL stores durable state; Redis coordinates asynchronous work.
-- Execution agents reach private targets without exposing them to the control plane.
+- PostgreSQL stores durable state and is the default asynchronous job transport; Redis Streams are optional.
+- Execution agents can reach unrestricted HTTP(S) targets, including private networks.
 - Production ELF traffic passes through an approved proxy.
 
 <SecurityNote>
-Keep credentials in secret providers and reference them from profiles. Do not place raw passwords, bearer tokens, or private keys in monitor definitions, environment values, or documentation.
+Store application credentials as encrypted Rhythm secrets and reference them by alias from profiles. Do not place raw passwords, bearer tokens, or private keys in monitor definitions, environment values, or documentation.
 </SecurityNote>
 
 ## Minimum readiness
 
-Before enabling production schedules, verify database backups, secret encryption, outbound host policy, TLS trust profiles, agent health, telemetry, retention, and role assignments.
+Before enabling production schedules, verify database backups, secret encryption, network reachability, TLS trust profiles, agent health, telemetry, retention, and anonymous-access acceptance.

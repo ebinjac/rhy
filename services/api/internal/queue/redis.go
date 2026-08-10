@@ -12,13 +12,14 @@ import (
 )
 
 type RedisConfig struct {
-	URL      string
-	Mode     string
-	Addrs    []string
-	Username string
-	Password string
-	DB       int
-	TLS      bool
+	URL             string
+	Mode            string
+	Addrs           []string
+	Username        string
+	Password        string
+	DB              int
+	TLS             bool
+	SkipInitialPing bool
 }
 
 func OpenRedis(ctx context.Context, redisURL string) (redis.UniversalClient, error) {
@@ -31,6 +32,9 @@ func OpenRedisWithConfig(ctx context.Context, config RedisConfig) (redis.Univers
 		return nil, err
 	}
 	client := redis.NewUniversalClient(options)
+	if config.SkipInitialPing {
+		return client, nil
+	}
 	pingContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := client.Ping(pingContext).Err(); err != nil {

@@ -36,6 +36,23 @@ func (RejectingAuthenticator) Authenticate(*http.Request) (Principal, error) {
 	return Principal{}, ErrUnauthenticated
 }
 
+// AnonymousAuthenticator intentionally grants the shared anonymous actor full
+// access. It is used by installations that do not have an identity provider.
+type AnonymousAuthenticator struct {
+	actorID string
+}
+
+func NewAnonymousAuthenticator(actorID string) AnonymousAuthenticator {
+	if strings.TrimSpace(actorID) == "" {
+		actorID = "anonymous"
+	}
+	return AnonymousAuthenticator{actorID: strings.TrimSpace(actorID)}
+}
+
+func (a AnonymousAuthenticator) Authenticate(*http.Request) (Principal, error) {
+	return Principal{ID: a.actorID, Roles: []Role{RoleAdministrator}}, nil
+}
+
 func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	principal, ok := ctx.Value(principalContextKey{}).(Principal)
 	return principal, ok

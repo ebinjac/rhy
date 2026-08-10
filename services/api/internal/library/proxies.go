@@ -88,14 +88,14 @@ func normalizeProxySecretReference(reference string) (string, error) {
 	if reference == "" {
 		return "", nil
 	}
-	if !strings.HasPrefix(reference, "secret://") {
-		reference = "secret://" + reference
+	alias, err := normalizeSecretAlias(reference)
+	if err != nil {
+		return "", err
 	}
-	alias := strings.TrimSpace(strings.TrimPrefix(reference, "secret://"))
 	if alias == "" || strings.ContainsAny(alias, " \t\r\n") {
-		return "", errors.New("reference must be a secret:// alias without whitespace")
+		return "", errors.New("alias must not contain whitespace")
 	}
-	return "secret://" + alias, nil
+	return alias, nil
 }
 
 func normalizeNoProxy(value string) ([]string, error) {

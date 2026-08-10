@@ -67,7 +67,6 @@ function NewBrowserMonitorPage() {
   const [serviceID, setServiceID] = useState("")
   const [environmentID, setEnvironmentID] = useState("")
   const [startURL, setStartURL] = useState("")
-  const [allowedOrigins, setAllowedOrigins] = useState("")
   const [authSessionID, setAuthSessionID] = useState("")
   const [viewport, setViewport] = useState("desktop")
   const [colorScheme, setColorScheme] =
@@ -89,22 +88,10 @@ function NewBrowserMonitorPage() {
 
   const definition = useMemo<BrowserMonitorDefinition>(() => {
     const mobile = viewport === "mobile"
-    const origins = allowedOrigins
-      .split(/\n|,/)
-      .map((value) => value.trim())
-      .filter(Boolean)
-    try {
-      if (startURL) {
-        const origin = new URL(startURL).origin
-        if (!origins.includes(origin)) origins.unshift(origin)
-      }
-    } catch {
-      // The inline readiness state reports the invalid URL.
-    }
     return {
       schemaVersion: 1,
       startUrl: startURL,
-      allowedOrigins: origins,
+      allowedOrigins: [],
       profile: {
         browser: "chromium",
         viewportWidth: mobile ? 390 : 1440,
@@ -134,7 +121,7 @@ function NewBrowserMonitorPage() {
         "[data-rhythm-mask]",
       ],
     }
-  }, [allowedOrigins, authSessionID, colorScheme, startURL, steps, viewport])
+  }, [authSessionID, colorScheme, startURL, steps, viewport])
 
   const readiness = useMemo(() => {
     let validURL = false
@@ -454,18 +441,6 @@ function NewBrowserMonitorPage() {
                   <SelectItem value="no-preference">System neutral</SelectItem>
                 </SelectContent>
               </Select>
-            </Field>
-            <Field
-              label="Additional allowed origins"
-              id="browser-origins"
-              hint="One origin per line. Cross-origin navigation outside this boundary is blocked."
-            >
-              <Textarea
-                id="browser-origins"
-                onChange={(event) => setAllowedOrigins(event.target.value)}
-                placeholder="https://login.example.internal"
-                value={allowedOrigins}
-              />
             </Field>
             <div className="md:col-span-2 xl:col-span-3">
               <Field label="Description" id="browser-description">

@@ -52,12 +52,16 @@ type MetricQuery struct {
 type EnvironmentV2Provider struct {
 	transport    *http.Transport
 	allowedHosts map[string]struct{}
+	allowAnyHost bool
 }
 
 func NewEnvironmentV2Provider(allowedHosts []string, allowPrivate bool) *EnvironmentV2Provider {
 	hosts := map[string]struct{}{}
+	allowAnyHost := false
 	for _, host := range allowedHosts {
-		if normalized := strings.ToLower(strings.TrimSpace(host)); normalized != "" {
+		if normalized := strings.ToLower(strings.TrimSpace(host)); normalized == "*" {
+			allowAnyHost = true
+		} else if normalized != "" {
 			hosts[normalized] = struct{}{}
 		}
 	}
@@ -84,6 +88,7 @@ func NewEnvironmentV2Provider(allowedHosts []string, allowPrivate bool) *Environ
 	}
 	return &EnvironmentV2Provider{
 		allowedHosts: hosts,
+		allowAnyHost: allowAnyHost,
 		transport:    transport,
 	}
 }
@@ -101,7 +106,7 @@ func (p *EnvironmentV2Provider) validateConnection(connection Connection) (*url.
 	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return nil, errors.New("Dynatrace connection URL must not contain credentials, query parameters, or fragments")
 	}
-	if _, allowed := p.allowedHosts[strings.ToLower(parsed.Hostname())]; !allowed {
+	if _, allowed := p.allowedHosts[strings.ToLower(parsed.Hostname())]; !p.allowAnyHost && !allowed {
 		return nil, errors.New("Dynatrace endpoint is not in the administrator allowlist")
 	}
 	if strings.TrimSpace(connection.Token) == "" {

@@ -1,7 +1,7 @@
 # Console onboarding contract. Replace placeholders before creating the service.
 project: <HYDRA_PROJECT_NAME>
 service: rhythm-frontdoor
-description: Rhythm web experience, public API, webhooks, and SSO boundary.
+description: Rhythm web experience, public API, and webhooks without a sign-in boundary.
 platform: on-prem
 network: intranet
 maximumEnvironment: e3
@@ -10,7 +10,8 @@ persistentStorage: none
 deploymentMethod: rolling
 applicationType: not-api
 routability:
-  mode: routable-with-sso
+  mode: routable
+  sso: false
   applicationUrlPrefix: rhythm
   gdha: active-active-topology-performance
   gtmHealthcheckPath: /health

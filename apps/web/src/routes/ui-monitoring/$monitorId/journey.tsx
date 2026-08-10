@@ -205,10 +205,8 @@ function BrowserJourneyPage() {
             {definition.startUrl}
           </p>
           <p className="mt-2 text-xs text-muted-foreground">
-            Allowed navigation:{" "}
-            {definition.allowedOrigins.length
-              ? definition.allowedOrigins.join(", ")
-              : "start origin only"}
+            Navigation can continue to any HTTP or HTTPS destination used by
+            this journey.
           </p>
         </div>
 

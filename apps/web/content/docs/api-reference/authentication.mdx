@@ -1,6 +1,6 @@
 ---
-title: API authentication
-description: Authenticate safely to Rhythm's public API and understand role enforcement.
+title: API access
+description: Access Rhythm's public API in anonymous mode and understand the separate protection used by webhook receivers.
 audience:
   - application-engineer
   - platform-administrator
@@ -12,22 +12,32 @@ owners:
   - Rhythm API
 keywords:
   - API
-  - bearer token
-  - authentication
+  - anonymous access
+  - webhooks
 ---
 
-Rhythm API clients authenticate with an installation-issued bearer token and receive only the actions allowed by their role.
+Rhythm's application UI and `/api/v1` API are currently available without user
+authentication. Every request uses the shared `anonymous` Administrator actor,
+so API calls do not need an `Authorization` header.
 
 ```bash
 curl --request GET \
-  --url 'http://localhost:18080/api/v1/monitors' \
-  --header 'Authorization: Bearer <runtime-token>'
+  --url 'http://localhost:18080/api/v1/monitors'
 ```
 
 <SecurityNote>
-Keep bearer tokens in runtime memory or your CI secret store. Never place them in URLs, source control, examples, browser storage, or diagnostic attachments.
+Anonymous access is intentionally unrestricted. Anyone who can reach Rhythm can
+view and change resources, run monitors, and perform Administrator actions.
+Restrict network reachability outside the application if that exposure is not
+acceptable.
 </SecurityNote>
+
+Webhook receiver tokens, integration credentials, secret references, and
+downstream service authentication remain independent of user access. Continue
+to store those values in the configuration library or approved secret store.
 
 ## Playground behavior
 
-The documentation playground accepts only allowlisted origins, holds its token in memory, blocks webhook receivers and destructive actions, and clears state when the page closes.
+The documentation playground can call the configured Rhythm API origin without
+a bearer token. Its safety controls for destructive operations and webhook
+receivers remain separate from application authentication.

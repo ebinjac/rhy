@@ -41,7 +41,7 @@ func TestWebhookNotificationResolvesEndpointAndSendsSafePayload(t *testing.T) {
 	}))
 	defer target.Close()
 	service := &Service{secrets: fakeSecrets{value: target.URL}, logger: slog.Default(), client: target.Client()}
-	item := delivery{ID: "delivery", EventType: "ALERT_OPENED", ChannelType: "WEBHOOK", Config: map[string]any{"urlSecretRef": "secret://webhook"}, AlertID: "alert", MonitorID: "monitor", MonitorName: "Payments", Severity: "CRITICAL", Title: "Payments is failing", Description: "Assertion failed"}
+	item := delivery{ID: "delivery", EventType: "ALERT_OPENED", ChannelType: "WEBHOOK", Config: map[string]any{"urlSecretRef": "webhook"}, AlertID: "alert", MonitorID: "monitor", MonitorName: "Payments", Severity: "CRITICAL", Title: "Payments is failing", Description: "Assertion failed"}
 	if err := service.deliver(context.Background(), item); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestSlackNotificationUsesTextPayload(t *testing.T) {
 	}))
 	defer target.Close()
 	service := &Service{secrets: fakeSecrets{value: target.URL}, logger: slog.Default(), client: target.Client()}
-	if err := service.deliver(context.Background(), delivery{EventType: "ALERT_RECOVERED", ChannelType: "SLACK", Config: map[string]any{"urlSecretRef": "secret://slack"}, MonitorName: "Checkout", Severity: "INFO", Title: "Checkout recovered"}); err != nil {
+	if err := service.deliver(context.Background(), delivery{EventType: "ALERT_RECOVERED", ChannelType: "SLACK", Config: map[string]any{"urlSecretRef": "slack"}, MonitorName: "Checkout", Severity: "INFO", Title: "Checkout recovered"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := received["text"]; !ok {

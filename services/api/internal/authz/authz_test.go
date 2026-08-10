@@ -36,6 +36,17 @@ func TestRolePermissions(t *testing.T) {
 	}
 }
 
+func TestAnonymousAuthenticatorGrantsSharedAdministrator(t *testing.T) {
+	request, _ := http.NewRequest(http.MethodDelete, "http://rhythm.local/api/v1/monitors/one", nil)
+	principal, err := NewAnonymousAuthenticator("").Authenticate(request)
+	if err != nil {
+		t.Fatalf("authenticate anonymous request: %v", err)
+	}
+	if principal.ID != "anonymous" || !HasRole(principal, RoleAdministrator) {
+		t.Fatalf("unexpected anonymous principal: %#v", principal)
+	}
+}
+
 func TestTrustedHeaderAuthenticator(t *testing.T) {
 	authenticator, err := NewTrustedHeaderAuthenticator(TrustedHeaderConfig{
 		IdentityHeader:    "X-Rhythm-User",

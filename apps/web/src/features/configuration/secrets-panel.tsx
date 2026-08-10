@@ -2,23 +2,9 @@ import { useState } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@workspace/ui/components/select"
 import { toast } from "@workspace/ui/components/sonner"
 import { Textarea } from "@workspace/ui/components/textarea"
-import {
-  KeyRound,
-  LoaderCircle,
-  Plus,
-  ShieldCheck,
-  Terminal,
-  Trash2,
-} from "lucide-react"
+import { KeyRound, LoaderCircle, Plus, ShieldCheck, Trash2 } from "lucide-react"
 
 import { DeleteProfileDialog } from "@/features/configuration/guided-profile-shared"
 import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
@@ -26,14 +12,6 @@ import {
   createConfigurationProfile,
   deleteConfigurationProfile,
 } from "@/lib/api-client/monitors"
-
-type SecretProvider = "LOCAL" | "ENV" | "VAULT"
-
-const providerLabels: Record<SecretProvider, string> = {
-  LOCAL: "Stored (encrypted)",
-  ENV: "Environment variable",
-  VAULT: "HashiCorp Vault",
-}
 
 export function SecretsPanel({
   profiles,
@@ -45,11 +23,7 @@ export function SecretsPanel({
   const [open, setOpen] = useState(false)
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [provider, setProvider] = useState<SecretProvider>("LOCAL")
   const [value, setValue] = useState("")
-  const [externalPath, setExternalPath] = useState("")
-  const [field, setField] = useState("value")
-  const [namespace, setNamespace] = useState("")
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
   const [deleteTarget, setDeleteTarget] =
@@ -59,30 +33,11 @@ export function SecretsPanel({
   async function create() {
     const alias = name.trim()
     if (!alias) {
-      setMessage("Choose a stable alias (used as secret://alias).")
+      setMessage("Choose a stable alias used by monitors and integrations.")
       return
     }
-    const config =
-      provider === "LOCAL"
-        ? { provider: "LOCAL", value }
-        : provider === "ENV"
-          ? { provider: "ENV", externalPath: externalPath.trim() }
-          : {
-              provider: "VAULT",
-              externalPath: externalPath.trim(),
-              ...(field.trim() ? { field: field.trim() } : {}),
-              ...(namespace.trim() ? { namespace: namespace.trim() } : {}),
-            }
-    if (provider === "LOCAL" && !value) {
+    if (!value) {
       setMessage("Enter the secret value to encrypt and store.")
-      return
-    }
-    if (provider !== "LOCAL" && !externalPath.trim()) {
-      setMessage(
-        provider === "ENV"
-          ? "Enter the environment variable name on the API process."
-          : "Enter the Vault KV path."
-      )
       return
     }
     setPending(true)
@@ -91,7 +46,8 @@ export function SecretsPanel({
         kind: "secrets",
         name: alias,
         description: description.trim(),
-        config,
+        profileType: "LOCAL",
+        config: { provider: "LOCAL", value },
       },
     })
     setPending(false)
@@ -103,9 +59,6 @@ export function SecretsPanel({
     setName("")
     setDescription("")
     setValue("")
-    setExternalPath("")
-    setField("value")
-    setNamespace("")
     setMessage("")
     await onChanged()
   }
@@ -142,14 +95,15 @@ export function SecretsPanel({
             <p className="mt-2 text-sm text-muted-foreground">
               Secrets are named aliases for credentials. Rhythm never returns
               decrypted values in the configuration UI or list APIs. Stored
-              secrets are encrypted with AES-GCM before they reach the database;
-              environment and Vault secrets keep only a path reference.
+              values are encrypted with AES-GCM before they reach PostgreSQL.
+              Rhythm does not use external or environment-backed secret
+              profiles.
             </p>
             <ul className="mt-3 space-y-1.5 text-sm text-muted-foreground">
               <li>
-                Monitors &amp; auth fields:{" "}
+                Request templates:{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                  secret://api-token
+                  {"{{secrets.api-token}}"}
                 </code>
               </li>
               <li>
@@ -159,9 +113,9 @@ export function SecretsPanel({
                 </code>
               </li>
               <li>
-                Notification / telemetry profiles: point at the same{" "}
+                Notification and telemetry profiles: select the same{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                  secret://
+                  api-token
                 </code>{" "}
                 alias
               </li>
@@ -177,110 +131,49 @@ export function SecretsPanel({
         <section className="rounded-xl border p-5">
           <h3 className="font-medium">Create secret</h3>
           <p className="mt-1 text-sm text-muted-foreground">
-            Pick a provider, then fill only the fields for that provider. The
-            alias becomes the name you reference from monitors and scripts.
+            Enter the value once. Rhythm encrypts it before database storage and
+            returns only its alias after creation.
           </p>
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <Field
               label="Alias"
-              help="Stable name used as secret://alias and pm.vault.get(alias)."
+              help="Stable name used in {{secrets.alias}} and pm.vault.get(alias)."
             >
-              <Input aria-label="Alias"
+              <Input
+                aria-label="Alias"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="api-token"
                 className="font-mono"
               />
             </Field>
-            <Field label="Provider">
-              <Select
-                value={provider}
-                onValueChange={(next) => {
-                  if (next == null) return
-                  setProvider(next)
-                }}
-                items={providerLabels}
-              >
-                <SelectTrigger aria-label="Provider" className="h-9 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="LOCAL">
-                    Stored (encrypted in Rhythm)
-                  </SelectItem>
-                  <SelectItem value="ENV">Environment variable</SelectItem>
-                  <SelectItem value="VAULT">HashiCorp Vault</SelectItem>
-                </SelectContent>
-              </Select>
+            <Field label="Storage">
+              <div className="flex h-9 items-center rounded-md border bg-muted/30 px-3 text-sm">
+                Encrypted in PostgreSQL
+              </div>
             </Field>
             <Field label="Description" wide>
-              <Input aria-label="Description"
+              <Input
+                aria-label="Description"
                 value={description}
                 onChange={(event) => setDescription(event.target.value)}
                 placeholder="Used by payments monitors for HMAC signing"
               />
             </Field>
-            {provider === "LOCAL" ? (
-              <Field
-                label="Secret value"
-                help="Encrypted with AES-GCM before storage. Never shown again after create."
-                wide
-              >
-                <Textarea aria-label="Secret value"
-                  className="min-h-24 font-mono"
-                  value={value}
-                  onChange={(event) => setValue(event.target.value)}
-                  placeholder="Paste the credential once"
-                  autoComplete="new-password"
-                />
-              </Field>
-            ) : null}
-            {provider === "ENV" ? (
-              <Field
-                label="Environment variable"
-                help="Must be set on the API process (or Docker compose environment)."
-                wide
-              >
-                <Input aria-label="Environment variable"
-                  className="font-mono"
-                  value={externalPath}
-                  onChange={(event) => setExternalPath(event.target.value)}
-                  placeholder="PAYMENTS_API_TOKEN"
-                />
-              </Field>
-            ) : null}
-            {provider === "VAULT" ? (
-              <>
-                <Field
-                  label="Vault path"
-                  help="KV v1 or v2 path relative to the Vault mount."
-                  wide
-                >
-                  <Input aria-label="Vault path"
-                    className="font-mono"
-                    value={externalPath}
-                    onChange={(event) => setExternalPath(event.target.value)}
-                    placeholder="secret/data/rhythm/service"
-                  />
-                </Field>
-                <Field label="Field">
-                  <Input aria-label="Field"
-                    className="font-mono"
-                    value={field}
-                    onChange={(event) => setField(event.target.value)}
-                    placeholder="value"
-                  />
-                </Field>
-                <Field label="Namespace (optional)">
-                  <Input aria-label="Namespace (optional)"
-                    className="font-mono"
-                    value={namespace}
-                    onChange={(event) => setNamespace(event.target.value)}
-                    placeholder="payments"
-                  />
-                </Field>
-              </>
-            ) : null}
+            <Field
+              label="Secret value"
+              help="Encrypted with AES-GCM before storage. Never shown again after create."
+              wide
+            >
+              <Textarea
+                aria-label="Secret value"
+                className="min-h-24 font-mono"
+                value={value}
+                onChange={(event) => setValue(event.target.value)}
+                placeholder="Paste the credential once"
+                autoComplete="new-password"
+              />
+            </Field>
           </div>
           {message ? (
             <p className="mt-3 text-xs text-destructive" role="alert">
@@ -298,11 +191,6 @@ export function SecretsPanel({
 
       <div className="grid gap-3 md:grid-cols-2">
         {profiles.map((profile) => {
-          const providerValue = String(
-            profile.config.provider ?? profile.profileType ?? "LOCAL"
-          ).toUpperCase()
-          const label =
-            providerLabels[providerValue as SecretProvider] ?? providerValue
           return (
             <article className="rounded-xl border p-5" key={profile.id}>
               <div className="flex items-start gap-3">
@@ -312,30 +200,16 @@ export function SecretsPanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="truncate font-medium">{profile.name}</h2>
-                    <Badge variant="secondary">{label}</Badge>
+                    <Badge variant="secondary">Stored (encrypted)</Badge>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {profile.description || "No description"}
                   </p>
                   <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-xs text-muted-foreground">
-                    <Terminal className="size-3.5" />
-                    <span>secret://{profile.name}</span>
-                    {providerValue === "ENV" && profile.config.externalPath ? (
-                      <span className="text-muted-foreground/80">
-                        · env {String(profile.config.externalPath)}
-                      </span>
-                    ) : null}
-                    {providerValue === "VAULT" &&
-                    profile.config.externalPath ? (
-                      <span className="text-muted-foreground/80">
-                        · {String(profile.config.externalPath)}
-                      </span>
-                    ) : null}
-                    {providerValue === "LOCAL" ? (
-                      <span className="text-muted-foreground/80">
-                        · encrypted at rest
-                      </span>
-                    ) : null}
+                    <span>{profile.name}</span>
+                    <span className="text-muted-foreground/80">
+                      · AES-GCM encrypted at rest
+                    </span>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
                     <Button
@@ -376,9 +250,9 @@ export function SecretsPanel({
         description={
           <>
             References to{" "}
-            <code className="font-mono">secret://{deleteTarget?.name}</code> in
-            monitors, scripts, and integrations will stop resolving. This cannot
-            be undone.
+            <code className="font-mono">{deleteTarget?.name}</code> in monitors,
+            scripts, and integrations will stop resolving. This cannot be
+            undone.
           </>
         }
         confirming={deleting}

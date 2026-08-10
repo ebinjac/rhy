@@ -13,9 +13,7 @@ import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 export type SecretInputMode = "value" | "secret"
 
 export function toSecretRef(alias: string): string {
-  const trimmed = alias.trim()
-  if (!trimmed) return ""
-  return trimmed.startsWith("secret://") ? trimmed : `secret://${trimmed}`
+  return secretAliasFromRef(alias)
 }
 
 export function secretAliasFromRef(
@@ -23,9 +21,8 @@ export function secretAliasFromRef(
 ): string {
   const trimmed = (reference ?? "").trim()
   if (!trimmed) return ""
-  return trimmed.startsWith("secret://")
-    ? trimmed.slice("secret://".length)
-    : trimmed
+  const template = trimmed.match(/^\{\{\s*secrets\.([^}]+)\s*\}\}$/)
+  return template?.[1]?.trim() ?? trimmed
 }
 
 export function secretAlias(profile: ConfigurationProfileContract): string {
@@ -185,8 +182,8 @@ export function SecretCredentialField({
             />
           </span>
           <span className="mt-1.5 block text-[11px] font-normal text-muted-foreground">
-            Pick an alias from Configuration → Secrets. ENV and Vault providers
-            work here too.
+            Pick an alias from Configuration → Secrets. Its value is encrypted
+            in PostgreSQL and is never returned after save.
           </span>
         </div>
       )}

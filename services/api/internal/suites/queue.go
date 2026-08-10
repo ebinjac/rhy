@@ -25,9 +25,6 @@ const (
 )
 
 func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog.Logger, concurrency int) {
-	if redisClient == nil {
-		return
-	}
 	if _, ok := s.repository.(*PostgresRepository); !ok {
 		return
 	}
@@ -38,6 +35,7 @@ func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog
 		concurrency = 4
 	}
 	hostname, _ := os.Hostname()
+	s.queueEnabled = true
 	s.queueRedis = redisClient
 	s.queueLog = logger
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
@@ -45,10 +43,17 @@ func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog
 }
 
 func (s *Service) StartQueueWorkers(ctx context.Context) {
-	if s.queueRedis == nil {
+	if !s.queueEnabled {
 		return
 	}
 	s.queueOnce.Do(func() {
+		if s.queueRedis == nil {
+			go s.consumePostgresJobs(ctx, "DEPLOYMENT_VALIDATION", s.processDeploymentJob)
+			go s.consumePostgresJobs(ctx, "VALIDATION_SUITE", s.processSuiteJob)
+			go s.reapExpiredDeploymentJobs(ctx)
+			go s.reapExpiredSuiteJobs(ctx)
+			return
+		}
 		if err := s.queueRedis.XGroupCreateMkStream(ctx, deploymentExecutionStream, deploymentConsumerGroup, "0").Err(); err != nil &&
 			!strings.Contains(err.Error(), "BUSYGROUP") {
 			s.queueLog.Error("create deployment consumer group", "error", err)
@@ -62,6 +67,48 @@ func (s *Service) StartQueueWorkers(ctx context.Context) {
 		go s.reapExpiredDeploymentJobs(ctx)
 		go s.reapExpiredSuiteJobs(ctx)
 	})
+}
+
+func (s *Service) consumePostgresJobs(ctx context.Context, jobType string, process func(context.Context, string, string)) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	repository := s.repository.(*PostgresRepository)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		available := cap(s.queueSlots) - len(s.queueSlots)
+		if available <= 0 {
+			continue
+		}
+		rows, err := repository.pool.Query(ctx, `
+			SELECT id::text FROM execution_jobs
+			WHERE job_type=$1 AND status='QUEUED'
+			  AND cancel_requested_at IS NULL AND available_at<=NOW()
+			ORDER BY priority DESC,available_at,created_at LIMIT $2`, jobType, min(available, 8))
+		if err != nil {
+			s.queueLog.Error("poll PostgreSQL workflow queue", "jobType", jobType, "error", err)
+			continue
+		}
+		jobIDs := make([]string, 0, min(available, 8))
+		for rows.Next() {
+			var jobID string
+			if rows.Scan(&jobID) == nil {
+				jobIDs = append(jobIDs, jobID)
+			}
+		}
+		rows.Close()
+		for _, jobID := range jobIDs {
+			select {
+			case s.queueSlots <- struct{}{}:
+				go process(ctx, "", jobID)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
 }
 
 func (r *PostgresRepository) CreateQueuedDeploymentRun(ctx context.Context, run DeploymentRun) error {
@@ -118,7 +165,7 @@ type queuedSuitePayload struct {
 }
 
 func (s *Service) QueueRunWithInput(ctx context.Context, suiteID, actor string, input RunInput) (SuiteRun, error) {
-	if s.queueRedis == nil {
+	if !s.queueEnabled {
 		return s.RunWithInput(ctx, suiteID, actor, input)
 	}
 	suite, err := s.repository.Get(ctx, suiteID)
@@ -261,21 +308,21 @@ func (s *Service) processSuiteJob(parent context.Context, messageID, jobID strin
 		return
 	}
 	if !claimed {
-		_ = queueutil.AcknowledgeAndDelete(parent, s.queueRedis, suiteExecutionStream, suiteConsumerGroup, messageID)
+		s.acknowledgeQueueJob(parent, suiteExecutionStream, suiteConsumerGroup, messageID)
 		return
 	}
 	run, err := s.GetRun(parent, runID)
 	if err != nil {
 		s.failSuiteRun(context.WithoutCancel(parent), runID, "Validation suite evidence could not be loaded.")
 		_ = s.completeSuiteJob(context.WithoutCancel(parent), jobID, err, false)
-		_ = queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.queueRedis, suiteExecutionStream, suiteConsumerGroup, messageID)
+		s.acknowledgeQueueJob(context.WithoutCancel(parent), suiteExecutionStream, suiteConsumerGroup, messageID)
 		return
 	}
 	suite, err := s.Get(parent, run.SuiteID)
 	if err != nil {
 		s.failSuiteRun(context.WithoutCancel(parent), runID, "The validation suite definition is no longer available.")
 		_ = s.completeSuiteJob(context.WithoutCancel(parent), jobID, err, false)
-		_ = queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.queueRedis, suiteExecutionStream, suiteConsumerGroup, messageID)
+		s.acknowledgeQueueJob(context.WithoutCancel(parent), suiteExecutionStream, suiteConsumerGroup, messageID)
 		return
 	}
 	if payload.Actor == "" {
@@ -299,9 +346,7 @@ func (s *Service) processSuiteJob(parent context.Context, messageID, jobID strin
 		s.queueLog.Error("complete suite job", "jobId", jobID, "runId", runID, "error", err)
 		return
 	}
-	if err := queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.queueRedis, suiteExecutionStream, suiteConsumerGroup, messageID); err != nil {
-		s.queueLog.Error("acknowledge suite job", "jobId", jobID, "error", err)
-	}
+	s.acknowledgeQueueJob(context.WithoutCancel(parent), suiteExecutionStream, suiteConsumerGroup, messageID)
 }
 
 func (s *Service) processDeploymentJob(parent context.Context, messageID, jobID string) {
@@ -312,7 +357,7 @@ func (s *Service) processDeploymentJob(parent context.Context, messageID, jobID 
 		return
 	}
 	if !claimed {
-		_ = queueutil.AcknowledgeAndDelete(parent, s.queueRedis, deploymentExecutionStream, deploymentConsumerGroup, messageID)
+		s.acknowledgeQueueJob(parent, deploymentExecutionStream, deploymentConsumerGroup, messageID)
 		return
 	}
 	run, err := s.GetDeploymentRun(parent, runID)
@@ -322,9 +367,7 @@ func (s *Service) processDeploymentJob(parent context.Context, messageID, jobID 
 			s.queueLog.Error("complete unloadable deployment job", "jobId", jobID, "runId", runID, "error", completeErr)
 			return
 		}
-		if ackErr := queueutil.AcknowledgeAndDelete(completionContext, s.queueRedis, deploymentExecutionStream, deploymentConsumerGroup, messageID); ackErr != nil {
-			s.queueLog.Error("acknowledge unloadable deployment job", "jobId", jobID, "error", ackErr)
-		}
+		s.acknowledgeQueueJob(completionContext, deploymentExecutionStream, deploymentConsumerGroup, messageID)
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -342,8 +385,15 @@ func (s *Service) processDeploymentJob(parent context.Context, messageID, jobID 
 		s.queueLog.Error("complete deployment job", "jobId", jobID, "runId", runID, "error", err)
 		return
 	}
-	if err := queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.queueRedis, deploymentExecutionStream, deploymentConsumerGroup, messageID); err != nil {
-		s.queueLog.Error("acknowledge deployment job", "jobId", jobID, "error", err)
+	s.acknowledgeQueueJob(context.WithoutCancel(parent), deploymentExecutionStream, deploymentConsumerGroup, messageID)
+}
+
+func (s *Service) acknowledgeQueueJob(ctx context.Context, stream, group, messageID string) {
+	if s.queueRedis == nil || messageID == "" {
+		return
+	}
+	if err := queueutil.AcknowledgeAndDelete(ctx, s.queueRedis, stream, group, messageID); err != nil {
+		s.queueLog.Error("acknowledge workflow job", "stream", stream, "error", err)
 	}
 }
 
@@ -596,7 +646,7 @@ func (s *Service) cancelQueuedDeployment(ctx context.Context, runID string) (Dep
 }
 
 func (s *Service) RequestCancel(ctx context.Context, runID string) (SuiteRun, error) {
-	if s.queueRedis == nil {
+	if !s.queueEnabled {
 		if !s.Cancel(runID) {
 			return SuiteRun{}, errors.New("validation suite run is not active")
 		}

@@ -478,7 +478,7 @@ func TestHTTPExecutorResolvesSecretReferences(t *testing.T) {
 	}))
 	defer target.Close()
 	executor := NewHTTPExecutorWithResolver(true, fakeRuntimeResolver{secret: "resolved-token"})
-	step := StepDefinition{ID: "secret", Name: "Secret", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{Method: "GET", URL: target.URL, Auth: AuthConfig{Type: "bearer", Fields: map[string]string{"token": "secret://api-token"}}, Settings: SettingsConfig{TimeoutMS: 1000}}}
+	step := StepDefinition{ID: "secret", Name: "Secret", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{Method: "GET", URL: target.URL, Auth: AuthConfig{Type: "bearer", Fields: map[string]string{"token": "api-token"}}, Settings: SettingsConfig{TimeoutMS: 1000}}}
 	if result := executor.Execute(context.Background(), step); result.Status != StatusSuccess {
 		t.Fatalf("secret-backed request failed: %#v", result)
 	}
@@ -585,6 +585,17 @@ func TestMetricValidationExecutesDynatraceQueryAndThreshold(t *testing.T) {
 	result := executor.ExecuteMetric(context.Background(), step)
 	if result.Status != StatusSuccess || result.Outputs["value"] != float64(50) || len(result.Assertions) != 1 || !result.Assertions[0].Passed {
 		t.Fatalf("metric validation failed: %#v", result)
+	}
+}
+
+func TestTemplateSecretPatternAcceptsHydraStyleAliases(t *testing.T) {
+	match := templateSecretPattern.FindStringSubmatch(`{{secrets._vault***}}`)
+	if len(match) < 2 || match[1] != "_vault***" {
+		t.Fatalf("expected Hydra-style secret alias to match, got %#v", match)
+	}
+	match = templateSecretPattern.FindStringSubmatch(`{{ secrets.lowercase-key }}`)
+	if len(match) < 2 || match[1] != "lowercase-key" {
+		t.Fatalf("expected lowercase secret alias to match, got %#v", match)
 	}
 }
 

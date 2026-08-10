@@ -100,6 +100,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
     <html lang="en" suppressHydrationWarning>
       <head>
         <ScriptOnce children={themeScript} />
+        <ScriptOnce children={chunkRecoveryScript} />
         <style dangerouslySetInnerHTML={{ __html: criticalPaintCss }} />
         <HeadContent />
       </head>
@@ -129,6 +130,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 }
 
 const themeScript = `(function(){try{var stored=localStorage.getItem("rhythm-theme");var theme=stored==="dark"||stored==="light"?stored:(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.classList.toggle("dark",theme==="dark");document.documentElement.style.colorScheme=theme;var density=localStorage.getItem("rhythm-table-density");document.documentElement.dataset.density=density==="compact"?"compact":"comfortable";}catch(_){}})();`
+
+const chunkRecoveryScript = `(function(){var key="rhythm:chunk-recovery",reloading=false;function text(value){try{return String(value&&value.message||value||"")}catch(_){return""}}function isChunkFailure(value){return /chunkloaderror|loading chunk|dynamically imported module|importing a module script|module script failed|preload.*failed/i.test(text(value))}function recover(event){if(reloading)return;try{var now=Date.now(),stored=JSON.parse(sessionStorage.getItem(key)||"null"),count=stored&&now-stored.at<60000?Number(stored.count||0):0;if(count>=2)return;sessionStorage.setItem(key,JSON.stringify({count:count+1,at:now}));reloading=true;if(event&&event.preventDefault)event.preventDefault();location.reload()}catch(_){}}addEventListener("vite:preloadError",recover);addEventListener("unhandledrejection",function(event){if(isChunkFailure(event.reason))recover(event)});addEventListener("error",function(event){var target=event.target,source=target&&(target.src||target.href)||"";if((source.indexOf("/assets/")!==-1&&(target.tagName==="SCRIPT"||target.tagName==="LINK"))||isChunkFailure(event.error||event.message))recover(event)},true);setTimeout(function(){if(!reloading)try{sessionStorage.removeItem(key)}catch(_){}},15000)})();`
 
 const criticalPaintCss =
   "html{background:oklch(1 0.002 254);color-scheme:light}html.dark{background:oklch(0.12 0.005 254);color-scheme:dark}body{margin:0;background:inherit}"

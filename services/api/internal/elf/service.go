@@ -189,14 +189,14 @@ func (s *Service) loadSettings(ctx context.Context) (Settings, error) {
 	if proxyID != nil {
 		item.ProxyProfileID = *proxyID
 	}
-	item.HasCredential = strings.TrimSpace(item.EncryptedCredential) != "" || strings.HasPrefix(strings.TrimSpace(item.CredentialSecretRef), "secret://")
+	item.HasCredential = strings.TrimSpace(item.EncryptedCredential) != "" || strings.TrimSpace(item.CredentialSecretRef) != ""
 	return item, nil
 }
 
 func redactSettings(item Settings) Settings {
 	item.Credential = ""
 	item.EncryptedCredential = ""
-	if item.HasCredential || strings.HasPrefix(strings.TrimSpace(item.CredentialSecretRef), "secret://") {
+	if item.HasCredential || strings.TrimSpace(item.CredentialSecretRef) != "" {
 		item.HasCredential = true
 	}
 	return item
@@ -264,15 +264,12 @@ func (s *Service) SaveSettings(ctx context.Context, input Settings, actor string
 			}
 			encrypted = ciphertext
 		case input.CredentialSecretRef != "":
-			secretRef = input.CredentialSecretRef
-			if !strings.HasPrefix(secretRef, "secret://") {
-				secretRef = "secret://" + secretRef
-			}
+			secretRef = normalizeCredentialAlias(input.CredentialSecretRef)
 		case existingErr == nil:
 			encrypted = existing.EncryptedCredential
 			secretRef = existing.CredentialSecretRef
 		}
-		if encrypted == "" && !strings.HasPrefix(secretRef, "secret://") {
+		if encrypted == "" && secretRef == "" {
 			return Settings{}, errors.New("authenticated ELF settings require a credential or secret alias")
 		}
 		if input.AuthMode == "BASIC" && input.Username == "" {
@@ -311,9 +308,7 @@ func (s *Service) TestSettings(ctx context.Context, input *Settings) (map[string
 				}
 			}
 		}
-		if settings.CredentialSecretRef != "" && !strings.HasPrefix(settings.CredentialSecretRef, "secret://") {
-			settings.CredentialSecretRef = "secret://" + settings.CredentialSecretRef
-		}
+		settings.CredentialSecretRef = normalizeCredentialAlias(settings.CredentialSecretRef)
 	} else {
 		settings, err = s.loadSettings(ctx)
 		if err != nil {
@@ -1101,9 +1096,6 @@ func (s *Service) resolveCredential(ctx context.Context, settings Settings) (str
 		if s.secrets == nil {
 			return "", errors.New("secret resolver is unavailable")
 		}
-		if !strings.HasPrefix(ref, "secret://") {
-			ref = "secret://" + ref
-		}
 		return s.secrets.ResolveSecret(ctx, ref)
 	}
 	if ciphertext := strings.TrimSpace(settings.EncryptedCredential); ciphertext != "" {
@@ -1114,6 +1106,10 @@ func (s *Service) resolveCredential(ctx context.Context, settings Settings) (str
 		return crypto.DecryptStored(ciphertext)
 	}
 	return "", errors.New("ELF credential is not configured")
+}
+
+func normalizeCredentialAlias(reference string) string {
+	return strings.TrimSpace(reference)
 }
 
 func (s *Service) search(ctx context.Context, settings Settings, index string, body []byte) ([]byte, int, error) {

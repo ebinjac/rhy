@@ -115,8 +115,8 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", s.liveness)
 	mux.HandleFunc("GET /readyz", s.readiness)
-	mux.HandleFunc("GET /healthz", s.readiness)
-	mux.HandleFunc("GET /health", s.readiness)
+	mux.HandleFunc("GET /healthz", s.liveness)
+	mux.HandleFunc("GET /health", s.liveness)
 	mux.HandleFunc("GET /api/v1/session", s.getSession)
 	mux.HandleFunc("GET /api/v1/overview", s.getOverview)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
@@ -1517,7 +1517,7 @@ func (s *server) listRecentRuns(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) getMonitorSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.scheduler == nil {
-		s.writeError(w, r, http.StatusServiceUnavailable, "SCHEDULER_UNAVAILABLE", "Scheduling requires PostgreSQL and Redis.", nil)
+		s.writeError(w, r, http.StatusServiceUnavailable, "SCHEDULER_UNAVAILABLE", "Scheduling requires PostgreSQL and a configured queue backend.", nil)
 		return
 	}
 	config, err := s.scheduler.Get(r.Context(), r.PathValue("monitorId"))
@@ -1534,7 +1534,7 @@ func (s *server) getMonitorSchedule(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) configureMonitorSchedule(w http.ResponseWriter, r *http.Request) {
 	if s.scheduler == nil {
-		s.writeError(w, r, http.StatusServiceUnavailable, "SCHEDULER_UNAVAILABLE", "Scheduling requires PostgreSQL and Redis.", nil)
+		s.writeError(w, r, http.StatusServiceUnavailable, "SCHEDULER_UNAVAILABLE", "Scheduling requires PostgreSQL and a configured queue backend.", nil)
 		return
 	}
 	var input scheduler.Config
@@ -2063,9 +2063,15 @@ func (s *server) requestID(next http.Handler) http.Handler {
 
 func (s *server) cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.allowedOrigin != "" && r.Header.Get("Origin") == s.allowedOrigin {
+		origin := r.Header.Get("Origin")
+		if s.allowedOrigin == "*" && origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Vary", "Origin")
+		} else if s.allowedOrigin != "" && origin == s.allowedOrigin {
 			w.Header().Set("Access-Control-Allow-Origin", s.allowedOrigin)
 			w.Header().Set("Vary", "Origin")
+		}
+		if w.Header().Get("Access-Control-Allow-Origin") != "" {
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, If-Match, X-Request-ID")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		}

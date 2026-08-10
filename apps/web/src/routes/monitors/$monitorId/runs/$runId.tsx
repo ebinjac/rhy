@@ -99,7 +99,7 @@ const phaseHelp: Record<
   secretFetchMs: {
     origin: "Rhythm",
     description:
-      "Time spent resolving referenced secrets from the configured secret provider. Secret values are never included in diagnostics.",
+      "Time spent decrypting referenced secrets from Rhythm's encrypted database store. Secret values are never included in diagnostics.",
   },
   dnsMs: {
     origin: "Network",
@@ -188,8 +188,8 @@ function RunDiagnosticsPage() {
         const next = await getRunDiagnostics({ data: { runId } })
         if (!disposed) {
           setDiagnostics(next)
-          setSelectedStepID((current) =>
-            current || next.run.steps?.[0]?.stepDefinitionId || ""
+          setSelectedStepID(
+            (current) => current || next.run.steps?.[0]?.stepDefinitionId || ""
           )
         }
       } finally {
@@ -967,10 +967,7 @@ function ScriptEvidence({
             Template markup is retained as sanitized evidence and is not
             executed in run diagnostics.
           </p>
-          <SafeObject
-            value={result.visualizer}
-            empty="No visualizer data."
-          />
+          <SafeObject value={result.visualizer} empty="No visualizer data." />
         </section>
       ) : null}
     </div>

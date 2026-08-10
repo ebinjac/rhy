@@ -23,10 +23,19 @@ export const Route = createFileRoute("/ui-monitoring/$monitorId/metrics")({
   loader: async ({ params, location }) => {
     const search = location.search as { window?: MetricsWindow }
     const window = search.window ?? "30d"
-    const metrics = await getBrowserMetrics({
-      data: { monitorId: params.monitorId, range: window },
-    })
-    return { metrics, window }
+    try {
+      const metrics = await getBrowserMetrics({
+        data: { monitorId: params.monitorId, range: window },
+      })
+      return { metrics, window, loadError: "" }
+    } catch {
+      return {
+        metrics: null,
+        window,
+        loadError:
+          "Metrics are temporarily unavailable. Rhythm will retry without blocking the monitor workspace.",
+      }
+    }
   },
   component: BrowserMetricsPage,
 })
@@ -38,17 +47,19 @@ function BrowserMetricsPage() {
   const navigate = Route.useNavigate()
   const window = search.window ?? "30d"
   const cache = useRef(new Map<string, BrowserMetrics>())
-  const [metrics, setMetrics] = useState(initial.metrics)
+  const [metrics, setMetrics] = useState<BrowserMetrics | null>(initial.metrics)
   const [displayedWindow, setDisplayedWindow] = useState(initial.window)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
-    cache.current.set(`${monitorId}:${initial.window}`, initial.metrics)
+    if (initial.metrics) {
+      cache.current.set(`${monitorId}:${initial.window}`, initial.metrics)
+    }
     setMetrics(initial.metrics)
     setDisplayedWindow(initial.window)
-    setError("")
+    setError(initial.loadError)
     setLoading(false)
   }, [initial, monitorId])
 
@@ -145,16 +156,24 @@ function BrowserMetricsPage() {
             : "UI performance analytics loaded."}
       </div>
 
-      {error && !metrics ? (
-        <div className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-destructive/30 px-6 text-center">
-          <AlertCircle className="size-6 text-destructive" />
-          <h2 className="mt-3 font-semibold">Metrics could not be loaded</h2>
-          <p className="mt-1 max-w-md text-sm text-muted-foreground">{error}</p>
-          <Button className="mt-4" onClick={retry} variant="outline">
-            <RefreshCw />
-            Retry
-          </Button>
-        </div>
+      {!metrics ? (
+        error ? (
+          <div className="mt-6 flex min-h-64 flex-col items-center justify-center rounded-xl border border-destructive/30 px-6 text-center">
+            <AlertCircle className="size-6 text-destructive" />
+            <h2 className="mt-3 font-semibold">Metrics could not be loaded</h2>
+            <p className="mt-1 max-w-md text-sm text-muted-foreground">
+              {error}
+            </p>
+            <Button className="mt-4" onClick={retry} variant="outline">
+              <RefreshCw />
+              Retry
+            </Button>
+          </div>
+        ) : (
+          <div className="mt-6">
+            <MetricsSkeleton />
+          </div>
+        )
       ) : (
         <>
           {error ? (

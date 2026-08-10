@@ -63,6 +63,19 @@ func TestEnvironmentV2ProviderQueriesNormalizedMetricEvidence(t *testing.T) {
 	}
 }
 
+func TestEnvironmentV2ProviderAcceptsAnyHostWhenWildcardConfigured(t *testing.T) {
+	provider := NewEnvironmentV2Provider([]string{"*"}, true)
+	parsed, err := provider.validateConnection(Connection{
+		BaseURL: "http://dynatrace.internal.example", Token: "runtime-token",
+	})
+	if err != nil {
+		t.Fatalf("validate unrestricted Dynatrace endpoint: %v", err)
+	}
+	if parsed.Hostname() != "dynatrace.internal.example" {
+		t.Fatalf("hostname=%q", parsed.Hostname())
+	}
+}
+
 func TestMetricSpecsMatchHydraAndTIMSProductionShape(t *testing.T) {
 	hydra := metricSpecs("HYDRA", MetricMapping{})
 	if len(hydra) != 4 ||

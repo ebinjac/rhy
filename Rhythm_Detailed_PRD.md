@@ -355,7 +355,7 @@ A named set of non-secret variables and bindings, such as Dev, Test, or Producti
 
 ### 11.9 Secret Reference
 
-A pointer to a secret stored in Vault, another supported secret manager, or encrypted local storage.
+A plain alias that resolves to an AES-GCM encrypted value stored in Rhythm's PostgreSQL database.
 
 ### 11.10 Certificate Profile
 
@@ -449,13 +449,12 @@ Redis for queueing, distributed locks, idempotency, ephemeral cancellation state
 Object storage optionally for large masked artifacts and long-term exports
 ```
 
-### 12.4 Secret Providers
+### 12.4 Secret Storage
 
-Priority order:
-
-1. HashiCorp Vault or enterprise internal secret manager.
-2. Cloud secret managers through provider adapters.
-3. Encrypted PostgreSQL storage for local development or tightly controlled MVP usage.
+Rhythm stores application secrets as AES-GCM encrypted values in PostgreSQL.
+Users select them by plain alias; resolved values never appear in list APIs,
+diagnostics, logs, exports, or browser metadata. External and environment-backed
+application secret providers are not supported.
 
 ### 12.5 Deployment
 
@@ -3452,7 +3451,6 @@ internal/
   expressions/
   variables/
   secrets/
-    vault/
     encrypteddb/
   certificates/
   proxies/
@@ -3494,13 +3492,12 @@ type StepExecutor interface {
 }
 ```
 
-### 62.2 Secret Provider
+### 62.2 Encrypted Secret Store
 
 ```go
-type SecretProvider interface {
-    ProviderType() string
-    Get(ctx context.Context, ref SecretReference) (SensitiveValue, error)
-    Test(ctx context.Context, ref SecretReference) error
+type SecretStore interface {
+	Get(ctx context.Context, alias string) (SensitiveValue, error)
+	Put(ctx context.Context, alias string, value SensitiveValue) error
 }
 ```
 
@@ -3631,7 +3628,7 @@ Frontend implementation requirements:
 
 - Encrypt database disks and backups.
 - Encrypt any locally stored secret value using envelope encryption.
-- Use a managed key or Vault transit key for encryption.
+- Supply the encryption key as protected deployment bootstrap configuration.
 - Never store encryption keys alongside encrypted data.
 
 ### 64.3 SSRF Protection
@@ -3934,8 +3931,7 @@ Users can call one API before another and reuse extracted values.
 
 Build:
 
-- Secret references.
-- Vault provider.
+- Encrypted database secret aliases.
 - Basic, bearer, and API-key authentication.
 - OAuth client credentials.
 - JWT generation.

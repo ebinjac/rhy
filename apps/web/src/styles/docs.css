@@ -1,5 +1,14 @@
+/*
+ * Docs-only Tailwind entry. Main app globals intentionally exclude docs paths;
+ * this sheet generates fumadocs + local docs utilities without pulling the rest
+ * of the product UI into the scan boundary.
+ */
+@import "tailwindcss" source(none);
 @reference "../../../../packages/ui/src/styles/globals.css";
+
 @source "../components/docs/**/*.{ts,tsx}";
 @source "../routes/docs/**/*.{ts,tsx}";
+@source "../../../../node_modules/fumadocs-ui/dist/**/*.js";
+
 @import "fumadocs-ui/css/neutral.css";
 @import "fumadocs-ui/css/preset.css";

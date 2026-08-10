@@ -80,19 +80,6 @@ func TestRedactSecretConfigNeverLeaksPlaintextOrCiphertext(t *testing.T) {
 	}
 }
 
-func TestRedactSecretConfigKeepsEnvMetadata(t *testing.T) {
-	redacted := redactSecretConfig(map[string]any{
-		"provider":     "ENV",
-		"externalPath": "PAYMENTS_API_TOKEN",
-	})
-	if redacted["externalPath"] != "PAYMENTS_API_TOKEN" {
-		t.Fatalf("unexpected redaction: %#v", redacted)
-	}
-	if _, exists := redacted["hasValue"]; exists {
-		t.Fatal("ENV secrets should not set hasValue")
-	}
-}
-
 func TestResolveLocalSecretDecrypts(t *testing.T) {
 	key := localTestKey(t)
 	ciphertext, err := secretscrypto.Encrypt(key, "runtime-secret")
@@ -126,20 +113,18 @@ func TestResolveLocalSecretLegacyPlaintextFallback(t *testing.T) {
 	}
 }
 
-func TestPrepareEnvAndVaultRejectPlaintextValues(t *testing.T) {
+func TestPrepareSecretConfigRejectsExternalProviders(t *testing.T) {
 	service := &Service{secretsKey: localTestKey(t)}
 	if _, _, err := service.prepareSecretConfig(map[string]any{
 		"provider":     "ENV",
 		"externalPath": "FOO",
-		"value":        "nope",
 	}); err == nil {
-		t.Fatal("ENV should reject plaintext value")
+		t.Fatal("ENV provider should be rejected")
 	}
 	if _, _, err := service.prepareSecretConfig(map[string]any{
 		"provider":     "VAULT",
 		"externalPath": "secret/data/x",
-		"token":        "nope",
 	}); err == nil {
-		t.Fatal("VAULT should reject plaintext token")
+		t.Fatal("VAULT provider should be rejected")
 	}
 }

@@ -407,72 +407,129 @@ function normalizeBrowserStatistics(
   statistics: BrowserStatistics | null | undefined
 ): BrowserStatistics {
   return {
-    sampleCount:
-      typeof statistics?.sampleCount === "number" ? statistics.sampleCount : 0,
-    minimumMs: statistics?.minimumMs,
-    averageMs: statistics?.averageMs,
-    p50Ms: statistics?.p50Ms,
-    p75Ms: statistics?.p75Ms,
-    p90Ms: statistics?.p90Ms,
-    p95Ms: statistics?.p95Ms,
-    p99Ms: statistics?.p99Ms,
-    maximumMs: statistics?.maximumMs,
-    standardDeviation:
-      typeof statistics?.standardDeviation === "number"
-        ? statistics.standardDeviation
-        : 0,
+    sampleCount: finiteNumber(statistics?.sampleCount) ?? 0,
+    minimumMs: finiteNumber(statistics?.minimumMs),
+    averageMs: finiteNumber(statistics?.averageMs),
+    p50Ms: finiteNumber(statistics?.p50Ms),
+    p75Ms: finiteNumber(statistics?.p75Ms),
+    p90Ms: finiteNumber(statistics?.p90Ms),
+    p95Ms: finiteNumber(statistics?.p95Ms),
+    p99Ms: finiteNumber(statistics?.p99Ms),
+    maximumMs: finiteNumber(statistics?.maximumMs),
+    standardDeviation: finiteNumber(statistics?.standardDeviation) ?? 0,
   }
 }
 
 export function normalizeBrowserMetrics(
-  metrics: BrowserMetrics
+  metrics: BrowserMetrics | null | undefined
 ): BrowserMetrics {
+  const source =
+    metrics && typeof metrics === "object"
+      ? metrics
+      : ({} as Partial<BrowserMetrics>)
   const distributions =
-    metrics.metricDistributions &&
-    typeof metrics.metricDistributions === "object"
-      ? metrics.metricDistributions
+    source.metricDistributions &&
+    typeof source.metricDistributions === "object"
+      ? source.metricDistributions
       : {}
+  const failureCategories = Object.fromEntries(
+    Object.entries(source.failureCategories ?? {}).flatMap(([key, value]) => {
+      const count = finiteNumber(value)
+      return count === undefined ? [] : [[key, count]]
+    })
+  )
 
   return {
-    ...metrics,
-    journey: normalizeBrowserStatistics(metrics.journey),
+    monitorId: typeof source.monitorId === "string" ? source.monitorId : "",
+    range: typeof source.range === "string" ? source.range : "24h",
+    runCount: finiteNumber(source.runCount) ?? 0,
+    successRate: finiteNumber(source.successRate) ?? 0,
+    failureRate: finiteNumber(source.failureRate) ?? 0,
+    journey: normalizeBrowserStatistics(source.journey),
     metricDistributions: Object.fromEntries(
       Object.entries(distributions).map(([key, statistics]) => [
         key,
         normalizeBrowserStatistics(statistics),
       ])
     ),
-    series: asRecordArray(metrics.series),
-    graphSeries: asRecordArray(metrics.graphSeries),
-    failureCategories:
-      metrics.failureCategories && typeof metrics.failureCategories === "object"
-        ? metrics.failureCategories
-        : {},
+    series: asRecordArray(source.series),
+    graphSeries: asRecordArray(source.graphSeries),
+    failureCategories,
   }
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${baseURL()}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
-    signal: AbortSignal.timeout(120000),
-  })
-  if (!response.ok) {
-    let message = `Rhythm API returned ${response.status}`
+  const method = (init?.method ?? "GET").toUpperCase()
+  const maximumAttempts = method === "GET" ? 3 : 1
+  let lastError: unknown
+
+  for (let attempt = 1; attempt <= maximumAttempts; attempt += 1) {
+    let response: Response
     try {
-      const failure = (await response.json()) as ApiErrorResponse
-      message = failure.error.message || message
-    } catch {
-      // Preserve the safe status-only message for non-JSON upstream failures.
+      response = await fetch(`${baseURL()}${path}`, {
+        ...init,
+        headers: {
+          Accept: "application/json",
+          ...(init?.body ? { "Content-Type": "application/json" } : {}),
+          ...init?.headers,
+        },
+        signal: AbortSignal.timeout(method === "GET" ? 10_000 : 120_000),
+      })
+    } catch (error) {
+      lastError = error
+      if (attempt < maximumAttempts) {
+        await retryDelay(attempt)
+        continue
+      }
+      throw error
     }
-    throw new Error(message)
+
+    if (!response.ok) {
+      let message = `Rhythm API returned ${response.status}`
+      try {
+        const failure = (await response.json()) as ApiErrorResponse
+        message = failure.error.message || message
+      } catch {
+        // Preserve the safe status-only message for non-JSON upstream failures.
+      }
+      if (
+        attempt < maximumAttempts &&
+        [408, 425, 429, 502, 503, 504].includes(response.status)
+      ) {
+        lastError = new Error(message)
+        await retryDelay(attempt)
+        continue
+      }
+      throw new Error(message)
+    }
+    if (response.status === 204) return undefined as T
+    try {
+      return ((await response.json()) as ApiSuccess<T>).data
+    } catch (error) {
+      lastError = error
+      if (attempt < maximumAttempts) {
+        await retryDelay(attempt)
+        continue
+      }
+      throw error
+    }
   }
-  if (response.status === 204) return undefined as T
-  return ((await response.json()) as ApiSuccess<T>).data
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Rhythm API request failed")
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined
+}
+
+function retryDelay(attempt: number) {
+  return new Promise((resolve) =>
+    setTimeout(resolve, Math.min(750, 150 * 3 ** (attempt - 1)))
+  )
 }
 
 const idSchema = z.object({ monitorId: z.string().min(1) })

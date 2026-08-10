@@ -162,20 +162,21 @@ type OpenSearchAlertSource interface {
 }
 
 type Service struct {
-	repository Repository
-	runs       *runs.Service
-	elf        *elf.Service
-	alerts     OpenSearchAlertSource
-	dynatrace  *dynatrace.Service
-	browser    *browsermonitors.Service
-	now        func() time.Time
-	mu         sync.Mutex
-	cancels    map[string]context.CancelFunc
-	queueRedis redis.UniversalClient
-	queueLog   *slog.Logger
-	workerID   string
-	queueSlots chan struct{}
-	queueOnce  sync.Once
+	repository   Repository
+	runs         *runs.Service
+	elf          *elf.Service
+	alerts       OpenSearchAlertSource
+	dynatrace    *dynatrace.Service
+	browser      *browsermonitors.Service
+	now          func() time.Time
+	mu           sync.Mutex
+	cancels      map[string]context.CancelFunc
+	queueEnabled bool
+	queueRedis   redis.UniversalClient
+	queueLog     *slog.Logger
+	workerID     string
+	queueSlots   chan struct{}
+	queueOnce    sync.Once
 }
 
 func New(repository Repository, runService *runs.Service) *Service {

@@ -374,9 +374,16 @@ func (s *server) getBrowserMonitorMetrics(w http.ResponseWriter, r *http.Request
 	}
 	item, err := service.Metrics(r.Context(), r.PathValue("monitorId"), r.URL.Query().Get("range"))
 	if err != nil {
+		s.logger.Warn("calculate browser-monitor metrics",
+			"monitorId", r.PathValue("monitorId"),
+			"range", r.URL.Query().Get("range"),
+			"requestId", requestIDFromRequest(r),
+			"error", err,
+		)
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to calculate browser-monitor metrics.", nil)
 		return
 	}
+	w.Header().Set("Cache-Control", "private, max-age=5, stale-while-revalidate=30")
 	s.writeJSON(w, r, http.StatusOK, successResponse{Data: item, Meta: s.meta(r)})
 }
 

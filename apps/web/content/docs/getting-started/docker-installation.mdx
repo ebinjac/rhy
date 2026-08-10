@@ -11,14 +11,14 @@ keywords: [Docker, installation, local]
 
 ## Prerequisites
 
-Install Docker Desktop with enough memory for PostgreSQL, Redis, and the pinned local OpenSearch cluster.
+Install Docker Desktop with enough memory for PostgreSQL, MinIO, the API, and the browser agent. Redis is optional because PostgreSQL is the default queue transport.
 
 <Procedure>
 1. Clone the Rhythm repository.
 2. From the repository root, run `docker compose up --build`.
 3. Wait for the health checks to become healthy.
 4. Open Rhythm at `http://localhost:3100`.
-5. Open OpenSearch Dashboards at `http://localhost:15601`.
+5. Configure ELF against an available OpenSearch endpoint when log checks are needed.
 </Procedure>
 
 ```bash
@@ -26,6 +26,6 @@ docker compose ps
 curl --fail http://localhost:18080/healthz
 ```
 
-<ExpectedResult>The API reports `ok`, the web interface loads, and OpenSearch Dashboards can inspect the seeded local logs.</ExpectedResult>
+<ExpectedResult>The API reports `ok` and the web interface loads without Redis.</ExpectedResult>
 
-<FailureExample>On macOS, an OpenSearch startup failure commonly means Docker Desktop needs more memory or the persistent volume contains data from an incompatible version.</FailureExample>
+<FailureExample>If the API is not ready, inspect the migration and PostgreSQL health before rebuilding application containers.</FailureExample>

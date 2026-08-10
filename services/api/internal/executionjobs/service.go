@@ -80,14 +80,23 @@ func (s *Service) Start(ctx context.Context) {
 
 func (s *Service) StartDispatcher(ctx context.Context) {
 	s.dispatchOnce.Do(func() {
-		go s.dispatchOutbox(ctx)
+		if s.redis != nil {
+			go s.dispatchOutbox(ctx)
+			go s.cleanupStalePending(ctx)
+		} else {
+			go s.settlePostgresOutbox(ctx)
+		}
 		go s.reclaimExpired(ctx)
-		go s.cleanupStalePending(ctx)
 	})
 }
 
 func (s *Service) StartWorkers(ctx context.Context) {
 	s.workerOnce.Do(func() {
+		if s.redis == nil {
+			go s.consumePostgres(ctx, "scheduled", false)
+			go s.consumePostgres(ctx, "manual", true)
+			return
+		}
 		for _, stream := range []string{scheduledStream, manualStream} {
 			if err := s.redis.XGroupCreateMkStream(ctx, stream, consumerGroup, "0").Err(); err != nil && !isBusyGroup(err) {
 				s.logger.Error("create execution consumer group", "stream", stream, "error", err)
@@ -96,6 +105,31 @@ func (s *Service) StartWorkers(ctx context.Context) {
 		go s.consume(ctx, scheduledStream, false)
 		go s.consume(ctx, manualStream, true)
 	})
+}
+
+// settlePostgresOutbox closes the transport outbox when PostgreSQL itself is
+// the selected queue transport. execution_jobs remains the durable authority;
+// workers claim those rows directly with row locking.
+func (s *Service) settlePostgresOutbox(ctx context.Context) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.pool.Exec(ctx, `
+				UPDATE execution_job_outbox
+				SET published_at=NOW(),publish_attempts=publish_attempts+1,last_error=NULL
+				WHERE id IN (
+					SELECT id FROM execution_job_outbox
+					WHERE published_at IS NULL AND available_at<=NOW()
+					ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 500
+				)`); err != nil {
+				s.logger.Error("settle PostgreSQL execution outbox", "error", err)
+			}
+		}
+	}
 }
 
 func (s *Service) dispatchOutbox(ctx context.Context) {
@@ -243,6 +277,66 @@ func (s *Service) consume(ctx context.Context, stream string, manual bool) {
 	}
 }
 
+func (s *Service) consumePostgres(ctx context.Context, queueClass string, manual bool) {
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if cgroupMemoryPressure(s.memoryStopPercent) {
+			continue
+		}
+		available := cap(s.globalSlots) - len(s.globalSlots)
+		if manual {
+			available = min(available, cap(s.manualSlots)-len(s.manualSlots))
+		}
+		if available <= 0 {
+			continue
+		}
+		available = min(available, 64)
+		rows, err := s.pool.Query(ctx, `
+			SELECT id::text
+			FROM execution_jobs
+			WHERE job_type='API_MONITOR_RUN' AND queue_class=$1
+			  AND status='QUEUED' AND cancel_requested_at IS NULL AND available_at<=NOW()
+			ORDER BY priority DESC,available_at,created_at
+			LIMIT $2`, queueClass, available)
+		if err != nil {
+			s.logger.Error("poll PostgreSQL execution queue", "queueClass", queueClass, "error", err)
+			continue
+		}
+		jobIDs := make([]string, 0, available)
+		for rows.Next() {
+			var jobID string
+			if err := rows.Scan(&jobID); err == nil {
+				jobIDs = append(jobIDs, jobID)
+			}
+		}
+		rows.Close()
+		for _, jobID := range jobIDs {
+			if manual {
+				select {
+				case s.manualSlots <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+			}
+			select {
+			case s.globalSlots <- struct{}{}:
+				go s.process(ctx, "", "", jobID, manual)
+			case <-ctx.Done():
+				if manual {
+					<-s.manualSlots
+				}
+				return
+			}
+		}
+	}
+}
+
 func cgroupMemoryPressure(stopPercent int) bool {
 	if stopPercent <= 0 {
 		return false
@@ -284,7 +378,7 @@ func (s *Service) process(parent context.Context, stream, messageID, jobID strin
 		return
 	}
 	if outcome != claimReady {
-		_ = queueutil.AcknowledgeAndDelete(parent, s.redis, stream, consumerGroup, messageID)
+		s.acknowledge(parent, stream, messageID)
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -298,8 +392,15 @@ func (s *Service) process(parent context.Context, stream, messageID, jobID strin
 		s.logger.Error("complete execution job", "jobId", jobID, "runId", runID, "error", completeErr)
 		return
 	}
-	if err := queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.redis, stream, consumerGroup, messageID); err != nil {
-		s.logger.Error("acknowledge execution job", "jobId", jobID, "error", err)
+	s.acknowledge(context.WithoutCancel(parent), stream, messageID)
+}
+
+func (s *Service) acknowledge(ctx context.Context, stream, messageID string) {
+	if s.redis == nil || stream == "" || messageID == "" {
+		return
+	}
+	if err := queueutil.AcknowledgeAndDelete(ctx, s.redis, stream, consumerGroup, messageID); err != nil {
+		s.logger.Error("acknowledge execution job", "error", err)
 	}
 }
 

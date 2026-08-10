@@ -12,7 +12,7 @@ can communicate through the project-local/global service addresses.
 
 | Service | Routability | SSO | Steady/max replicas | Purpose |
 |---|---|---|---:|---|
-| `rhythm-frontdoor` | Routable with SSO | Enabled | 2 / 4 | Web, public API, webhooks, SSO boundary |
+| `rhythm-frontdoor` | Routable | Disabled | 2 / 4 | Public web, API, and webhooks |
 | `rhythm-control` | Non-routable | Disabled | 1 / 1 | Scheduler, outbox, notifications, orchestration |
 | `rhythm-api-executor` | Non-routable | Disabled | 3 / 12 | API runs and colocated JavaScript sandbox |
 | `rhythm-browser-executor` | Non-routable | Disabled | 1 / 4 | Chromium, visual checks, browser diagnostics |
@@ -35,11 +35,11 @@ https://rhythm-qa.aexp.com
 https://rhythm.aexp.com
 ```
 
-Hydra SSO must authoritatively set the headers configured as
-`X-Rhythm-User` and `X-Rhythm-Groups`, stripping any client-supplied versions.
-Confirm the actual Hydra SSO header names during onboarding and adjust the two
-values if its standard names differ. Verify the mapped actor and roles through
-`GET /api/v1/session` before admitting users.
+Create the frontdoor without SSO. Rhythm runs in anonymous access mode and does
+not consume identity or group headers. `GET /api/v1/session` therefore returns
+the shared anonymous administrator. Anyone who can reach the GTM URL can read
+and change the installation, so network reachability is the only access
+boundary in this configuration.
 
 Each service has a complete console contract in
 `services/<service>/hydra-service.yaml`.
@@ -110,8 +110,9 @@ http://rhythm-browser-executor-svc.<HYDRA_PROJECT_NAME>.global:8080
 
 Replace `<HYDRA_PROJECT_NAME>` in every values file. Keep
 `automaticFailover: true` on destination services. The control and executor
-services do not receive GTM/LTM routes and do not use SSO; job transport remains
-Redis Enterprise, so normal executor traffic does not traverse service HTTP.
+services do not receive GTM/LTM routes and do not use SSO. The initial job
+transport is PostgreSQL, so normal executor traffic does not traverse service
+HTTP. Redis Streams can be enabled later without changing job records.
 
 ## Vault configuration per service
 
@@ -126,19 +127,38 @@ IPC2. Do not copy the union of all credentials into every service.
 
 | Service | Inventory | Service-specific sensitive values |
 |---|---|---|
-| Frontdoor | `services/rhythm-frontdoor/vault/secrets.example` | SSO role groups, write-capable secret-provider token, local script token |
+| Frontdoor | `services/rhythm-frontdoor/vault/secrets.example` | Database/encryption bootstrap values, local script token |
 | Control | `services/rhythm-control/vault/secrets.example` | SMTP credentials, browser runner token |
-| API executor | `services/rhythm-api-executor/vault/secrets.example` | Local script runner token, read-only secret-provider token |
-| Browser executor | `services/rhythm-browser-executor/vault/secrets.example` | Browser runner token, read-only secret-provider token |
+| API executor | `services/rhythm-api-executor/vault/secrets.example` | Database/encryption bootstrap values, local script runner token |
+| Browser executor | `services/rhythm-browser-executor/vault/secrets.example` | Database/encryption bootstrap values, browser runner token |
 
-Database, Redis, encryption, and permitted S3 configuration appears in each
-inventory only where the process requires it. `RHYTHM_SECRETS_ENCRYPTION_KEY`
+Database, encryption, and permitted S3 configuration appears in each inventory
+only where the process requires it. Redis credentials are commented optional
+entries and are not needed while `RHYTHM_QUEUE_BACKEND=postgres`.
+`RHYTHM_SECRETS_ENCRYPTION_KEY`
 must be the same value for all four services in an environment. The browser
 runner token must match between callers and `rhythm-browser-executor`.
 
 S3 uses Hydra workload identity; do not add long-lived AWS access keys. Values
 from the secret file are loaded directly into process memory. The launcher does
 not write an `.env` file and never logs secret values.
+
+This Hydra mount injects infrastructure bootstrap credentials only. It is not
+an application secret provider. Secrets created in Rhythm have one storage
+mode: AES-GCM encrypted values in PostgreSQL, selected by a plain alias.
+
+## Health behavior during dependency outages
+
+Hydra probes `/health`, `/healthz`, or `/livez` to determine whether the process
+started. These endpoints do not contact PostgreSQL, Redis, S3, the script
+runner, or the browser agent. A configured service therefore starts and remains
+running while any dependency is unavailable.
+
+`/readyz` is the separate operational dependency report. It returns `503` with
+sanitized component states during an outage and returns `200` after recovery.
+Do not wire `/readyz` to Hydra startup, liveness, readiness, or GTM probes when
+the intended behavior is to retain the pod for diagnostics and automatic
+dependency recovery.
 
 ## Separate workflow URLs
 
@@ -225,9 +245,31 @@ Release in this order:
 2. Deploy `rhythm-control`.
 3. Deploy `rhythm-api-executor`.
 4. Deploy `rhythm-browser-executor` and verify corporate TLS in Chromium.
-5. Deploy `rhythm-frontdoor` and verify SSO plus `/api/v1/session`.
+5. Deploy `rhythm-frontdoor` and verify anonymous `/api/v1/session` access.
 6. Enable schedules gradually and run the 2,000-active-run acceptance test.
 
 Before E3, all four images must pass the official security/compliance gates,
-Redis TLS/failover, S3/KMS, database recovery, service DNS, SSO spoofing,
-browser trust, queue recovery, and one-hour capacity soak tests.
+PostgreSQL queue recovery, S3/KMS, database recovery, service DNS, anonymous
+access verification, browser trust, and one-hour capacity soak tests. Run a
+separate Redis TLS/failover test only when switching the queue backend to Redis.
+
+## Queue backend and unrestricted access
+
+Every values file starts with:
+
+```text
+RHYTHM_QUEUE_BACKEND=postgres
+RHYTHM_AUTH_MODE=anonymous        # frontdoor
+RHYTHM_UNRESTRICTED_OUTBOUND=true
+```
+
+PostgreSQL is the durable queue and transport until Redis Enterprise is
+available. To switch later, add the three Redis Vault values, set
+`RHYTHM_QUEUE_BACKEND=redis` and `RHYTHM_REDIS_TLS=true` in all four services,
+then roll control, executors, and frontdoor. Existing queued jobs remain in
+PostgreSQL and are published through the outbox after the switch.
+
+Unrestricted outbound mode removes private-address, hostname, CIDR, Dynatrace
+host, and browser navigation-origin enforcement. TLS verification and evidence
+masking remain enabled; they are transport integrity and data-protection
+controls rather than destination allowlists.

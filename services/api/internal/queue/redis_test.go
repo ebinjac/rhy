@@ -1,6 +1,19 @@
 package queue
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
+
+func TestOpenRedisCanDeferConnectivityUntilReadiness(t *testing.T) {
+	client, err := OpenRedisWithConfig(context.Background(), RedisConfig{
+		URL: "redis://127.0.0.1:1/0", SkipInitialPing: true,
+	})
+	if err != nil {
+		t.Fatalf("opening a deferred Redis client must not require connectivity: %v", err)
+	}
+	_ = client.Close()
+}
 
 func TestUniversalOptionsSupportsRedisEnterpriseTLS(t *testing.T) {
 	options, err := universalOptions(RedisConfig{

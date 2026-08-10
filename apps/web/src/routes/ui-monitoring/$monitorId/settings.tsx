@@ -364,25 +364,6 @@ function BrowserMonitorSettings() {
             </Select>
           </Field>
           <Field
-            label="Allowed navigation origins"
-            id="settings-origins"
-            hint="One exact origin per line. Browser navigation outside this boundary is blocked."
-          >
-            <Textarea
-              id="settings-origins"
-              onChange={(event) =>
-                setDefinition((current) => ({
-                  ...current,
-                  allowedOrigins: event.target.value
-                    .split("\n")
-                    .map((value) => value.trim())
-                    .filter(Boolean),
-                }))
-              }
-              value={definition.allowedOrigins.join("\n")}
-            />
-          </Field>
-          <Field
             label="Screenshot mask selectors"
             id="settings-masks"
             hint="Sensitive inputs are always masked. Add selectors for user data and dynamic content."

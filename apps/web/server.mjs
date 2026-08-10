@@ -4,7 +4,6 @@ import { stat } from "node:fs/promises"
 import { createServer } from "node:http"
 import { extname, join, normalize } from "node:path"
 import { Readable } from "node:stream"
-import { AsyncLocalStorage } from "node:async_hooks"
 import { createBrotliCompress, createGzip, constants } from "node:zlib"
 
 import application from "./dist/server/server.js"
@@ -15,33 +14,25 @@ const clientRoot = join(process.cwd(), "apps/web/dist/client")
 const etags = new Map()
 
 const apiBaseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
-const identityHeader = (process.env.RHYTHM_IDENTITY_HEADER ?? "X-Rhythm-User").toLowerCase()
-const groupsHeader = (process.env.RHYTHM_GROUPS_HEADER ?? "X-Rhythm-Groups").toLowerCase()
-const verificationHeader = (
-  process.env.RHYTHM_SSO_VERIFIED_HEADER ?? "X-Rhythm-Identity-Verified"
-).toLowerCase()
-const verificationValue = process.env.RHYTHM_SSO_VERIFIED_VALUE ?? "true"
-const requireVerifiedIdentity = process.env.RHYTHM_REQUIRE_VERIFIED_IDENTITY === "true"
-const requestIdentity = new AsyncLocalStorage()
 const nativeFetch = globalThis.fetch.bind(globalThis)
-
-// Server loaders call the Go API directly. Async-local propagation preserves
-// the verified actor for concurrent SSR requests without global mutable state.
-globalThis.fetch = (input, init = {}) => {
-  const target = new URL(typeof input === "string" || input instanceof URL ? input : input.url)
-  if (target.origin !== new URL(apiBaseURL).origin) return nativeFetch(input, init)
-  const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined))
-  for (const [name, value] of Object.entries(requestIdentity.getStore() ?? {})) headers.set(name, value)
-  return nativeFetch(input, { ...init, headers })
-}
+const legacyIdentityHeaders = new Set([
+  "x-rhythm-user",
+  "x-rhythm-groups",
+  "x-rhythm-identity-verified",
+])
 
 const server = createServer(async (incoming, outgoing) => {
   try {
-    if (incoming.url === "/health" && incoming.method === "GET") {
+    if (incoming.url === "/readyz" && incoming.method === "GET") {
       await dependencyHealth(outgoing)
       return
     }
-    if (incoming.url === "/healthz" || incoming.url === "/livez") {
+    if (
+      incoming.method === "GET" &&
+      (incoming.url === "/health" ||
+        incoming.url === "/healthz" ||
+        incoming.url === "/livez")
+    ) {
       outgoing.writeHead(200, {
         "Cache-Control": "no-store",
         "Content-Type": "application/json; charset=utf-8",
@@ -72,7 +63,7 @@ const server = createServer(async (incoming, outgoing) => {
           : Readable.toWeb(incoming),
       duplex: "half",
     })
-    const response = await requestIdentity.run(verifiedIdentity(incoming), () => application.fetch(request))
+    const response = await application.fetch(request)
     await sendResponse(incoming, outgoing, response)
   } catch (error) {
     console.error("rhythm web request failed", error)
@@ -122,6 +113,15 @@ async function serveStatic(request, response) {
   try {
     details = await stat(absolute)
   } catch {
+    if (pathname.startsWith("/assets/")) {
+      response.writeHead(404, {
+        "Cache-Control": "no-store",
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Content-Type-Options": "nosniff",
+      })
+      response.end("Asset is no longer available. Reload the application.")
+      return true
+    }
     return false
   }
   if (!details.isFile()) return false
@@ -204,7 +204,10 @@ function shouldCompress(request, response) {
   if (response.status === 204 || response.status === 304) return false
   if (response.headers.has("content-encoding")) return false
   const type = response.headers.get("content-type") ?? ""
-  return /(?:text\/|json|javascript|svg|xml)/i.test(type) && Boolean(acceptedEncoding(request))
+  return (
+    /(?:text\/|json|javascript|svg|xml)/i.test(type) &&
+    Boolean(acceptedEncoding(request))
+  )
 }
 
 function acceptedEncoding(request) {
@@ -225,9 +228,7 @@ function strongETag(path) {
   const cacheKey = `${path}:${details.size}:${details.mtimeMs}`
   const cached = etags.get(cacheKey)
   if (cached) return cached
-  const digest = createHash("sha256")
-    .update(cacheKey)
-    .digest("base64url")
+  const digest = createHash("sha256").update(cacheKey).digest("base64url")
   const value = `"${digest}"`
   etags.set(cacheKey, value)
   return value
@@ -335,22 +336,31 @@ async function proxyAPI(incoming, outgoing) {
   for (const [name, value] of Object.entries(incoming.headers)) {
     if (
       value === undefined ||
-      name.toLowerCase() === identityHeader ||
-      name.toLowerCase() === groupsHeader ||
-      name.toLowerCase() === verificationHeader ||
-      ["connection", "content-length", "host", "keep-alive", "transfer-encoding", "upgrade"].includes(
-        name.toLowerCase()
-      )
+      legacyIdentityHeaders.has(name.toLowerCase()) ||
+      [
+        "connection",
+        "content-length",
+        "host",
+        "keep-alive",
+        "transfer-encoding",
+        "upgrade",
+      ].includes(name.toLowerCase())
     ) {
       continue
     }
     headers.set(name, Array.isArray(value) ? value.join(", ") : value)
   }
-  for (const [name, value] of Object.entries(verifiedIdentity(incoming))) headers.set(name, value)
+  // Node fetch transparently decompresses upstream responses but preserves the
+  // original encoding and length headers. Request identity encoding so the
+  // bytes streamed to the browser always match their response framing.
+  headers.set("accept-encoding", "identity")
   const forwardedFor = String(incoming.socket.remoteAddress ?? "").trim()
   if (forwardedFor) {
     const existing = headers.get("x-forwarded-for")
-    headers.set("x-forwarded-for", existing ? `${existing}, ${forwardedFor}` : forwardedFor)
+    headers.set(
+      "x-forwarded-for",
+      existing ? `${existing}, ${forwardedFor}` : forwardedFor
+    )
   }
   const response = await nativeFetch(target, {
     method: incoming.method,
@@ -364,17 +374,4 @@ async function proxyAPI(incoming, outgoing) {
     signal: AbortSignal.timeout(30_000),
   })
   await sendResponse(incoming, outgoing, response)
-}
-
-function verifiedIdentity(incoming) {
-  if (
-    requireVerifiedIdentity &&
-    String(incoming.headers[verificationHeader] ?? "").trim() !== verificationValue
-  ) {
-    return {}
-  }
-  const identity = String(incoming.headers[identityHeader] ?? "").trim()
-  const groups = String(incoming.headers[groupsHeader] ?? "").trim()
-  if (!identity || !groups || identity.includes("\n") || identity.includes("\r")) return {}
-  return { [identityHeader]: identity, [groupsHeader]: groups }
 }

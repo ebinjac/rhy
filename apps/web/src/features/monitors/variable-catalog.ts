@@ -182,7 +182,10 @@ export function buildVariableCatalog({
     }
     for (const [name, rawValue] of Object.entries(builtIns)) {
       if (rawValue == null || rawValue === "") continue
-      const secret = String(rawValue).startsWith("secret://")
+      const secret =
+        /password|secret|token|credential|private[_-]?key|api[_-]?key/i.test(
+          name
+        )
       entries.push(
         scopedEntry("environment", name, environment.name, "now", {
           sensitive: secret,

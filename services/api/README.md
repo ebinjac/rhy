@@ -10,7 +10,8 @@ npm run dev:api
 
 The API listens on `:8080` by default and exposes:
 
-- `GET /healthz`
+- `GET /health`, `GET /healthz`, and `GET /livez` — dependency-free process liveness
+- `GET /readyz` — PostgreSQL, Redis, S3, runner, and schema diagnostics
 - `GET /api/v1/monitors`
 - `POST /api/v1/monitors`
 - `GET /api/v1/monitors/{monitorId}`
@@ -25,16 +26,27 @@ Configuration:
 
 ```text
 RHYTHM_HTTP_ADDR=:8080
-RHYTHM_ALLOWED_ORIGIN=http://localhost:3000
-RHYTHM_DEVELOPMENT_ACTOR_ID=local-admin
+RHYTHM_ALLOWED_ORIGIN=*
+RHYTHM_AUTH_MODE=anonymous
+RHYTHM_DEVELOPMENT_ACTOR_ID=anonymous
 RHYTHM_STORAGE_MODE=memory
 RHYTHM_DATABASE_URL=postgres://rhythm:rhythm@localhost:5432/rhythm?sslmode=disable
-RHYTHM_REDIS_URL=redis://localhost:6379/0
-RHYTHM_ALLOW_PRIVATE_TARGETS=false
+RHYTHM_QUEUE_BACKEND=memory
+RHYTHM_UNRESTRICTED_OUTBOUND=true
 ```
 
-Outbound execution blocks private, loopback, link-local, multicast, and reserved targets by default. Set `RHYTHM_ALLOW_PRIVATE_TARGETS=true` only for an isolated development environment that intentionally monitors internal services.
+Outbound execution accepts any HTTP(S) hostname by default, including private, loopback, link-local, multicast, and reserved targets. TLS verification and evidence masking remain active.
 
-To use PostgreSQL, set `RHYTHM_STORAGE_MODE=postgres`, provide `RHYTHM_DATABASE_URL`, and run `npm run migrate:api` before starting the API. The default `memory` mode remains available for zero-setup development and automated tests.
+To use PostgreSQL, set `RHYTHM_STORAGE_MODE=postgres`, `RHYTHM_QUEUE_BACKEND=postgres`, provide `RHYTHM_DATABASE_URL`, and run `npm run migrate:api` before starting the API. The default `memory` mode remains available for zero-setup development and automated tests. Redis can later be selected with `RHYTHM_QUEUE_BACKEND=redis` and `RHYTHM_REDIS_URL`.
 
-The development authenticator is intentionally isolated behind the `Authenticator` interface. It must be replaced before a production deployment.
+Anonymous mode assigns every request the shared Administrator principal and requires no login or identity headers.
+
+Long-running services create PostgreSQL, Redis, and artifact clients without an
+initial network probe. This allows a configured pod to start during an outage;
+operations retry through their normal loops and `/readyz` reports unavailable
+components. Migration commands remain fail-fast because applying schema changes
+without a database is not meaningful.
+
+Application secrets have one storage mode: AES-GCM encrypted values in
+PostgreSQL, referenced by plain alias. External and environment-backed secret
+profiles are not accepted.

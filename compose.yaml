@@ -25,6 +25,7 @@ services:
     restart: unless-stopped
 
   redis:
+    profiles: ["redis"]
     image: redis:8.4-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
@@ -81,11 +82,13 @@ services:
       RHYTHM_TARGET_HOST_CONCURRENCY: ${RHYTHM_TARGET_HOST_CONCURRENCY:-16}
       RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_DATABASE_MAX_CONNS:-20}
       RHYTHM_DATABASE_MIN_CONNS: ${RHYTHM_DATABASE_MIN_CONNS:-2}
-      RHYTHM_ALLOWED_ORIGIN: http://localhost:${RHYTHM_WEB_PORT:-3100}
-      RHYTHM_DEVELOPMENT_ACTOR_ID: local-admin
+      RHYTHM_ALLOWED_ORIGIN: "*"
+      RHYTHM_AUTH_MODE: anonymous
+      RHYTHM_DEVELOPMENT_ACTOR_ID: anonymous
       RHYTHM_STORAGE_MODE: postgres
       RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
-      RHYTHM_REDIS_URL: redis://redis:6379/0
+      RHYTHM_QUEUE_BACKEND: ${RHYTHM_QUEUE_BACKEND:-postgres}
+      RHYTHM_REDIS_URL: ${RHYTHM_REDIS_URL:-}
       RHYTHM_SCRIPT_RUNNER_URL: http://script-runner:8090
       RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
       RHYTHM_BROWSER_RUNNER_URL: http://browser-agent:8091
@@ -95,7 +98,7 @@ services:
       RHYTHM_ARTIFACT_STORE_SECRET_KEY: rhythm-local-artifacts
       RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
 
-      RHYTHM_ALLOW_PRIVATE_TARGETS: "true"
+      RHYTHM_UNRESTRICTED_OUTBOUND: "true"
       # Optional: point at an external OpenSearch for ELF bootstrap seed. Leave unset when
       # configuring ELF against a production/shared cluster via the UI.
       RHYTHM_ELF_BOOTSTRAP_URL: ${RHYTHM_ELF_BOOTSTRAP_URL:-}
@@ -114,8 +117,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       script-runner:
         condition: service_healthy
       browser-agent:
@@ -123,7 +124,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -145,8 +146,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       script-runner:
         condition: service_healthy
       browser-agent:
@@ -154,7 +153,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -173,8 +172,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       script-runner:
         condition: service_healthy
       browser-agent:
@@ -182,7 +179,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -201,8 +198,6 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      redis:
-        condition: service_healthy
       script-runner:
         condition: service_healthy
       browser-agent:
@@ -210,7 +205,7 @@ services:
       minio:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/readyz"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -225,7 +220,7 @@ services:
       RHYTHM_BROWSER_AGENT_ADDR: 0.0.0.0
       RHYTHM_BROWSER_AGENT_PORT: "8091"
       RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
-      RHYTHM_BROWSER_ALLOW_PRIVATE_TARGETS: "true"
+      RHYTHM_BROWSER_UNRESTRICTED_OUTBOUND: "true"
       RHYTHM_BROWSER_MAX_CONCURRENCY: "2"
       # Docker Desktop does not expose the user namespace required by
       # Chromium's inner sandbox. The surrounding container remains locked
@@ -303,6 +298,27 @@ services:
       timeout: 5s
       retries: 18
     init: true
+    restart: unless-stopped
+
+  # Opt-in mock HTTP(S) target for API scenarios:
+  #   docker compose --profile test up -d --build test-target
+  # Host scenarios: RHYTHM_TEST_TARGET_URL=http://host.docker.internal:18090
+  # Compose-network runners: RHYTHM_SCENARIO_NETWORK=compose → http://test-target:8080
+  test-target:
+    profiles: ["test"]
+    build: ./services/test-target
+    ports:
+      - "${RHYTHM_TEST_TARGET_PORT:-18090}:8080"
+      - "${RHYTHM_TEST_TARGET_HTTPS_PORT:-18443}:8443"
+    environment:
+      PORT: "8080"
+      HTTPS_PORT: "8443"
+      REQUIRE_CLIENT_CERT: "${RHYTHM_TEST_TARGET_REQUIRE_CLIENT_CERT:-false}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     restart: unless-stopped
 
 volumes:

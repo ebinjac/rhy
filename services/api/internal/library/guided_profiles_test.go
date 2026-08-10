@@ -2,20 +2,31 @@ package library
 
 import "testing"
 
-func TestPrepareEnvironmentConfigRequiresSecretsForSensitiveVariables(t *testing.T) {
-	_, _, err := prepareEnvironmentConfig("PRODUCTION", map[string]any{
-		"baseUrl":   "https://api.example.com",
-		"variables": map[string]any{"API_TOKEN": "raw-token"},
-	})
-	if err == nil {
-		t.Fatal("expected sensitive environment variable to require a secret reference")
-	}
+func TestPrepareEnvironmentConfigUsesPlainAliasesForSensitiveVariables(t *testing.T) {
 	config, kind, err := prepareEnvironmentConfig("PRODUCTION", map[string]any{
 		"baseUrl":   "https://api.example.com/",
-		"variables": map[string]any{"API_TOKEN": "secret://prod-token", "API_VERSION": "v2"},
+		"variables": map[string]any{"API_TOKEN": "prod-token", "API_VERSION": "v2"},
 	})
 	if err != nil || kind != "PRODUCTION" || config["secretCount"] != 1 {
 		t.Fatalf("unexpected environment config: %#v, %s, %v", config, kind, err)
+	}
+}
+
+func TestPrepareEnvironmentConfigAcceptsHydraStyleKeys(t *testing.T) {
+	config, kind, err := prepareEnvironmentConfig("CUSTOM", map[string]any{
+		"baseUrl": "https://api.example.com",
+		"variables": map[string]any{
+			"_vault***":     "injected",
+			"lowercaseKey":  "ok",
+			"mixed.Case-1":  "ok",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Hydra-style keys should be accepted: %v", err)
+	}
+	variables, _ := config["variables"].(map[string]any)
+	if kind != "CUSTOM" || variables["_vault***"] != "injected" || variables["lowercaseKey"] != "ok" {
+		t.Fatalf("unexpected environment config: %#v", config)
 	}
 }
 
@@ -24,14 +35,14 @@ func TestPrepareAuthConfigNormalizesBearerSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kind != "BEARER" || config["tokenSecretRef"] != "secret://payments-token" || config["secretBacked"] != true {
+	if kind != "BEARER" || config["tokenSecretRef"] != "payments-token" || config["secretBacked"] != true {
 		t.Fatalf("unexpected auth config: %#v", config)
 	}
 }
 
 func TestPrepareAuthConfigRejectsInvalidAPIKeyLocation(t *testing.T) {
 	_, _, err := prepareAuthConfig("API_KEY", map[string]any{
-		"name": "X-API-Key", "location": "cookie", "valueSecretRef": "secret://key",
+		"name": "X-API-Key", "location": "cookie", "valueSecretRef": "key",
 	})
 	if err == nil {
 		t.Fatal("expected invalid API key location to be rejected")
@@ -46,7 +57,7 @@ func TestPrepareTelemetryConfigNormalizesURLAndToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kind != "DYNATRACE" || config["baseUrl"] != "https://tenant.live.dynatrace.com" || config["tokenSecretRef"] != "secret://dynatrace-token" {
+	if kind != "DYNATRACE" || config["baseUrl"] != "https://tenant.live.dynatrace.com" || config["tokenSecretRef"] != "dynatrace-token" {
 		t.Fatalf("unexpected telemetry config: %#v", config)
 	}
 }
@@ -54,19 +65,19 @@ func TestPrepareTelemetryConfigNormalizesURLAndToken(t *testing.T) {
 func TestPrepareTelemetryConfigAcceptsSelectedSecretDisplayName(t *testing.T) {
 	config, kind, err := prepareTelemetryConfig("DYNATRACE", map[string]any{
 		"baseUrl":        "https://tenant.live.dynatrace.com/",
-		"tokenSecretRef": "secret://Dynatrace API Token",
+		"tokenSecretRef": "Dynatrace API Token",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if kind != "DYNATRACE" || config["tokenSecretRef"] != "secret://Dynatrace API Token" {
+	if kind != "DYNATRACE" || config["tokenSecretRef"] != "Dynatrace API Token" {
 		t.Fatalf("unexpected telemetry config: %#v", config)
 	}
 }
 
 func TestRequiredSecretRefRejectsControlCharacters(t *testing.T) {
 	_, err := requiredSecretRef(
-		map[string]any{"tokenSecretRef": "secret://Dynatrace\nToken"},
+		map[string]any{"tokenSecretRef": "Dynatrace\nToken"},
 		"tokenSecretRef",
 		"Dynatrace API token",
 	)

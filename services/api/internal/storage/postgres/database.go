@@ -64,6 +64,11 @@ type PoolOptions struct {
 	MaxConnections  int32
 	MinConnections  int32
 	TransactionPool bool
+	// SkipInitialPing lets long-running services open their listener before
+	// PostgreSQL is reachable. The pool reconnects lazily and /readyz continues
+	// to report the dependency outage. One-shot commands such as migrations keep
+	// the default fail-fast behavior.
+	SkipInitialPing bool
 }
 
 func OpenWithOptions(ctx context.Context, databaseURL string, options PoolOptions) (*pgxpool.Pool, error) {
@@ -94,6 +99,9 @@ func OpenWithOptions(ctx context.Context, databaseURL string, options PoolOption
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("create PostgreSQL pool: %w", err)
+	}
+	if options.SkipInitialPing {
+		return pool, nil
 	}
 	pingContext, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

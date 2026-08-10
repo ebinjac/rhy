@@ -61,6 +61,7 @@ func main() {
 			MaxConnections:  int32(cfg.DatabaseMaxConns),
 			MinConnections:  int32(cfg.DatabaseMinConns),
 			TransactionPool: cfg.DatabaseTxPooling,
+			SkipInitialPing: true,
 		})
 		if openErr != nil {
 			logger.Error("open PostgreSQL", "error", openErr)
@@ -85,11 +86,11 @@ func main() {
 		suiteRepository = suites.NewMemoryRepository()
 		agentRepository = agents.NewMemoryRepository()
 	}
-	if cfg.RedisURL != "" || len(cfg.RedisAddrs) > 0 {
+	if cfg.QueueBackend == "redis" {
 		openedRedis, openErr := queue.OpenRedisWithConfig(context.Background(), queue.RedisConfig{
 			URL: cfg.RedisURL, Mode: cfg.RedisMode, Addrs: cfg.RedisAddrs,
 			Username: cfg.RedisUsername, Password: cfg.RedisPassword,
-			DB: cfg.RedisDB, TLS: cfg.RedisTLS,
+			DB: cfg.RedisDB, TLS: cfg.RedisTLS, SkipInitialPing: true,
 		})
 		if openErr != nil {
 			logger.Error("open Redis", "error", openErr)
@@ -128,7 +129,7 @@ func main() {
 	}
 	runService := runs.NewService(monitorService, runRepository, executor)
 	var executionJobService *executionjobs.Service
-	if postgresPool != nil && redisClient != nil {
+	if postgresPool != nil && cfg.QueueBackend != "memory" {
 		executionJobService = executionjobs.New(postgresPool, redisClient, runService, logger, cfg.WorkerConcurrency)
 		executionJobService.SetMemoryStopPercent(cfg.WorkerMemoryStopPercent)
 	}
@@ -143,7 +144,9 @@ func main() {
 	var dynatraceService *dynatrace.Service
 	var browserMonitorService *browsermonitors.Service
 	var retentionService *retention.Service
-	if postgresPool != nil && redisClient != nil && roleControl {
+	// Public API replicas need the scheduler service for schedule CRUD, while
+	// only control replicas start the scheduling loop below.
+	if postgresPool != nil && cfg.QueueBackend != "memory" && (roleAPI || roleControl) {
 		schedulerService = scheduler.NewWithOptions(
 			postgresPool,
 			redisClient,
@@ -158,10 +161,14 @@ func main() {
 		auditService = audit.New(postgresPool)
 		notificationService = notifications.New(postgresPool, libraryService, logger)
 		elfService = elf.New(postgresPool, libraryService, cfg.AllowPrivateTargets)
+		dynatraceAllowedHosts := cfg.DynatraceAllowedHosts
+		if cfg.UnrestrictedOutbound {
+			dynatraceAllowedHosts = []string{"*"}
+		}
 		dynatraceService = dynatrace.New(
 			postgresPool,
 			libraryService,
-			dynatrace.NewEnvironmentV2Provider(cfg.DynatraceAllowedHosts, cfg.AllowPrivateTargets),
+			dynatrace.NewEnvironmentV2Provider(dynatraceAllowedHosts, cfg.AllowPrivateTargets),
 		)
 		alertService = alerts.New(postgresPool, elfService)
 	}
@@ -176,10 +183,6 @@ func main() {
 		})
 		if artifactErr != nil {
 			logger.Error("configure browser artifact storage", "error", artifactErr)
-			os.Exit(1)
-		}
-		if artifactErr = artifactStore.Ensure(context.Background()); artifactErr != nil {
-			logger.Error("initialize browser artifact storage", "error", artifactErr)
 			os.Exit(1)
 		}
 		if postgresRunRepository != nil && roleControl {
@@ -197,7 +200,7 @@ func main() {
 			logger.Error("configure browser monitoring", "error", err)
 			os.Exit(1)
 		}
-		if redisClient != nil && roleBrowser {
+		if cfg.QueueBackend != "memory" {
 			browserMonitorService.ConfigureQueue(redisClient, logger, cfg.BrowserJobConcurrency)
 		}
 		if roleAPI || roleBrowser {
@@ -231,11 +234,13 @@ func main() {
 	suiteService.SetAlerts(alertService)
 	suiteService.SetDynatrace(dynatraceService)
 	suiteService.SetBrowser(browserMonitorService)
-	if redisClient != nil && roleControl {
+	if cfg.QueueBackend != "memory" && postgresPool != nil {
 		suiteService.ConfigureQueue(redisClient, logger, cfg.DeploymentConcurrency)
 	}
 	var authenticator authz.Authenticator
-	if cfg.AuthMode == "trusted_headers" {
+	if cfg.AuthMode == "anonymous" {
+		authenticator = authz.NewAnonymousAuthenticator(cfg.DevelopmentActorID)
+	} else if cfg.AuthMode == "trusted_headers" {
 		trusted, authErr := authz.NewTrustedHeaderAuthenticator(authz.TrustedHeaderConfig{
 			IdentityHeader:    cfg.IdentityHeader,
 			GroupsHeader:      cfg.GroupsHeader,
@@ -333,7 +338,7 @@ func main() {
 	}
 
 	go func() {
-		logger.Info("rhythm service listening", "address", cfg.HTTPAddr, "role", cfg.RuntimeRole, "authMode", cfg.AuthMode, "storageMode", cfg.StorageMode)
+		logger.Info("rhythm service listening", "address", cfg.HTTPAddr, "role", cfg.RuntimeRole, "authMode", cfg.AuthMode, "storageMode", cfg.StorageMode, "queueBackend", cfg.QueueBackend, "unrestrictedOutbound", cfg.UnrestrictedOutbound)
 		if serveErr := server.ListenAndServe(); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 			logger.Error("api server failed", "error", serveErr)
 			os.Exit(1)
@@ -375,10 +380,14 @@ func redisWebhookRateLimiter(client redis.UniversalClient) func(context.Context,
 
 func roleHealthHandler(role string, checks map[string]func(context.Context) error) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+	live := func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write([]byte(`{"status":"ok","role":"` + role + `"}`))
-	})
+	}
+	mux.HandleFunc("GET /livez", live)
+	mux.HandleFunc("GET /healthz", live)
+	mux.HandleFunc("GET /health", live)
 	ready := func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -398,7 +407,5 @@ func roleHealthHandler(role string, checks map[string]func(context.Context) erro
 		}
 	}
 	mux.HandleFunc("GET /readyz", ready)
-	mux.HandleFunc("GET /healthz", ready)
-	mux.HandleFunc("GET /health", ready)
 	return mux
 }

@@ -12,7 +12,7 @@ owners:
 keywords:
   - Hydra
   - OpenShift
-  - SSO
+  - anonymous access
   - Vault
   - Liquibase
 ---
@@ -24,7 +24,7 @@ has an independent Dockerfile, workflow URL, values set, Vault mount, scaling
 policy, and security boundary.
 
 <Callout type="warn" title="Preview procedure">
-  Complete E1 deployment, identity spoofing, database recovery, Redis failover,
+  Complete E1 deployment, anonymous-access review, database and queue recovery,
   S3/KMS, browser certificate, and 2,000-run acceptance testing before E3.
 </Callout>
 
@@ -32,7 +32,7 @@ policy, and security boundary.
 
 | Service | Hydra route | SSO | Steady/max | Responsibility |
 |---|---|---|---:|---|
-| `rhythm-frontdoor` | Routable | Enabled | 2 / 4 | Web, public API, webhooks, identity boundary |
+| `rhythm-frontdoor` | Routable | Disabled | 2 / 4 | Public web, API, and webhooks |
 | `rhythm-control` | Non-routable | Disabled | 1 / 1 | Scheduler, outbox, notifications, orchestration |
 | `rhythm-api-executor` | Non-routable | Disabled | 3 / 12 | API runs and isolated JavaScript |
 | `rhythm-browser-executor` | Non-routable | Disabled | 1 / 4 | Chromium, visual and performance evidence |
@@ -49,10 +49,11 @@ E2  https://rhythm-qa.aexp.com
 E3  https://rhythm.aexp.com
 ```
 
-Hydra SSO must overwrite/strip client identity headers and set the authoritative
-user and group headers configured for Rhythm. Confirm them through
-`/api/v1/session`. Internal services use `RHYTHM_AUTH_MODE=internal` and must
-not be made GTM-routable.
+Create the frontdoor without Hydra SSO. It uses `RHYTHM_AUTH_MODE=anonymous`,
+does not consume user or group headers, and exposes every product capability to
+anyone who can reach the GTM URL. Confirm the shared anonymous administrator
+through `/api/v1/session`. Internal services use `RHYTHM_AUTH_MODE=internal`
+and must not be made GTM-routable.
 
 ## Service-to-service DNS
 
@@ -76,8 +77,9 @@ http://rhythm-browser-executor-svc.<HYDRA_PROJECT_NAME>.global:8080
 ```
 
 Replace the project placeholder and retain `automaticFailover: true` in each
-destination service's values. Normal API job execution uses Redis Enterprise,
-so executors do not add synchronous service-to-service latency.
+destination service's values. Normal API job execution initially claims the
+durable `execution_jobs` table in PostgreSQL, so executors do not add
+synchronous service-to-service latency.
 
 ## Dockerfiles and corporate trust
 
@@ -111,11 +113,37 @@ Use the least-privilege inventory next to each service:
 - `services/rhythm-api-executor/vault/secrets.example`
 - `services/rhythm-browser-executor/vault/secrets.example`
 
-Do not upload the union of all secrets everywhere. Database, Redis, encryption,
-runner-token, external secret-provider, and SMTP credentials appear only where
+Do not upload the union of all secrets everywhere. Database, encryption,
+runner-token, and SMTP bootstrap credentials appear only where
 needed. The encryption key must match across services in one environment, and
 the browser runner token must match between callers and browser executors. S3
-uses workload identity—never long-lived AWS access keys.
+uses workload identity—never long-lived AWS access keys. Redis entries are
+optional and remain commented until the queue backend is changed to `redis`.
+
+The Hydra mount only injects infrastructure bootstrap values into a process.
+It is not a Rhythm secret-storage option. Application credentials created under
+Configuration → Secrets are always AES-GCM encrypted in PostgreSQL and are
+referenced by plain alias.
+
+## Startup and dependency recovery
+
+Hydra uses `/health` for pod and GTM probes. `/health`, `/healthz`, and `/livez`
+are dependency-free liveness endpoints, so PostgreSQL, Redis, S3, script-runner,
+or browser-agent outages do not prevent a pod from starting. `/readyz` remains
+the detailed dependency check and returns a sanitized `503` while a dependency
+is unavailable. Services reconnect automatically; do not configure `/readyz`
+as the Hydra pod probe when outage-tolerant startup is required.
+
+## Queue and outbound mode
+
+All service values select `RHYTHM_QUEUE_BACKEND=postgres`, so Redis is not a
+deployment dependency. Redis Streams remain available later by setting the
+backend to `redis`, adding its Vault credentials, enabling TLS, and rolling all
+services. PostgreSQL remains the durable job authority in both modes.
+
+`RHYTHM_UNRESTRICTED_OUTBOUND=true` disables target hostname, CIDR, private-IP,
+Dynatrace endpoint, and browser navigation-origin restrictions. TLS certificate
+verification and secret masking remain active.
 
 ## Workflow URLs
 
@@ -167,14 +195,14 @@ an automatic destructive database rollback.
 3. Connect the approved workflow guardrail/deployment jobs.
 4. Apply Liquibase and verify schema readiness.
 5. Deploy control, API executors, browser executors, then frontdoor.
-6. Verify internal global DNS, `/health`, metrics, Redis consumers, S3, browser
-   TLS, SSO identity, and one API and UI run.
+6. Verify internal global DNS, `/health`, metrics, PostgreSQL job claims, S3,
+   browser TLS, anonymous session access, and one API and UI run.
 7. Enable schedules gradually and complete the 2,000-run soak.
 
-<Callout type="info" title="Local Compose is unchanged">
-  Continue using `compose.yaml` for local PostgreSQL, Redis, MinIO, the combined
-  development API, script runner, browser agent, and web server. Hydra files do
-  not replace the local developer topology.
+<Callout type="info" title="Local Compose remains supported">
+  Local Compose uses PostgreSQL as its default queue and starts without Redis.
+  Redis remains an opt-in profile for compatibility testing. Hydra files do not
+  replace the local developer topology.
 </Callout>
 
 See `deploy/hydra/README.md` for exact console selections, Vault variables,

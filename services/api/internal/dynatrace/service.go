@@ -1359,15 +1359,11 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 }
 
 func normalizeSecretRef(value string) string {
-	value = strings.TrimSpace(value)
-	if value != "" && !strings.HasPrefix(value, "secret://") {
-		return "secret://" + value
-	}
-	return value
+	return strings.TrimSpace(value)
 }
 
 func credentialName(reference string) string {
-	return strings.TrimSpace(strings.TrimPrefix(reference, "secret://"))
+	return strings.TrimSpace(reference)
 }
 
 func uniqueUpper(values []string) []string {

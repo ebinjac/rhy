@@ -507,7 +507,7 @@ func (e *HTTPExecutor) acquireTarget(ctx context.Context, target *url.URL) (func
 }
 
 var vaultCallPattern = regexp.MustCompile(`pm\.vault\.get\(\s*["']([^"']+)["']\s*\)`)
-var templateSecretPattern = regexp.MustCompile(`\{\{\s*secrets\.([A-Za-z0-9_.-]+)\s*\}\}`)
+var templateSecretPattern = regexp.MustCompile(`\{\{\s*secrets\.([^\s{}]+)\s*\}\}`)
 
 func (e *HTTPExecutor) ResolveDefinitionSecrets(ctx context.Context, definition Definition, values map[string]string) error {
 	encoded, err := json.Marshal(definition)
@@ -523,7 +523,7 @@ func (e *HTTPExecutor) ResolveDefinitionSecrets(ctx context.Context, definition 
 		if e.resolver == nil {
 			return fmt.Errorf("secret alias %q cannot be resolved", alias)
 		}
-		value, resolveErr := e.resolver.ResolveSecret(ctx, "secret://"+alias)
+		value, resolveErr := e.resolver.ResolveSecret(ctx, alias)
 		if resolveErr != nil {
 			return fmt.Errorf("secret alias %q could not be resolved", alias)
 		}
@@ -535,14 +535,14 @@ func (e *HTTPExecutor) ResolveDefinitionSecrets(ctx context.Context, definition 
 func (e *HTTPExecutor) resolveScriptSecrets(ctx context.Context, code string) (map[string]string, error) {
 	secrets := map[string]string{}
 	for _, match := range vaultCallPattern.FindAllStringSubmatch(code, -1) {
-		alias := strings.TrimPrefix(strings.TrimSpace(match[1]), "secret://")
+		alias := strings.TrimSpace(match[1])
 		if _, exists := secrets[alias]; exists {
 			continue
 		}
 		if e.resolver == nil {
 			return nil, fmt.Errorf("secret alias %q cannot be resolved", alias)
 		}
-		value, err := e.resolver.ResolveSecret(ctx, "secret://"+alias)
+		value, err := e.resolver.ResolveSecret(ctx, alias)
 		if err != nil {
 			return nil, err
 		}
@@ -1395,6 +1395,8 @@ func (e *HTTPExecutor) transport(ctx context.Context, config RequestConfig) (*ht
 		}
 		transport.TLSClientConfig.Certificates = []tls.Certificate{certificate}
 	}
+	resolvedProxyUsername := ""
+	resolvedProxyPassword := ""
 	if config.Proxy.Mode == "profile" {
 		if e.resolver == nil {
 			return nil, errors.New("proxy profiles require a runtime resolver")
@@ -1417,8 +1419,8 @@ func (e *HTTPExecutor) transport(ctx context.Context, config RequestConfig) (*ht
 			return nil, errors.New("proxy profile URL must use http, https, or socks5")
 		}
 		config.Proxy.NoProxy = material.NoProxy
-		config.Proxy.UsernameSecretRef = material.Username
-		config.Proxy.PasswordSecretRef = material.Password
+		resolvedProxyUsername = material.Username
+		resolvedProxyPassword = material.Password
 	}
 	switch config.Proxy.Mode {
 	case "", "environment":
@@ -1430,13 +1432,16 @@ func (e *HTTPExecutor) transport(ctx context.Context, config RequestConfig) (*ht
 		if err != nil || proxyURL.Host == "" {
 			return nil, errors.New("proxy URL is invalid")
 		}
-		username, err := e.resolveCredential(ctx, config.Proxy.UsernameSecretRef, nil)
-		if err != nil {
-			return nil, fmt.Errorf("resolve proxy username: %w", err)
-		}
-		password, err := e.resolveCredential(ctx, config.Proxy.PasswordSecretRef, nil)
-		if err != nil {
-			return nil, fmt.Errorf("resolve proxy password: %w", err)
+		username, password := resolvedProxyUsername, resolvedProxyPassword
+		if config.Proxy.ProfileID == "" {
+			username, err = e.resolveCredential(ctx, config.Proxy.UsernameSecretRef, nil)
+			if err != nil {
+				return nil, fmt.Errorf("resolve proxy username: %w", err)
+			}
+			password, err = e.resolveCredential(ctx, config.Proxy.PasswordSecretRef, nil)
+			if err != nil {
+				return nil, fmt.Errorf("resolve proxy password: %w", err)
+			}
 		}
 		if username != "" || password != "" {
 			proxyURL.User = url.UserPassword(username, password)
@@ -1488,7 +1493,7 @@ func (e *HTTPExecutor) prepareActions(ctx context.Context, actions []ActionConfi
 		prepared[index] = action
 		prepared[index].Fields = make(map[string]string, len(action.Fields))
 		for key, value := range action.Fields {
-			if strings.HasPrefix(strings.TrimSpace(value), "secret://") {
+			if sensitiveKey(key) {
 				resolved, err := e.resolveCredential(ctx, value, values)
 				if err != nil {
 					return nil, err
@@ -1503,15 +1508,18 @@ func (e *HTTPExecutor) prepareActions(ctx context.Context, actions []ActionConfi
 }
 
 func (e *HTTPExecutor) resolveCredential(ctx context.Context, value string, variables map[string]string) (string, error) {
+	original := strings.TrimSpace(value)
 	rendered, err := render(value, variables)
 	if err != nil {
 		return "", err
 	}
-	if !strings.HasPrefix(strings.TrimSpace(rendered), "secret://") {
+	if strings.TrimSpace(rendered) == "" || strings.Contains(original, "{{") {
 		return rendered, nil
 	}
 	if e.resolver == nil {
-		return "", errors.New("secret references require the configuration library resolver")
+		// Keep raw legacy/test definitions executable when there is no library.
+		// Production definitions use encrypted aliases or {{secrets.alias}}.
+		return rendered, nil
 	}
 	return e.resolver.ResolveSecret(ctx, rendered)
 }

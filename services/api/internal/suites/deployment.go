@@ -551,7 +551,7 @@ func (s *Service) CreateDeploymentRun(ctx context.Context, suiteID, actor string
 		}
 	}
 	run := DeploymentRun{ID: runID, SuiteID: suiteID, Status: "QUEUED", Phase: "QUEUED", GateDecision: "PENDING", Progress: DeploymentProgress{Total: monitorCount*input.SampleCount + browserCount*configuration.BrowserSampleCount + elfCount + alertCount + dynatraceCount*2, Message: "Waiting for a validation worker."}, Deployment: input.Deployment, Configuration: configuration, SuiteSnapshot: suite, CreatedBy: actor, CreatedAt: now, UpdatedAt: now}
-	if queuedRepository, ok := s.repository.(*PostgresRepository); ok && s.queueRedis != nil {
+	if queuedRepository, ok := s.repository.(*PostgresRepository); ok && s.queueEnabled {
 		if err := queuedRepository.CreateQueuedDeploymentRun(ctx, run); err != nil {
 			return DeploymentRun{}, err
 		}
@@ -680,7 +680,7 @@ func (s *Service) CancelDeploymentRun(ctx context.Context, id string) (Deploymen
 	if err != nil {
 		return run, err
 	}
-	if s.queueRedis != nil {
+	if s.queueEnabled {
 		return s.cancelQueuedDeployment(ctx, id)
 	}
 	s.mu.Lock()

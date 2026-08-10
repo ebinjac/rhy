@@ -179,7 +179,7 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			if input.Preview {
 				return "MASKED", nil
 			}
-			value, exists := input.Secrets[strings.TrimPrefix(strings.TrimSpace(alias), "secret://")]
+			value, exists := input.Secrets[strings.TrimSpace(alias)]
 			if !exists {
 				return "", fmt.Errorf("secret alias %q is not available to this script", alias)
 			}
@@ -1107,7 +1107,7 @@ const __normalizeSendRequest = config => {
 globalThis.pm = {
   variables: __resolved, environment: __scope(__stores.environment), collectionVariables: __scope(__stores.collection), globals: __scope(__stores.globals),
   cookies: __cookies,
-  vault: { get: alias => Promise.resolve(__host.vaultGet(String(alias))), set: () => Promise.reject(new Error("Vault writes are blocked by policy")), unset: () => Promise.reject(new Error("Vault writes are blocked by policy")) },
+  vault: { get: alias => Promise.resolve(__host.vaultGet(String(alias))), set: () => Promise.reject(new Error("Secret writes are blocked by policy")), unset: () => Promise.reject(new Error("Secret writes are blocked by policy")) },
   request: __request,
   info: Object.assign({eventName:"prerequest",runtimeVersion:"rhythm-js-1"},__initial.info || {}),
   expect: __expect,

@@ -45,9 +45,9 @@ spec:
       valuesPath: deploy/hydra/services/rhythm-frontdoor/helm
       vaultInventory: deploy/hydra/services/rhythm-frontdoor/vault/secrets.example
       workflow: .github/workflows/deploy-rhythm-frontdoor.yml
-      routability: routable-with-sso
+      routability: routable
       applicationUrlPrefix: rhythm
-      sso: true
+      sso: false
       automaticFailover: true
       order: 40
       public: true

@@ -752,7 +752,7 @@ components:
         connectionProfileId: { type: string, format: uuid }
         credentialSecretRef:
           type: string
-          description: A secret:// reference; resolved values are never accepted or returned.
+          description: An encrypted Rhythm secret alias; resolved values are never accepted or returned.
         platforms:
           type: array
           minItems: 1

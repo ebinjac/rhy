@@ -34,7 +34,7 @@ var (
 	ErrConflict = errors.New("browser monitor already exists")
 )
 
-var secretTemplatePattern = regexp.MustCompile(`\{\{\s*secrets\.([A-Za-z0-9_.:-]+)\s*\}\}`)
+var secretTemplatePattern = regexp.MustCompile(`\{\{\s*secrets\.([^\s{}]+)\s*\}\}`)
 
 const (
 	browserExecutionStream     = "rhythm:execution:browser"
@@ -59,6 +59,7 @@ type Service struct {
 	now           func() time.Time
 	cancelMu      sync.Mutex
 	cancels       map[string]context.CancelFunc
+	queueEnabled  bool
 	queueRedis    redis.UniversalClient
 	logger        *slog.Logger
 	workerID      string
@@ -87,9 +88,6 @@ func New(pool *pgxpool.Pool, profiles *library.Service, runner Runner, artifacts
 }
 
 func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog.Logger, concurrency int) {
-	if redisClient == nil {
-		return
-	}
 	if concurrency < 1 {
 		concurrency = 8
 	}
@@ -97,6 +95,7 @@ func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog
 		logger = slog.Default()
 	}
 	hostname, _ := os.Hostname()
+	s.queueEnabled = true
 	s.queueRedis = redisClient
 	s.logger = logger
 	s.workerID = fmt.Sprintf("%s-%d", hostname, os.Getpid())
@@ -104,10 +103,15 @@ func (s *Service) ConfigureQueue(redisClient redis.UniversalClient, logger *slog
 }
 
 func (s *Service) startQueue(ctx context.Context) {
-	if s.queueRedis == nil {
+	if !s.queueEnabled {
 		return
 	}
 	s.queueOnce.Do(func() {
+		if s.queueRedis == nil {
+			go s.consumePostgresBrowserJobs(ctx)
+			go s.reapExpiredBrowserJobs(ctx)
+			return
+		}
 		if err := s.queueRedis.XGroupCreateMkStream(ctx, browserExecutionStream, browserConsumerGroup, "0").Err(); err != nil &&
 			!strings.Contains(err.Error(), "BUSYGROUP") {
 			s.logger.Error("create browser execution consumer group", "error", err)
@@ -115,6 +119,47 @@ func (s *Service) startQueue(ctx context.Context) {
 		go s.consumeBrowserJobs(ctx)
 		go s.reapExpiredBrowserJobs(ctx)
 	})
+}
+
+func (s *Service) consumePostgresBrowserJobs(ctx context.Context) {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		available := cap(s.jobSlots) - len(s.jobSlots)
+		if available <= 0 {
+			continue
+		}
+		rows, err := s.pool.Query(ctx, `
+			SELECT id::text FROM execution_jobs
+			WHERE job_type='BROWSER_MONITOR_RUN' AND status='QUEUED'
+			  AND cancel_requested_at IS NULL AND available_at<=NOW()
+			ORDER BY priority DESC,available_at,created_at LIMIT $1`, min(available, 16))
+		if err != nil {
+			s.logger.Error("poll PostgreSQL browser queue", "error", err)
+			continue
+		}
+		jobIDs := make([]string, 0, min(available, 16))
+		for rows.Next() {
+			var jobID string
+			if rows.Scan(&jobID) == nil {
+				jobIDs = append(jobIDs, jobID)
+			}
+		}
+		rows.Close()
+		for _, jobID := range jobIDs {
+			select {
+			case s.jobSlots <- struct{}{}:
+				go s.processBrowserJob(ctx, "", jobID)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
 }
 
 func (s *Service) consumeBrowserJobs(ctx context.Context) {
@@ -158,7 +203,7 @@ func (s *Service) processBrowserJob(parent context.Context, messageID, jobID str
 		return
 	}
 	if !claimed {
-		_ = queueutil.AcknowledgeAndDelete(parent, s.queueRedis, browserExecutionStream, browserConsumerGroup, messageID)
+		s.acknowledgeBrowserJob(parent, messageID)
 		return
 	}
 	runCtx, cancel := context.WithCancel(parent)
@@ -176,8 +221,15 @@ func (s *Service) processBrowserJob(parent context.Context, messageID, jobID str
 		s.logger.Error("complete browser execution job", "jobId", jobID, "runId", runID, "error", completeErr)
 		return
 	}
-	if err := queueutil.AcknowledgeAndDelete(context.WithoutCancel(parent), s.queueRedis, browserExecutionStream, browserConsumerGroup, messageID); err != nil {
-		s.logger.Error("acknowledge browser execution job", "jobId", jobID, "error", err)
+	s.acknowledgeBrowserJob(context.WithoutCancel(parent), messageID)
+}
+
+func (s *Service) acknowledgeBrowserJob(ctx context.Context, messageID string) {
+	if s.queueRedis == nil || messageID == "" {
+		return
+	}
+	if err := queueutil.AcknowledgeAndDelete(ctx, s.queueRedis, browserExecutionStream, browserConsumerGroup, messageID); err != nil {
+		s.logger.Error("acknowledge browser execution job", "error", err)
 	}
 }
 
@@ -709,7 +761,7 @@ func (s *Service) StartRun(ctx context.Context, monitorID, actor, mode, trigger 
 	if err != nil {
 		return Run{}, err
 	}
-	if s.queueRedis != nil {
+	if s.queueEnabled {
 		jobID, idErr := id.NewUUID()
 		if idErr != nil {
 			return Run{}, idErr
@@ -745,7 +797,7 @@ func (s *Service) StartRun(ctx context.Context, monitorID, actor, mode, trigger 
 	if err := tx.Commit(ctx); err != nil {
 		return Run{}, err
 	}
-	if s.queueRedis != nil {
+	if s.queueEnabled {
 		return s.GetRun(ctx, runID)
 	}
 	runContext, cancel := context.WithCancel(context.Background())
@@ -771,7 +823,7 @@ func (s *Service) CancelRun(ctx context.Context, runID string) (Run, error) {
 	if terminal(run.Status) {
 		return run, errors.New("browser run is already complete")
 	}
-	if s.queueRedis != nil {
+	if s.queueEnabled {
 		tx, txErr := s.pool.Begin(ctx)
 		if txErr != nil {
 			return Run{}, txErr
@@ -1223,7 +1275,7 @@ func (s *Service) runtimeValues(ctx context.Context, monitor Monitor, definition
 		if s.library == nil {
 			return nil, nil, errors.New("secret references require the configuration library")
 		}
-		value, err := s.library.ResolveSecret(ctx, "secret://"+alias)
+		value, err := s.library.ResolveSecret(ctx, alias)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1574,7 +1626,25 @@ func (s *Service) Metrics(ctx context.Context, monitorID, period string) (Metric
 	for key, values := range metricValues {
 		result.MetricDistributions[key] = summarize(values)
 	}
+	// Keep API responses and chart rendering bounded even for one-minute
+	// monitors with months of history. Distribution calculations still use
+	// every compatible run; only the visual time-series evidence is sampled.
+	result.Series = downsampleMetricPoints(result.Series, 720)
+	result.GraphSeries = downsampleMetricPoints(result.GraphSeries, 720)
 	return result, nil
+}
+
+func downsampleMetricPoints(points []map[string]any, limit int) []map[string]any {
+	if limit < 2 || len(points) <= limit {
+		return points
+	}
+	sampled := make([]map[string]any, 0, limit)
+	last := len(points) - 1
+	for index := 0; index < limit; index++ {
+		pointIndex := int(math.Round(float64(index) * float64(last) / float64(limit-1)))
+		sampled = append(sampled, points[pointIndex])
+	}
+	return sampled
 }
 
 func summarize(values []int64) Statistics {
@@ -2029,11 +2099,9 @@ func normalizeDefinition(definition Definition) Definition {
 	if definition.ArtifactPolicy.FailureEvidenceDays == 0 {
 		definition.ArtifactPolicy.FailureEvidenceDays = 7
 	}
-	if len(definition.AllowedOrigins) == 0 && definition.StartURL != "" {
-		if parsed, err := url.Parse(definition.StartURL); err == nil {
-			definition.AllowedOrigins = []string{parsed.Scheme + "://" + parsed.Host}
-		}
-	}
+	// The browser runtime no longer applies a saved origin boundary. Keep the
+	// field empty for definition compatibility without presenting a restriction.
+	definition.AllowedOrigins = []string{}
 	for index := range definition.Steps {
 		if definition.Steps[index].TimeoutMS == 0 {
 			definition.Steps[index].TimeoutMS = 15000
@@ -2064,12 +2132,6 @@ func validateDefinition(definition Definition) error {
 		seen[step.ID] = true
 		if step.TimeoutMS < 100 || step.TimeoutMS > 120000 {
 			return fmt.Errorf("step %q timeout must be between 100 and 120000 ms", step.Name)
-		}
-	}
-	for _, origin := range definition.AllowedOrigins {
-		parsedOrigin, err := url.Parse(origin)
-		if err != nil || parsedOrigin.Host == "" || (parsedOrigin.Scheme != "http" && parsedOrigin.Scheme != "https") {
-			return errors.New("allowed origins must be absolute HTTP or HTTPS origins")
 		}
 	}
 	return nil
