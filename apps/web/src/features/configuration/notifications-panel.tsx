@@ -64,9 +64,9 @@ export function NotificationsPanel({
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
   const [channelType, setChannelType] = useState<ChannelType>("EMAIL")
-  const [smtpHost, setSmtpHost] = useState("mailpit")
-  const [smtpPort, setSmtpPort] = useState("1025")
-  const [from, setFrom] = useState("rhythm-alerts@localhost")
+  const [smtpHost, setSmtpHost] = useState("usphx-smtp-qa.axp.com")
+  const [smtpPort, setSmtpPort] = useState("25")
+  const [from, setFrom] = useState("no-reply@rythm.test.com")
   const [fallbackTo, setFallbackTo] = useState("")
   const [authMode, setAuthMode] = useState<AuthMode>("none")
   const [username, setUsername] = useState("")
@@ -217,7 +217,7 @@ export function NotificationsPanel({
     setTestingId(null)
     setTestMessage(
       result.ok
-        ? `Test email sent to ${destination}. Open the local Mailpit inbox to inspect it.`
+        ? `Test email sent to ${destination}.`
         : result.message
     )
   }
@@ -241,20 +241,11 @@ export function NotificationsPanel({
             </p>
             <ul className="mt-3 space-y-1.5 text-sm text-muted-foreground">
               <li>
-                Local Compose uses the in-stack{" "}
+                Local Compose uses the QA SMTP relay{" "}
                 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-                  mailpit:1025
+                  usphx-smtp-qa.axp.com:25
                 </code>{" "}
-                SMTP catcher with no authentication. View captured messages at{" "}
-                <a
-                  className="font-medium text-primary underline underline-offset-4"
-                  href="http://localhost:18025"
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  localhost:18025
-                </a>
-                .
+                with no authentication.
               </li>
               <li>
                 Prefer application recipients for routing; optional fallback{" "}
@@ -323,14 +314,14 @@ export function NotificationsPanel({
               <>
                 <Field
                   label="SMTP host"
-                  help="Use mailpit for local Docker. Use your provider hostname in production."
+                  help="Defaults to the QA SMTP relay. Override with your provider hostname when needed."
                 >
                   <Input
                     aria-label="SMTP host"
                     className="font-mono"
                     value={smtpHost}
                     onChange={(event) => setSmtpHost(event.target.value)}
-                    placeholder="mailpit"
+                    placeholder="usphx-smtp-qa.axp.com"
                   />
                 </Field>
                 <Field label="SMTP port">
@@ -339,7 +330,7 @@ export function NotificationsPanel({
                     className="font-mono"
                     value={smtpPort}
                     onChange={(event) => setSmtpPort(event.target.value)}
-                    placeholder="1025"
+                    placeholder="25"
                   />
                 </Field>
                 <Field label="From address">
@@ -348,7 +339,7 @@ export function NotificationsPanel({
                     className="font-mono"
                     value={from}
                     onChange={(event) => setFrom(event.target.value)}
-                    placeholder="rhythm-alerts@localhost"
+                    placeholder="no-reply@rythm.test.com"
                   />
                 </Field>
                 <Field
@@ -364,7 +355,7 @@ export function NotificationsPanel({
                 </Field>
                 <Field
                   label="SMTP authentication"
-                  help="Mailpit needs no authentication. Production providers usually require credentials."
+                  help="The QA SMTP relay needs no authentication. Other providers may require credentials."
                   wide
                 >
                   <Select
@@ -498,16 +489,7 @@ export function NotificationsPanel({
               <h3 className="font-medium">Send test email</h3>
               <p className="mt-1 text-sm text-muted-foreground">
                 Verifies SMTP connectivity for an EMAIL channel without opening
-                a real alert. Local messages appear in{" "}
-                <a
-                  className="font-medium text-primary underline underline-offset-4"
-                  href="http://localhost:18025"
-                  rel="noreferrer"
-                  target="_blank"
-                >
-                  Mailpit
-                </a>
-                .
+                a real alert.
               </p>
             </div>
             <div className="flex w-full max-w-md flex-col gap-2 sm:flex-row">
@@ -649,8 +631,8 @@ export function NotificationsPanel({
             <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
               Create an Email channel to deliver monitor and OpenSearch alerts.
               Local Compose automatically seeds{" "}
-              <code className="font-mono text-xs">mailpit:1025</code> from
-              environment defaults on API startup.
+              <code className="font-mono text-xs">usphx-smtp-qa.axp.com:25</code>{" "}
+              from environment defaults on API startup.
             </p>
             <Button className="mt-5" onClick={() => setOpen(true)}>
               <Plus /> Configure SMTP

@@ -15,6 +15,7 @@ import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import { CircleAlert, LoaderCircle, Plus, Trash2, TriangleAlert } from "lucide-react"
 
+import { InfoHint } from "@/components/info-hint"
 import { PageEmptyState } from "@/components/page-empty-state"
 
 export function ConfigurationIntro({
@@ -119,20 +120,47 @@ export function GuidedForm({
 export function FormField({
   label,
   help,
+  info,
   required,
   wide,
   children,
 }: {
   label: string
   help?: string
+  info?: string
   required?: boolean
   wide?: boolean
   children: ReactNode
 }) {
+  const requiredMark = required ? (
+    <span className="text-destructive"> *</span>
+  ) : null
+  if (info) {
+    return (
+      <div className={`text-sm font-medium ${wide ? "md:col-span-2" : ""}`}>
+        <div className="flex items-center gap-1">
+          <span>
+            {label}
+            {requiredMark}
+          </span>
+          <InfoHint title={label}>{info}</InfoHint>
+        </div>
+        <label className="mt-2 block font-normal">
+          <span className="sr-only">{label}</span>
+          {children}
+        </label>
+        {help ? (
+          <span className="mt-1.5 block text-xs leading-5 font-normal text-muted-foreground">
+            {help}
+          </span>
+        ) : null}
+      </div>
+    )
+  }
   return (
     <label className={`text-sm font-medium ${wide ? "md:col-span-2" : ""}`}>
       {label}
-      {required ? <span className="text-destructive"> *</span> : null}
+      {requiredMark}
       <span className="mt-2 block">{children}</span>
       {help ? (
         <span className="mt-1.5 block text-xs leading-5 font-normal text-muted-foreground">

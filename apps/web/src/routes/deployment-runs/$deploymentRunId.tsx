@@ -12,11 +12,11 @@ import {
   Download,
   FileJson,
   FileText,
-  Info,
   LoaderCircle,
   ShieldCheck,
 } from "lucide-react"
 
+import { InfoHint } from "@/components/info-hint"
 import { MetricsSkeleton } from "@/components/metrics-skeleton"
 import { PageContainer } from "@/components/page-container"
 
@@ -238,7 +238,11 @@ function DeploymentRunPage() {
           >
             Before and after
           </h2>
-          <MetricInfo text="Latency uses API response time only. Preparation, scripts, extraction, assertions, queue delay, and post-processing do not affect the performance gate." />
+          <InfoHint title="API response latency">
+            Latency uses API response time only. Preparation, scripts,
+            extraction, assertions, queue delay, and post-processing do not
+            affect the performance gate.
+          </InfoHint>
         </div>
         <div className="mt-4 overflow-hidden border-y">
           <div className="grid grid-cols-2 divide-x sm:grid-cols-3 xl:grid-cols-11">
@@ -857,7 +861,9 @@ function DistributionTable({
         >
           <span className="inline-flex items-center gap-1">
             {label}
-            <MetricInfo text={help} />
+            <InfoHint className="size-5" title={label}>
+              {help}
+            </InfoHint>
           </span>
           <span>{before}</span>
           <span>{after}</span>
@@ -879,24 +885,17 @@ function Metric({
     <div className="min-w-0 p-3">
       <p className="flex items-center gap-1 text-xs text-muted-foreground">
         {label}
-        {help ? <MetricInfo text={help} /> : null}
+        {help ? (
+          <InfoHint className="size-5" title={label}>
+            {help}
+          </InfoHint>
+        ) : null}
       </p>
       <p className="mt-1 truncate font-medium">{value}</p>
     </div>
   )
 }
-function MetricInfo({ text }: { text: string }) {
-  return (
-    <button
-      type="button"
-      className="rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label={text}
-      title={text}
-    >
-      <Info className="size-3.5" />
-    </button>
-  )
-}
+
 function DecisionBadge({ decision }: { decision: string }) {
   return (
     <Badge

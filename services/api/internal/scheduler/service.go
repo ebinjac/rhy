@@ -9,10 +9,10 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	cronlib "github.com/robfig/cron/v3"
 
 	"github.com/rhythm-monitoring/rhythm/internal/id"
@@ -48,11 +48,11 @@ type Service struct {
 	pollInterval time.Duration
 }
 
-func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger) *Service {
-	return NewWithOptions(pool, redisClient, monitorService, runService, logger, 1000, 500*time.Millisecond)
+func New(pool *pgxpool.Pool, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger) *Service {
+	return NewWithOptions(pool, monitorService, runService, logger, 1000, 500*time.Millisecond)
 }
 
-func NewWithOptions(pool *pgxpool.Pool, _ redis.UniversalClient, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger, batchSize int, pollInterval time.Duration) *Service {
+func NewWithOptions(pool *pgxpool.Pool, monitorService *monitors.Service, runService *runs.Service, logger *slog.Logger, batchSize int, pollInterval time.Duration) *Service {
 	if batchSize <= 0 {
 		batchSize = 1000
 	}
@@ -69,14 +69,16 @@ func (s *Service) Configure(ctx context.Context, monitorID string, input Config)
 	}
 	input.MonitorID = monitorID
 	input.Type = strings.ToUpper(strings.TrimSpace(input.Type))
-	if input.Timezone == "" {
-		input.Timezone = "UTC"
-	}
+	input.Timezone = normalizeTimezone(input.Timezone)
 	if input.ConcurrencyPolicy == "" {
 		input.ConcurrencyPolicy = "SKIP_IF_RUNNING"
 	}
 	if input.MissedRunPolicy == "" {
 		input.MissedRunPolicy = "SKIP"
+	}
+	if input.MissedRunPolicy == "CATCH_UP" {
+		// Persist the database-allowed alias; CATCH_UP is the scheduler's internal name.
+		input.MissedRunPolicy = "RUN_ONCE"
 	}
 	if err := s.validate(input); err != nil {
 		return Config{}, err
@@ -94,16 +96,9 @@ func (s *Service) Configure(ctx context.Context, monitorID string, input Config)
 			return Config{}, err
 		}
 	}
-	input.Active = monitor.Enabled && input.Type != "MANUAL"
 	now := time.Now().UTC()
-	if input.Active {
-		next, err := s.next(input, now, true)
-		if err != nil {
-			return Config{}, err
-		}
-		input.NextRunAt = &next
-	} else {
-		input.NextRunAt = nil
+	if err := s.applyRuntimeState(&input, monitor.Enabled, now); err != nil {
+		return Config{}, err
 	}
 	if lookupErr == nil {
 		_, err = s.pool.Exec(ctx, `UPDATE monitor_schedules SET schedule_type=$2, expression=NULLIF($3,''), interval_seconds=NULLIF($4,0), timezone=$5, jitter_seconds=$6, concurrency_policy=$7, missed_run_policy=$8, next_run_at=$9, active=$10, updated_at=$11 WHERE id=$1`, input.ID, input.Type, input.Expression, input.IntervalSeconds, input.Timezone, input.JitterSeconds, input.ConcurrencyPolicy, input.MissedRunPolicy, input.NextRunAt, input.Active, now)
@@ -125,18 +120,30 @@ func (s *Service) Get(ctx context.Context, monitorID string) (Config, error) {
 	return result, err
 }
 
-func (s *Service) validate(config Config) error {
-	if _, err := time.LoadLocation(config.Timezone); err != nil {
-		return ValidationError{Message: "Timezone is invalid."}
+func (s *Service) applyRuntimeState(input *Config, monitorEnabled bool, now time.Time) error {
+	input.Active = monitorEnabled && input.Type != "MANUAL"
+	if !input.Active {
+		input.NextRunAt = nil
+		return nil
 	}
+	next, err := s.next(*input, now.UTC(), true)
+	if err != nil {
+		return err
+	}
+	next = next.UTC()
+	input.NextRunAt = &next
+	return nil
+}
+
+func (s *Service) validate(config Config) error {
 	if config.JitterSeconds < 0 || config.JitterSeconds > 3600 {
 		return ValidationError{Message: "Jitter must be between 0 and 3,600 seconds."}
 	}
 	if config.ConcurrencyPolicy != "SKIP_IF_RUNNING" && config.ConcurrencyPolicy != "QUEUE" && config.ConcurrencyPolicy != "ALLOW" {
 		return ValidationError{Message: "Concurrency policy is invalid."}
 	}
-	if config.MissedRunPolicy != "SKIP" && config.MissedRunPolicy != "CATCH_UP" {
-		return ValidationError{Message: "Missed-run policy must be SKIP or CATCH_UP."}
+	if config.MissedRunPolicy != "SKIP" && config.MissedRunPolicy != "CATCH_UP" && config.MissedRunPolicy != "RUN_ONCE" {
+		return ValidationError{Message: "Missed-run policy must be SKIP or RUN_ONCE."}
 	}
 	switch config.Type {
 	case "MANUAL":
@@ -156,23 +163,42 @@ func (s *Service) validate(config Config) error {
 }
 
 func (s *Service) next(config Config, after time.Time, initial bool) (time.Time, error) {
-	location, _ := time.LoadLocation(config.Timezone)
+	after = after.UTC()
 	switch config.Type {
 	case "INTERVAL":
 		next := after.Add(time.Duration(config.IntervalSeconds) * time.Second)
 		if initial {
 			next = next.Add(deterministicJitter(config.ID, config.JitterSeconds))
 		}
-		return next, nil
+		return next.UTC(), nil
 	case "CRON":
 		schedule, err := s.parser.Parse(config.Expression)
 		if err != nil {
 			return time.Time{}, err
 		}
-		return schedule.Next(after.In(location)).UTC().Add(deterministicJitter(config.ID, config.JitterSeconds)), nil
+		return schedule.Next(after.In(timezoneLocation(config.Timezone))).UTC().Add(deterministicJitter(config.ID, config.JitterSeconds)), nil
 	default:
 		return time.Time{}, ValidationError{Message: "Manual schedules have no next run."}
 	}
+}
+
+func normalizeTimezone(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "UTC"
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return "UTC"
+	}
+	return name
+}
+
+func timezoneLocation(name string) *time.Location {
+	location, err := time.LoadLocation(strings.TrimSpace(name))
+	if err != nil || location == nil {
+		return time.UTC
+	}
+	return location
 }
 
 func (s *Service) Start(ctx context.Context) {

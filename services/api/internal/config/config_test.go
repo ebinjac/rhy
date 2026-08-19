@@ -31,15 +31,6 @@ func TestS3UsesAWSDefaultEndpointAndWorkloadIdentity(t *testing.T) {
 	}
 }
 
-func TestClusterRedisRejectsNonZeroDatabase(t *testing.T) {
-	t.Setenv("RHYTHM_REDIS_MODE", "cluster")
-	t.Setenv("RHYTHM_REDIS_DB", "2")
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "must be 0") {
-		t.Fatalf("expected Redis cluster database guard, got %v", err)
-	}
-}
-
 func TestInternalAuthenticationCannotExposePublicAPI(t *testing.T) {
 	t.Setenv("RHYTHM_AUTH_MODE", "internal")
 	t.Setenv("RHYTHM_ROLE", "api")
@@ -52,9 +43,8 @@ func TestInternalAuthenticationCannotExposePublicAPI(t *testing.T) {
 func TestPostgresStorageDefaultsToPostgresQueueAndAnonymousUnrestrictedAccess(t *testing.T) {
 	t.Setenv("RHYTHM_STORAGE_MODE", "postgres")
 	t.Setenv("RHYTHM_DATABASE_URL", "postgres://rhythm:test@postgres/rhythm")
-	t.Setenv("RHYTHM_QUEUE_BACKEND", "")
-	t.Setenv("RHYTHM_REDIS_URL", "")
-	t.Setenv("RHYTHM_REDIS_ADDRS", "")
+	t.Setenv("RHYTHM_QUEUE_BACKEND", "redis")
+	t.Setenv("RHYTHM_REDIS_URL", "redis://should-be-ignored:6379")
 	t.Setenv("RHYTHM_AUTH_MODE", "")
 	t.Setenv("RHYTHM_UNRESTRICTED_OUTBOUND", "")
 
@@ -73,12 +63,17 @@ func TestPostgresStorageDefaultsToPostgresQueueAndAnonymousUnrestrictedAccess(t 
 	}
 }
 
-func TestRedisQueueRequiresRedisConnection(t *testing.T) {
-	t.Setenv("RHYTHM_QUEUE_BACKEND", "redis")
-	t.Setenv("RHYTHM_REDIS_URL", "")
-	t.Setenv("RHYTHM_REDIS_ADDRS", "")
-	_, err := Load()
-	if err == nil || !strings.Contains(err.Error(), "requires RHYTHM_REDIS_URL") {
-		t.Fatalf("expected Redis connection validation, got %v", err)
+func TestSaharaIngestURLIsOptional(t *testing.T) {
+	t.Setenv("RHYTHM_SAHARA_INGEST_URL", "https://saharaingest-dev.aexp.com/api/v1/events")
+	t.Setenv("RHYTHM_SAHARA_TIMEOUT_MS", "8000")
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("load configuration: %v", err)
+	}
+	if config.SaharaIngestURL != "https://saharaingest-dev.aexp.com/api/v1/events" {
+		t.Fatalf("ingest URL=%q", config.SaharaIngestURL)
+	}
+	if config.SaharaTimeoutMS != 8000 {
+		t.Fatalf("timeout=%d", config.SaharaTimeoutMS)
 	}
 }

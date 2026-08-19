@@ -1,0 +1,25 @@
+{
+  "name": "Rhythm API Test Lab smoke test",
+  "slug": "api-test-lab-smoke",
+  "definition": {
+    "schemaVersion": 1,
+    "steps": [
+      {
+        "id": "echo",
+        "name": "Echo request",
+        "type": "HTTP_REQUEST",
+        "enabled": true,
+        "timeoutMs": 5000,
+        "request": {
+          "method": "POST",
+          "url": "{{test_lab_url}}/api/echo",
+          "headers": [{ "key": "Content-Type", "value": "application/json", "enabled": true }],
+          "body": { "type": "raw", "content": "{\"source\":\"rhythm\"}" },
+          "assertions": [{ "enabled": true, "type": "status", "expected": "200" }],
+          "settings": { "timeoutMs": 5000 }
+        }
+      }
+    ]
+  }
+}
+

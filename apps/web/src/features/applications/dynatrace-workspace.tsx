@@ -604,7 +604,7 @@ function ConfigurationEditor({
       <div className="mt-6 grid gap-x-6 gap-y-5 lg:grid-cols-2">
         <Field
           label="Dynatrace connection"
-          help="Only administrator-approved telemetry profiles are available."
+          help="Only configured telemetry profiles are available."
         >
           <div>
             <Select

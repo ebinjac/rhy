@@ -875,10 +875,22 @@ func conditionOperand(operand string, values map[string]string, requireVariable 
 }
 
 func (s *Service) List(ctx context.Context, monitorID string) ([]Run, error) {
-	if _, err := s.monitors.Get(ctx, monitorID); err != nil {
+	page, err := s.ListPage(ctx, monitorID, PageQuery{Limit: 50})
+	if err != nil {
 		return nil, err
 	}
-	return s.repository.List(ctx, monitorID, 50)
+	return page.Items, nil
+}
+
+func (s *Service) ListPage(ctx context.Context, monitorID string, query PageQuery) (Page, error) {
+	if _, err := s.monitors.Get(ctx, monitorID); err != nil {
+		return Page{}, err
+	}
+	query.Limit = normalizeRunPageLimit(query.Limit)
+	query.Status = strings.TrimSpace(query.Status)
+	query.TriggerType = strings.TrimSpace(query.TriggerType)
+	query.Query = strings.TrimSpace(query.Query)
+	return s.repository.ListPage(ctx, monitorID, query)
 }
 
 func (s *Service) ListRecent(ctx context.Context, limit int) ([]Run, error) {

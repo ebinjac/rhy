@@ -1,0 +1,45 @@
+name: rhythm-api-test-lab
+
+services:
+  test-lab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rhythm-api-test-lab:local
+    environment:
+      TEST_LAB_ENVIRONMENT: local
+      TEST_LAB_DETERMINISTIC: "false"
+      TEST_LAB_ADMIN_ENABLED: "true"
+      TEST_LAB_ECHO_SENSITIVE: "false"
+      TEST_LAB_PROXY_REQUIRE_AUTH: "false"
+    ports:
+      - "9080:9080"
+      - "9081:9081"
+      - "9443:9443"
+      - "9444:9444"
+      - "9445:9445"
+      - "9446:9446"
+    volumes:
+      - test-lab-certs:/certs
+    networks:
+      default:
+        aliases:
+          - rhythm-test-lab
+          - test-api.local
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9080/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 5s
+
+volumes:
+  test-lab-certs:

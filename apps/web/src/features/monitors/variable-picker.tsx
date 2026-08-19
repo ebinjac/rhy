@@ -2,6 +2,7 @@ import { useMemo, useState } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   Popover,
   PopoverContent,
@@ -126,12 +127,14 @@ export function VariablePicker({
   open,
   onOpenChange,
   label = "Insert variable",
+  triggerClassName,
 }: {
   entries: VariableCatalogEntry[]
   onInsert: (entry: VariableCatalogEntry, explicit: boolean) => void
   open?: boolean
   onOpenChange?: (open: boolean) => void
   label?: string
+  triggerClassName?: string
 }) {
   const [query, setQuery] = useState("")
   return (
@@ -142,7 +145,7 @@ export function VariablePicker({
             type="button"
             size="sm"
             variant="outline"
-            className="min-h-11 shrink-0 md:min-h-8"
+            className={cn("min-h-11 shrink-0 md:min-h-8", triggerClassName)}
             aria-label={label || "Insert variable"}
           />
         }

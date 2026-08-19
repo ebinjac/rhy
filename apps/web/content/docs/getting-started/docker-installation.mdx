@@ -11,7 +11,7 @@ keywords: [Docker, installation, local]
 
 ## Prerequisites
 
-Install Docker Desktop with enough memory for PostgreSQL, MinIO, the API, and the browser agent. Redis is optional because PostgreSQL is the default queue transport.
+Install Docker Desktop with enough memory for PostgreSQL, MinIO, the API, and the browser agent. PostgreSQL provides both durable storage and the job transport.
 
 <Procedure>
 1. Clone the Rhythm repository.
@@ -26,6 +26,6 @@ docker compose ps
 curl --fail http://localhost:18080/healthz
 ```
 
-<ExpectedResult>The API reports `ok` and the web interface loads without Redis.</ExpectedResult>
+<ExpectedResult>The API reports `ok` and the web interface loads with PostgreSQL-backed job processing.</ExpectedResult>
 
 <FailureExample>If the API is not ready, inspect the migration and PostgreSQL health before rebuilding application containers.</FailureExample>

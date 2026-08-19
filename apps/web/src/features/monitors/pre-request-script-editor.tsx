@@ -4,11 +4,15 @@ import type * as Monaco from "monaco-editor"
 import { Badge } from "@workspace/ui/components/badge"
 import { EditorLoading } from "@/components/editor-loading"
 import { Button } from "@workspace/ui/components/button"
+import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Input } from "@workspace/ui/components/input"
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@workspace/ui/components/native-select"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import {
   Sheet,
   SheetContent,
@@ -93,6 +97,126 @@ if (pm.request) {
 
 console.log("Prepared request", pm.variables.replaceIn("trace={{traceId}} / {{$guid}}"));
 `
+
+const rhythmStarter = `// Rhythm-native pre-request script
+// Runs completely before the main request is rendered and sent.
+const correlationId = rhythm.random.uuid();
+rhythm.variables.set("correlationId", correlationId);
+rhythm.environment.set("preparedAt", String(rhythm.time.timestampMs()));
+rhythm.request.headers.set("X-Correlation-ID", correlationId);
+
+console.log("Prepared request", rhythm.variables.replaceIn("correlation={{correlationId}}"));
+`
+
+const preRequestTemplates = [
+  { label: "Blank script", value: "" },
+  {
+    label: "Generate timestamp",
+    value:
+      'const timestamp = rhythm.time.timestampMs();\nrhythm.variables.set("timestamp", String(timestamp));',
+  },
+  {
+    label: "Generate UUID",
+    value:
+      'const correlationId = rhythm.random.uuid();\nrhythm.variables.set("correlation_id", correlationId);\nrhythm.request.headers.set("X-Correlation-ID", correlationId);',
+  },
+  {
+    label: "HMAC SHA-256",
+    value:
+      'const secret = rhythm.secrets.get("hmac_secret");\nconst input = rhythm.variables.replaceIn("{{signing_input}}");\nconst signature = rhythm.crypto.hmacSHA256(input, secret, { encoding: "base64" });\nrhythm.request.headers.set("X-Signature", signature);',
+  },
+  {
+    label: "MAC authentication",
+    value: `const key = rhythm.secrets.get("mac_key");
+const secret = rhythm.secrets.get("mac_secret");
+const ts = rhythm.time.timestampMs();
+const nonce = rhythm.random.string(36);
+const method = rhythm.request.method;
+const requestUrl = rhythm.variables.replaceIn(rhythm.request.url);
+const url = new URL(requestUrl);
+const resourceUri = url.pathname + url.search;
+const payload = rhythm.variables.replaceIn(rhythm.request.body || "");
+const bodyHash = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(payload, secret));
+const canonical = ts + "\\n" + nonce + "\\n" + method + "\\n" + resourceUri + "\\n" + url.hostname + "\\n" + (url.port || "443") + "\\n" + bodyHash + "\\n";
+const mac = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(canonical, secret));
+const signature = 'MAC id="' + key + '",ts="' + ts + '",nonce="' + nonce + '",bodyhash="' + bodyHash + '",mac="' + mac + '"';
+rhythm.environment.set("signature", signature);
+rhythm.request.headers.set("Authorization", signature);`,
+  },
+  {
+    label: "HMAC token retrieval",
+    value: `const clientId = rhythm.secrets.get("clientId");
+const secret = rhythm.secrets.get("secret");
+const version = "2";
+const timestamp = rhythm.time.timestampMs();
+const signingInput = clientId + "-" + version + "-" + timestamp;
+const secretBytes = CryptoJS.enc.Base64.parse(secret);
+let signature = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(signingInput, secretBytes));
+signature = signature.replace(/=+$/, "").replace(/\\+/g, "-").replace(/\\//g, "_");
+const authResponse = await rhythm.sendRequest({
+  url: "{{AUTH_BASE_URL}}/security/digital/v1/application/token",
+  method: "POST",
+  timeout: 10000,
+  headers: {
+    "Content-Type": "application/json",
+    "X-Auth-AppID": clientId,
+    "X-Auth-Signature": signature,
+    "X-Auth-Timestamp": String(timestamp),
+    "X-Auth-Version": version
+  },
+  body: { scope: ["*"] }
+});
+if (authResponse.statusCode !== 200) throw new Error("Authentication failed with HTTP " + authResponse.statusCode);
+const token = authResponse.json().authorization_token;
+rhythm.environment.set("auth_token_keyset", token);
+rhythm.request.headers.set("Authorization", "Bearer " + token);`,
+  },
+  {
+    label: "Bearer token retrieval",
+    value:
+      'const response = await rhythm.sendRequest({ method: "POST", url: "{{AUTH_URL}}", headers: { "Content-Type": "application/json" }, body: { client_id: rhythm.secrets.get("client_id") } });\nif (response.statusCode !== 200) throw new Error("Token request failed: " + response.statusCode);\nconst token = response.json().access_token;\nrhythm.environment.set("access_token", token);\nrhythm.request.headers.set("Authorization", "Bearer " + token);',
+  },
+  {
+    label: "OAuth client credentials",
+    value:
+      'const credentials = btoa(rhythm.secrets.get("client_id") + ":" + rhythm.secrets.get("client_secret"));\nconst response = await rhythm.sendRequest({ method: "POST", url: "{{TOKEN_URL}}", headers: { Authorization: "Basic " + credentials, "Content-Type": "application/x-www-form-urlencoded" }, body: "grant_type=client_credentials&scope={{OAUTH_SCOPE}}" });\nconst token = response.json().access_token;\nrhythm.variables.set("access_token", token);\nrhythm.request.headers.set("Authorization", "Bearer " + token);',
+  },
+  {
+    label: "JWT (HS256)",
+    value:
+      'const jwt = rhythm.crypto.jwt.sign({ alg: "HS256", payload: { sub: "application", iss: "{{JWT_ISSUER}}", aud: "{{JWT_AUDIENCE}}", exp: rhythm.time.timestampSeconds() + 300 }, secret: rhythm.secrets.get("jwt_secret") });\nrhythm.request.headers.set("Authorization", "Bearer " + jwt);',
+  },
+  {
+    label: "API key",
+    value:
+      'rhythm.request.headers.set("X-API-Key", rhythm.secrets.get("api_key"));',
+  },
+  {
+    label: "Chained authentication requests",
+    value:
+      'const auth = await rhythm.sendRequest({ method: "POST", url: "{{AUTH_URL}}", body: { username: rhythm.secrets.get("username") } });\nconst token = auth.json().token;\nconst session = await rhythm.sendRequest({ method: "POST", url: "{{SESSION_URL}}", headers: { Authorization: "Bearer " + token } });\nrhythm.environment.set("session_id", session.json().sessionId);\nrhythm.request.headers.set("X-Session-ID", session.json().sessionId);',
+  },
+  {
+    label: "Extract token from response",
+    value:
+      'const response = await rhythm.sendRequest("{{AUTH_URL}}");\nconst token = response.json().authorization_token;\nrhythm.environment.set("auth_token", token);\nrhythm.request.headers.set("Authorization", "Bearer " + token);',
+  },
+  {
+    label: "Dynamic request body",
+    value:
+      'rhythm.request.setBody({ transactionId: rhythm.random.uuid(), timestamp: rhythm.time.timestampMs(), customerId: rhythm.environment.get("customerId") });',
+  },
+  {
+    label: "Dynamic header",
+    value:
+      'rhythm.request.headers.set("X-Timestamp", String(rhythm.time.timestampMs()));\nrhythm.request.headers.set("X-Request-ID", rhythm.random.uuid());',
+  },
+  {
+    label: "Basic authentication",
+    value:
+      'const credentials = btoa(rhythm.secrets.get("username") + ":" + rhythm.secrets.get("password"));\nrhythm.request.headers.set("Authorization", "Basic " + credentials);',
+  },
+]
 
 const testStarter = `// Postman-compatible response Tests script (pm.*)
 // Runs after the response is received.
@@ -223,7 +347,12 @@ export function PreRequestScriptEditor({
   variables = [],
 }: Props) {
   const isTest = phase === "test"
-  const starter = isTest ? testStarter : preRequestStarter
+  const apiMode = value.apiMode ?? "rhythm"
+  const starter = isTest
+    ? testStarter
+    : apiMode === "postman"
+      ? preRequestStarter
+      : rhythmStarter
   const snippets = isTest ? testSnippets : commonSnippets
   const canPreview = Boolean(monitorId && revisionId)
   const [mounted, setMounted] = useState(false)
@@ -282,7 +411,7 @@ export function PreRequestScriptEditor({
     completionDisposableRef.current?.dispose()
     completionDisposableRef.current =
       monaco.languages.registerCompletionItemProvider("javascript", {
-        triggerCharacters: ['"', "'", "{"],
+        triggerCharacters: ['"', "'", "{", "."],
         provideCompletionItems(
           model: Monaco.editor.ITextModel,
           position: Monaco.Position
@@ -292,14 +421,18 @@ export function PreRequestScriptEditor({
             .getLineContent(position.lineNumber)
             .slice(0, position.column - 1)
           const scoped = before.match(
-            /pm\.(variables|environment|collectionVariables|globals)\.(?:get|has|set|unset)\(\s*["']([^"']*)$/
+            /(?:pm\.(variables|environment|collectionVariables|globals)|rhythm\.(variables|environment|application|service|globals))\.(?:get|has|set|unset)\(\s*["']([^"']*)$/
           )
-          const vault = before.match(/pm\.vault\.get\(\s*["']([^"']*)$/)
+          const vault = before.match(
+            /(?:pm\.vault|rhythm\.secrets)\.get\(\s*["']([^"']*)$/
+          )
           const template = before.match(/\{\{([^}]*)$/)
           if (!scoped && !vault && !template) return { suggestions: [] }
           const requestedScope =
-            scoped?.[1] === "collectionVariables" ? "collection" : scoped?.[1]
-          const typed = scoped?.[2] ?? vault?.[1] ?? template?.[1] ?? ""
+            scoped?.[1] === "collectionVariables"
+              ? "collection"
+              : (scoped?.[1] ?? scoped?.[2])
+          const typed = scoped?.[3] ?? vault?.[1] ?? template?.[1] ?? ""
           const startColumn = position.column - typed.length
           const suggestions = completionRef.current
             .filter((entry) => {
@@ -460,11 +593,91 @@ export function PreRequestScriptEditor({
           <p className="text-xs text-muted-foreground">
             {isTest
               ? "Postman-compatible pm.* — runs after the response and can inspect pm.response."
-              : "Postman-compatible pm.* — runs before the request when the script has content."}
+              : apiMode === "postman"
+                ? "Postman compatibility — pm.*, CryptoJS, and callback or Promise requests run before the main request."
+                : "Rhythm native — secure signing, dependency requests, variables, and request mutation run before the main request."}
           </p>
         </div>
         <Badge variant="outline">rhythm-js-2</Badge>
         <VariableCatalogSheet entries={variables} />
+        {!isTest ? (
+          <div className="w-48">
+            <Select
+              value={apiMode}
+              onValueChange={(nextMode) =>
+                onChange(
+                  normalizeScriptDefinition({
+                    ...value,
+                    apiMode: nextMode as "rhythm" | "postman",
+                  })
+                )
+              }
+              items={[
+                { value: "rhythm", label: "Rhythm native" },
+                { value: "postman", label: "Postman compatibility" },
+              ]}
+            >
+              <SelectTrigger
+                aria-label="Pre-request API mode"
+                className="h-9 min-h-11 w-full md:min-h-9"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="rhythm">Rhythm native</SelectItem>
+                <SelectItem value="postman">Postman compatibility</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+        {!isTest ? (
+          <div className="w-52">
+            <Select
+              value={null}
+              onValueChange={(template) => {
+                if (template) insert(template)
+              }}
+              items={preRequestTemplates
+                .filter((template) => template.value)
+                .map((template) => ({
+                  value: template.value,
+                  label: template.label,
+                }))}
+            >
+              <SelectTrigger
+                aria-label="Insert pre-request template"
+                className="h-9 min-h-11 w-full md:min-h-9"
+              >
+                <SelectValue placeholder="Insert template…" />
+              </SelectTrigger>
+              <SelectContent>
+                {preRequestTemplates
+                  .filter((template) => template.value)
+                  .map((template) => (
+                    <SelectItem key={template.label} value={template.value}>
+                      {template.label}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
+        {!isTest ? (
+          <label className="flex min-h-11 items-center gap-2 rounded-lg border px-3 text-xs text-muted-foreground md:min-h-9">
+            <Checkbox
+              checked={Boolean(value.continueOnFailure)}
+              onCheckedChange={(checked) =>
+                onChange(
+                  normalizeScriptDefinition({
+                    ...value,
+                    continueOnFailure: checked === true,
+                  })
+                )
+              }
+            />
+            Continue main request on failure
+          </label>
+        ) : null}
         {!value.code ? (
           <Button
             type="button"
@@ -476,18 +689,33 @@ export function PreRequestScriptEditor({
             <Braces data-icon="inline-start" /> Add starter
           </Button>
         ) : null}
-        <NativeSelect
-          className="min-h-11 w-44 md:min-h-9"
-          aria-label="Insert script snippet"
-          value=""
-          onChange={(event) => insert(event.target.value)}
-        >
-          {snippets.map((item) => (
-            <NativeSelectOption key={item.label} value={item.value}>
-              {item.label}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+        <div className="w-44">
+          <Select
+            value={null}
+            onValueChange={(value) => {
+              if (value) insert(value)
+            }}
+            items={snippets
+              .filter((item) => item.value)
+              .map((item) => ({ value: item.value, label: item.label }))}
+          >
+            <SelectTrigger
+              aria-label="Insert script snippet"
+              className="h-9 min-h-11 w-full md:min-h-9"
+            >
+              <SelectValue placeholder="Insert snippet…" />
+            </SelectTrigger>
+            <SelectContent>
+              {snippets
+                .filter((item) => item.value)
+                .map((item) => (
+                  <SelectItem key={item.label} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+            </SelectContent>
+          </Select>
+        </div>
         {desktop ? (
           <>
             <Button
@@ -543,7 +771,7 @@ export function PreRequestScriptEditor({
           ) : (
             <Play data-icon="inline-start" />
           )}{" "}
-          Run script preview
+          {isTest ? "Run Tests preview" : "Run pre-request only"}
         </Button>
       </div>
       {!canPreview ? (
@@ -637,8 +865,8 @@ function ScriptDocs({ phase }: { phase: "prerequest" | "test" }) {
         <div className="space-y-5 overflow-y-auto px-6 pb-6 text-sm">
           <Doc
             title="Variables"
-            code="pm.variables · pm.environment · pm.collectionVariables · pm.globals · pm.iterationData"
-            text="Use has, get, set, unset, clear, replaceIn, and toObject. Mutations are isolated to this run."
+            code="rhythm.variables · rhythm.service · rhythm.application · rhythm.environment · rhythm.globals"
+            text="Use has, get, set, unset, clear, replaceIn, and toObject. Closest scope wins and every mutation remains isolated to this run. Postman pm.* aliases remain available."
           />
           <Doc
             title="Request, response, and cookies"
@@ -650,11 +878,16 @@ function ScriptDocs({ phase }: { phase: "prerequest" | "test" }) {
             }
           />
           <Doc
-            title="Secrets, state, and datasets"
+            title="Secrets and cryptography"
             code={
-              'await pm.vault.get("alias") · await pm.state.set("key", value) · pm.datasets("current-iteration")'
+              'rhythm.secrets.get("alias") · CryptoJS.HmacSHA256 · rhythm.crypto.hmacSHA256'
             }
-            text="Vault values are read-only and masked. State and current-iteration dataset values are run-local; preview never mutates saved resources."
+            text="Secrets are read-only and masked. CryptoJS Base64/Hex/UTF-8 encoders, SHA-256, HMAC SHA-256/384/512, Base64URL, and HS256 JWT signing are supported."
+          />
+          <Doc
+            title="Time and random values"
+            code="rhythm.time.timestampMs() · rhythm.random.string(36) · rhythm.random.uuid()"
+            text="Generate timestamps, ISO dates, nonces, UUIDs, random hex, and bounded random byte arrays without leaving the sandbox."
           />
           <Doc
             title="Checks and visualizers"
@@ -668,8 +901,8 @@ function ScriptDocs({ phase }: { phase: "prerequest" | "test" }) {
           />
           <Doc
             title="Auxiliary HTTP"
-            code="await pm.sendRequest(config)"
-            text="Promise and callback forms are supported, with five calls per script and the same target, timeout, cancellation, masking, proxy, and TLS policies."
+            code="await rhythm.sendRequest(config) · pm.sendRequest(config, callback)"
+            text="Dependency calls finish before the main request. Promise and callback forms support five calls per script, per-call timeouts, response JSON/text/status/size/timing, and inherited target, cancellation, masking, proxy, certificate, and TLS policies."
           />
           <Doc
             title="Web APIs"
@@ -840,7 +1073,7 @@ function EvidencePanel({
               {result?.logs.length ? `(${result.logs.length})` : ""}
             </TabsTrigger>
             <TabsTrigger value="requests">
-              <Network /> pm.sendRequest {aux.length ? `(${aux.length})` : ""}
+              <Network /> Dependency requests {aux.length ? `(${aux.length})` : ""}
             </TabsTrigger>
             <TabsTrigger value="packages">
               <Braces /> Packages{" "}
@@ -931,7 +1164,9 @@ function EvidencePanel({
                             : "—"}
                       </span>
                       <span className="font-mono text-muted-foreground">
-                        {request.durationMs ?? 0} ms
+                        {(request.durationMs ?? 0) < 1
+                          ? "<1 ms"
+                          : `${request.durationMs} ms`}
                       </span>
                     </div>
                     {request.error ? (
@@ -940,13 +1175,13 @@ function EvidencePanel({
                       </p>
                     ) : null}
                     <p className="font-sans text-[11px] text-muted-foreground">
-                      pm.sendRequest #{index + 1}
+                      {request.source ?? "pm.sendRequest"} #{index + 1}
                     </p>
                   </div>
                 )
               })
             ) : (
-              <Empty text="Outbound pm.sendRequest calls appear here after preview." />
+              <Empty text="Governed rhythm.sendRequest and pm.sendRequest calls appear here after preview." />
             )}
           </TabsContent>
           <TabsContent value="packages">
@@ -1014,7 +1249,13 @@ function EvidencePanel({
                   className="grid grid-cols-[70px_1fr] gap-2 border-b py-2 last:border-0"
                   key={`${problem.code}-${index}`}
                 >
-                  <span className="text-destructive">
+                  <span
+                    className={
+                      problem.severity === "error"
+                        ? "text-destructive"
+                        : "text-warning-foreground"
+                    }
+                  >
                     Ln {problem.line}:{problem.column}
                   </span>
                   <div>
@@ -1071,7 +1312,24 @@ function Empty({ text }: { text: string }) {
     </p>
   )
 }
-const pmTypes = `declare const pm: {
+const pmTypes = `declare const rhythm: {
+  variables: VariableScope; environment: VariableScope; globals: VariableScope; application: VariableScope; service: VariableScope;
+  secrets: { get(alias:string):string; has(alias:string):boolean };
+  request: RhythmRequest | null; response: ScriptResponse | undefined;
+  sendRequest(config:string|DependencyRequest, callback?:(error:Error|null,response:ScriptResponse)=>void):Promise<ScriptResponse>|void;
+  time: { timestampMs():number; timestampSeconds():number; iso():string };
+  random: { string(length?:number,alphabet?:string):string; uuid():string; hex(length?:number):string; bytes(length?:number):Uint8Array };
+  crypto: { hmacSHA256(input:CryptoValue,key:CryptoValue,options?:CryptoOutput):string|Uint8Array; hmacSHA384(input:CryptoValue,key:CryptoValue,options?:CryptoOutput):string|Uint8Array; hmacSHA512(input:CryptoValue,key:CryptoValue,options?:CryptoOutput):string|Uint8Array; sha256(input:CryptoValue,options?:CryptoOutput):string|Uint8Array; base64Encode(value:CryptoValue):string; base64Decode(value:string):string; base64UrlEncode(value:CryptoValue,options?:{padding?:boolean}):string; base64UrlDecode(value:string):string; jwt:{sign(options:{alg:"HS256";header?:Record<string,unknown>;payload:Record<string,unknown>;secret:CryptoValue}):string} };
+  console: Console;
+};
+declare const CryptoJS: {
+  enc: { Base64:CryptoEncoder; Hex:CryptoEncoder; Utf8:CryptoEncoder };
+  lib: { WordArray:{create(value?:CryptoValue):CryptoWordArray;random(length:number):CryptoWordArray} };
+  HmacSHA256(value:CryptoValue,key:CryptoValue):CryptoWordArray; HmacSHA384(value:CryptoValue,key:CryptoValue):CryptoWordArray; HmacSHA512(value:CryptoValue,key:CryptoValue):CryptoWordArray; HmacSHA1(value:CryptoValue,key:CryptoValue):CryptoWordArray;
+  SHA256(value:CryptoValue):CryptoWordArray; SHA1(value:CryptoValue):CryptoWordArray; MD5(value:CryptoValue):CryptoWordArray;
+};
+declare const postman: { setGlobalVariable(name:string,value:unknown):void; getGlobalVariable(name:string):string|undefined; clearGlobalVariable(name:string):void };
+declare const pm: {
   variables: VariableScope; environment: VariableScope; collectionVariables: VariableScope; globals: VariableScope;
   iterationData: ReadonlyVariableScope;
   cookies: { has(name:string):boolean; get(name:string):string|undefined; set(name:string,value:unknown):void; unset(name:string):void; clear():void; toObject():Record<string,string>; jar():CookieJar };
@@ -1094,9 +1352,16 @@ declare function require(name:string):any;
 interface VariableScope { has(key:string):boolean; get(key:string):string|undefined; set(key:string,value:unknown):void; unset(key:string):void; clear():void; replaceIn(value:string):string; toObject():Record<string,string> }
 interface ReadonlyVariableScope { has(key:string):boolean; get(key:string):string|undefined; replaceIn(value:string):string; toObject():Record<string,string> }
 interface ScriptRequestUrl { toString():string; toJSON():string; getQueryString():string; addQueryParams(items:string|{key:string;value:string}|Array<{key:string;value:string}>):ScriptRequestUrl; removeQueryParams(names:string|string[]):ScriptRequestUrl }
-interface PropertyList { add(item:{key:string;value:string;sensitive?:boolean}):PropertyList; append(item:{key:string;value:string;sensitive?:boolean}):PropertyList; upsert(item:{key:string;value:string;sensitive?:boolean}):PropertyList; remove(key:string):PropertyList; get(key:string):string|undefined; has(key:string):boolean; all():Array<{key:string;value:string}>; each(callback:(item:{key:string;value:string},index:number)=>void):PropertyList; count():number; clear():PropertyList; toObject():Record<string,string> }
+interface PropertyList { add(item:{key:string;value:string;sensitive?:boolean}):PropertyList; append(item:{key:string;value:string;sensitive?:boolean}):PropertyList; upsert(item:{key:string;value:string;sensitive?:boolean}):PropertyList; set(name:string,value:string):PropertyList; set(item:{key:string;value:string;sensitive?:boolean}):PropertyList; remove(key:string):PropertyList; get(key:string):string|undefined; has(key:string):boolean; all():Array<{key:string;value:string}>; each(callback:(item:{key:string;value:string},index:number)=>void):PropertyList; count():number; clear():PropertyList; toObject():Record<string,string> }
 interface CookieJar { get(url:string,name:string,callback?:(error:Error|null,value?:string)=>void):Promise<string|undefined>|void; getAll(url:string,callback?:(error:Error|null,value?:Array<{name:string;value:string}>)=>void):Promise<Array<{name:string;value:string}>>|void; set(url:string,cookie:{name:string;value:string},callback?:(error:Error|null)=>void):Promise<unknown>|void; unset(url:string,name:string,callback?:(error:Error|null)=>void):Promise<void>|void; clear(url:string,callback?:(error:Error|null)=>void):Promise<void>|void }
-interface ScriptResponse { code:number; status:string; headers:PropertyList; responseTime:number; responseSize:number; stream:Uint8Array; text():string; json():unknown; toJSON():Record<string,unknown>; to:{have:{status(code:number):void;header(name:string,value?:string):void;jsonBody(path?:string,value?:unknown):void;body(value:string):void};be:{readonly success:void;readonly error:void;readonly clientError:void;readonly serverError:void}} }
+interface RhythmRequest { method:string; url:string; body:string; headers:RhythmHeaders; query:PropertyList; auth:Record<string,unknown>; setUrl(value:string):unknown; setMethod(value:string):unknown; setBody(value:unknown):unknown }
+interface RhythmHeaders { add(name:string,value:string):void; add(item:{key:string;value:string;sensitive?:boolean}):void; set(name:string,value:string):void; remove(name:string):void; get(name:string):string|undefined; has(name:string):boolean; toObject():Record<string,string> }
+interface DependencyRequest { url:string; method?:string; headers?:Record<string,string>|Array<{key:string;value:string}>; body?:unknown; timeout?:number }
+type CryptoValue = string|ArrayBuffer|ArrayBufferView|number[]|CryptoWordArray;
+type CryptoOutput = "hex"|"base64"|"base64url"|"raw"|{encoding?:"hex"|"base64"|"base64url"|"raw"};
+interface CryptoWordArray { readonly bytes:number[]; readonly sigBytes:number; toString(encoder?:CryptoEncoder):string }
+interface CryptoEncoder { stringify(value:CryptoValue):string; parse(value:string):CryptoWordArray }
+interface ScriptResponse { code:number; statusCode:number; status:string; headers:PropertyList; responseTime:number; responseSize:number; size:number; stream:Uint8Array; text():string; json():unknown; toJSON():Record<string,unknown>; to:{have:{status(code:number):void;header(name:string,value?:string):void;jsonBody(path?:string,value?:unknown):void;body(value:string):void};be:{readonly success:void;readonly error:void;readonly clientError:void;readonly serverError:void}} }
 interface DatasetResult { columns:string[]; rows:Array<Record<string,unknown>> }
 interface DatasetHandle { executeView(viewId:string,params?:string[]):Promise<DatasetResult>; executeQuery(sql:string,params?:string[]):Promise<DatasetResult> }
 interface DatasetFactory { (datasetId:string):DatasetHandle; getAll():Promise<unknown[]>; getOne(id:string):Promise<unknown>; getData(id:string):Promise<Array<Record<string,unknown>>>; getDataByRowIdentifier(id:string,row:number|string):Promise<Record<string,unknown>|undefined>; getDataByColumnIdentifier(id:string,column:string):Promise<unknown[]> }

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"net/url"
 	"strconv"
@@ -27,11 +28,31 @@ type CredentialDecryptor interface {
 	DecryptStored(ciphertext string) (string, error)
 }
 
+type SMTPConfig struct {
+	Host     string
+	Port     int
+	From     string
+	FromName string
+	Username string
+	Password string
+}
+
+type DirectEmailInput struct {
+	From     string `json:"from"`
+	FromName string `json:"fromName"`
+	To       string `json:"to"`
+	CC       string `json:"cc"`
+	BCC      string `json:"bcc"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+}
+
 type Service struct {
 	pool     *pgxpool.Pool
 	secrets  SecretResolver
 	logger   *slog.Logger
 	client   *http.Client
+	smtp     SMTPConfig
 	sendMail func(addr string, a smtp.Auth, from string, to []string, msg []byte) error
 }
 
@@ -61,6 +82,9 @@ type TestEmailInput struct {
 }
 
 func New(pool *pgxpool.Pool, secrets SecretResolver, logger *slog.Logger) *Service {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Service{
 		pool:     pool,
 		secrets:  secrets,
@@ -68,6 +92,27 @@ func New(pool *pgxpool.Pool, secrets SecretResolver, logger *slog.Logger) *Servi
 		client:   &http.Client{Timeout: 10 * time.Second},
 		sendMail: smtp.SendMail,
 	}
+}
+
+func (s *Service) ConfigureSMTP(cfg SMTPConfig) {
+	if s == nil {
+		return
+	}
+	s.smtp = cfg
+}
+
+func (s *Service) UseMailSender(fn func(addr string, a smtp.Auth, from string, to []string, msg []byte) error) {
+	if s == nil {
+		return
+	}
+	s.sendMail = fn
+}
+
+func (s *Service) SMTPSettings() SMTPConfig {
+	if s == nil {
+		return SMTPConfig{}
+	}
+	return s.smtp
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -152,6 +197,78 @@ func (s *Service) SendTestEmail(ctx context.Context, profileID, to string) error
 }
 
 var ErrNotFound = errors.New("notification channel not found")
+
+const maxTestEmailBody = 64 * 1024
+
+func (s *Service) SendDirectEmail(ctx context.Context, input DirectEmailInput) error {
+	to, err := parseEmailList(input.To)
+	if err != nil {
+		return err
+	}
+	if len(to) == 0 {
+		return errors.New("a valid destination email is required")
+	}
+	cc, err := parseEmailList(input.CC)
+	if err != nil {
+		return fmt.Errorf("cc: %w", err)
+	}
+	bcc, err := parseEmailList(input.BCC)
+	if err != nil {
+		return fmt.Errorf("bcc: %w", err)
+	}
+	from := strings.TrimSpace(input.From)
+	if from == "" {
+		from = strings.TrimSpace(s.smtp.From)
+	}
+	if from == "" {
+		return errors.New("from address is required")
+	}
+	if _, err = mail.ParseAddress(from); err != nil {
+		return errors.New("from address is invalid")
+	}
+	host := strings.TrimSpace(s.smtp.Host)
+	if host == "" {
+		return errors.New("SMTP host is not configured")
+	}
+	port := s.smtp.Port
+	if port <= 0 {
+		port = 25
+	}
+	body := input.Body
+	if len(body) > maxTestEmailBody {
+		return fmt.Errorf("body exceeds %d bytes", maxTestEmailBody)
+	}
+	fromName := strings.TrimSpace(input.FromName)
+	if fromName == "" {
+		fromName = strings.TrimSpace(s.smtp.FromName)
+	}
+	subject := strings.TrimSpace(input.Subject)
+	if subject == "" {
+		subject = "Rhythm notification test"
+	}
+	s.logger.Info("test notification email",
+		"host", host,
+		"port", port,
+		"toCount", len(to),
+		"ccCount", len(cc),
+		"bccCount", len(bcc),
+		"subjectLen", len(subject),
+		"bodyLen", len(body),
+	)
+	return s.sendSMTP(ctx, smtpSend{
+		host:     host,
+		port:     port,
+		username: s.smtp.Username,
+		password: s.smtp.Password,
+		from:     from,
+		fromName: fromName,
+		to:       to,
+		cc:       cc,
+		bcc:      bcc,
+		subject:  subject,
+		body:     body,
+	})
+}
 
 func (s *Service) processOne(ctx context.Context) error {
 	item, err := s.claim(ctx)
@@ -289,25 +406,58 @@ func (s *Service) email(ctx context.Context, item delivery) error {
 	if err != nil {
 		return err
 	}
-	var auth smtp.Auth
-	if username != "" {
-		auth = smtp.PlainAuth("", username, password, host)
-	}
 	subject := fmt.Sprintf("[%s] %s", item.Severity, item.Title)
 	body := fmt.Sprintf("Monitor: %s\r\nEvent: %s\r\n\r\n%s", item.MonitorName, item.EventType, item.Description)
-	fromHeader := from
-	if fromName != "" {
-		fromHeader = fmt.Sprintf("%s <%s>", fromName, from)
+	return s.sendSMTP(ctx, smtpSend{
+		host:     host,
+		port:     port,
+		username: username,
+		password: password,
+		from:     from,
+		fromName: fromName,
+		to:       recipients,
+		subject:  subject,
+		body:     body,
+	})
+}
+
+type smtpSend struct {
+	host, username, password, from, fromName, subject, body string
+	port                                                    int
+	to, cc, bcc                                             []string
+}
+
+func (s *Service) sendSMTP(ctx context.Context, msg smtpSend) error {
+	var auth smtp.Auth
+	if strings.TrimSpace(msg.username) != "" {
+		auth = smtp.PlainAuth("", msg.username, msg.password, msg.host)
 	}
-	message := []byte("To: " + strings.Join(recipients, ", ") + "\r\nFrom: " + fromHeader + "\r\nSubject: " + subject + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body)
+	fromHeader := msg.from
+	if strings.TrimSpace(msg.fromName) != "" {
+		fromHeader = fmt.Sprintf("%s <%s>", sanitizeHeader(msg.fromName), msg.from)
+	}
+	envelope := uniqueEmails(append(append(append([]string{}, msg.to...), msg.cc...), msg.bcc...))
+	headers := []string{
+		"To: " + strings.Join(msg.to, ", "),
+	}
+	if len(msg.cc) > 0 {
+		headers = append(headers, "Cc: "+strings.Join(msg.cc, ", "))
+	}
+	headers = append(headers,
+		"From: "+fromHeader,
+		"Subject: "+sanitizeHeader(msg.subject),
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+	)
+	message := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + msg.body)
 	send := s.sendMail
 	if send == nil {
 		send = smtp.SendMail
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := fmt.Sprintf("%s:%d", msg.host, msg.port)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- send(addr, auth, from, recipients, message)
+		errCh <- send(addr, auth, msg.from, envelope, message)
 	}()
 	select {
 	case <-ctx.Done():
@@ -315,7 +465,7 @@ func (s *Service) email(ctx context.Context, item delivery) error {
 	case err := <-errCh:
 		return err
 	case <-time.After(12 * time.Second):
-		return fmt.Errorf("SMTP connection to %s timed out; the server may be unavailable or port %d may be blocked (local Docker should use mailpit:1025)", addr, port)
+		return fmt.Errorf("SMTP connection to %s timed out; the server may be unavailable or port %d may be blocked (local/dev should use usphx-smtp-qa.axp.com:25)", addr, msg.port)
 	}
 }
 
@@ -353,6 +503,24 @@ func (s *Service) resolveWebhookURL(ctx context.Context, config map[string]any) 
 	return "", errors.New("webhook channel is missing a URL")
 }
 
+func uniqueEmails(values []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		email := strings.TrimSpace(value)
+		if email == "" {
+			continue
+		}
+		key := strings.ToLower(email)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, email)
+	}
+	return out
+}
+
 func mergeRecipients(channelTo, applicationEmails []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(channelTo)+len(applicationEmails))
@@ -371,6 +539,35 @@ func mergeRecipients(channelTo, applicationEmails []string) []string {
 		}
 	}
 	return out
+}
+
+func parseEmailList(raw string) ([]string, error) {
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r'
+	})
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		email := strings.TrimSpace(part)
+		if email == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(email)
+		if err != nil || parsed.Address == "" || !strings.Contains(parsed.Address, "@") {
+			return nil, fmt.Errorf("invalid email address %q", email)
+		}
+		key := strings.ToLower(parsed.Address)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, parsed.Address)
+	}
+	return out, nil
+}
+
+func sanitizeHeader(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "\r", " "), "\n", " ")
 }
 
 func stringSlice(value any) []string {

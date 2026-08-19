@@ -111,7 +111,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
           enableSystem
           storageKey="rhythm-theme"
         >
-          <AppErrorBoundary>
+          <AppErrorBoundary resetKey={pathname}>
             <PerformanceReporter />
             {isDocumentation || isPublicMarketing ? (
               children

@@ -11,6 +11,8 @@ keywords: [probe, OpenSearch, logs]
 
 A **Probe** explores logs. It does not produce a pass/fail deployment decision until a check condition is configured.
 
+Rhythm inspects the pasted Query DSL, Lucene, or KQL text for a time field. `@timestamp` wins when it appears as a field token; otherwise a bare `timestamp` field token is used. If neither appears, the application or service time field is used (`@timestamp` by default). You can override the workbench time-field picker after paste.
+
 <Procedure>
 1. Select an application, service, index, and time window.
 2. Author an allowed Query DSL body.

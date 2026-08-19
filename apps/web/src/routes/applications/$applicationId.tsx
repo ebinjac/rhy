@@ -45,6 +45,10 @@ import { z } from "zod"
 import { PageContainer } from "@/components/page-container"
 import { OperationalStatusBadge } from "@/components/operational-status"
 import { EditField } from "@/features/applications/form-field"
+import {
+  SaharaSettingsFields,
+  type SaharaFormValue,
+} from "@/features/applications/sahara-fields"
 import type {
   ELFApplicationContract,
   ELFServiceContract,
@@ -605,6 +609,13 @@ function ApplicationSettings({
   const [alertEmails, setAlertEmails] = useState(
     application.alertEmails.join(", ")
   )
+  const [sahara, setSahara] = useState<SaharaFormValue>({
+    saharaEnabled: application.saharaEnabled,
+    saharaAssignmentGroup: application.saharaAssignmentGroup ?? "",
+    saharaReporterGroup: application.saharaReporterGroup ?? "",
+    saharaEnvironmentAffected: application.saharaEnvironmentAffected ?? "",
+    saharaDefaultSeverity: application.saharaDefaultSeverity ?? "",
+  })
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState("")
 
@@ -629,6 +640,11 @@ function ApplicationSettings({
           .split(/[\n,;]+/)
           .map((item: string) => item.trim())
           .filter(Boolean),
+        saharaEnabled: sahara.saharaEnabled,
+        saharaAssignmentGroup: sahara.saharaAssignmentGroup.trim(),
+        saharaReporterGroup: sahara.saharaReporterGroup.trim(),
+        saharaEnvironmentAffected: sahara.saharaEnvironmentAffected.trim(),
+        saharaDefaultSeverity: sahara.saharaDefaultSeverity,
       },
     })
     setPending(false)
@@ -655,7 +671,8 @@ function ApplicationSettings({
             Application settings
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Ownership, ELF defaults, masking policy, and alert routing.
+            Ownership, ELF defaults, masking policy, alert routing, and Sahara
+            incidents.
           </p>
         </div>
         <Button onClick={onClose} size="sm" variant="ghost">
@@ -670,7 +687,10 @@ function ApplicationSettings({
             onChange={(event) => setName(event.target.value)}
           />
         </EditField>
-        <EditField label="CAR ID">
+        <EditField
+          info="Your organization’s internal application identifier. Rhythm uses the application relationship—not payload text—as the trusted ownership context."
+          label="CAR ID"
+        >
           <Input
             aria-label="CAR ID"
             className="font-mono"
@@ -685,7 +705,10 @@ function ApplicationSettings({
             onChange={(event) => setOwner(event.target.value)}
           />
         </EditField>
-        <EditField label="Default index pattern">
+        <EditField
+          info="OpenSearch index pattern used when an ELF query does not override it."
+          label="Default index pattern"
+        >
           <Input
             aria-label="Default index pattern"
             className="font-mono"
@@ -693,7 +716,10 @@ function ApplicationSettings({
             onChange={(event) => setIndexPattern(event.target.value)}
           />
         </EditField>
-        <EditField label="Default time field">
+        <EditField
+          info="Timestamp field ELF uses to bound the search window when a pasted query does not mention @timestamp or timestamp. OpenSearch logs usually use @timestamp; some indexes use timestamp."
+          label="Default time field"
+        >
           <Input
             aria-label="Default time field"
             className="font-mono"
@@ -702,6 +728,7 @@ function ApplicationSettings({
           />
         </EditField>
         <EditField
+          info="Field paths or patterns Rhythm redacts in ELF samples, monitor captures, and diagnostics. Masked values are never treated as empty or zero."
           label="Masking rules"
           help="One sensitive field path or pattern per line."
         >
@@ -723,6 +750,7 @@ function ApplicationSettings({
             onChange={(event) => setAlertEmails(event.target.value)}
           />
         </EditField>
+        <SaharaSettingsFields value={sahara} onChange={setSahara} />
       </div>
       {message ? (
         <p className="mt-4 text-sm text-destructive" role="alert">
@@ -733,7 +761,14 @@ function ApplicationSettings({
         <Button disabled={pending} onClick={onClose} variant="ghost">
           Cancel
         </Button>
-        <Button disabled={pending || !name.trim()} onClick={() => void save()}>
+        <Button
+          disabled={
+            pending ||
+            !name.trim() ||
+            (sahara.saharaEnabled && !sahara.saharaAssignmentGroup.trim())
+          }
+          onClick={() => void save()}
+        >
           {pending ? <LoaderCircle className="animate-spin" /> : <Save />}
           {pending ? "Saving…" : "Save application"}
         </Button>

@@ -1254,7 +1254,7 @@ func metricPoint(run runs.Run) runs.HistoryMetricPoint {
 	point := runs.HistoryMetricPoint{RunID: run.ID, RevisionID: run.RevisionID, Status: run.Status, FailureCategory: run.FailureCategory, CreatedAt: run.CreatedAt, ExecutionDurationMS: run.DurationMS}
 	var total int64
 	for _, step := range run.Steps {
-		value, ok := numericTiming(step.Timing["apiResponseTimeMs"])
+		value, ok := runs.RecordedAPIResponseMS(step.Timing)
 		if !ok {
 			continue
 		}

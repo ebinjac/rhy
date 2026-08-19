@@ -1,0 +1,242 @@
+openapi: 3.1.0
+info:
+  title: Rhythm API Test Lab
+  version: 1.0.0
+  description: Disposable local and CI API behavior fixtures for Rhythm monitors.
+servers:
+  - url: http://localhost:9080
+  - url: https://localhost:9443
+tags:
+  - name: discovery
+  - name: request
+  - name: authentication
+  - name: stateful
+  - name: response
+  - name: transport
+  - name: extraction
+  - name: operations
+paths:
+  /health:
+    get:
+      tags: [discovery]
+      operationId: health
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /ready:
+    get:
+      tags: [discovery]
+      operationId: ready
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /version:
+    get:
+      tags: [discovery]
+      operationId: version
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /scenarios:
+    get:
+      tags: [discovery]
+      operationId: scenarios
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /api/echo:
+    get:
+      tags: [request]
+      operationId: echoGet
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+    post:
+      tags: [request]
+      operationId: echoPost
+      requestBody:
+        content:
+          application/json:
+            schema: {}
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /api/query:
+    get:
+      tags: [request]
+      operationId: queryEcho
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /auth/basic:
+    get:
+      tags: [authentication]
+      operationId: basicAuth
+      security: [{ basicAuth: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /auth/bearer:
+    get:
+      tags: [authentication]
+      operationId: bearerAuth
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /auth/api-key:
+    get:
+      tags: [authentication]
+      operationId: apiKeyAuth
+      security: [{ apiKeyAuth: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /auth/hmac:
+    post:
+      tags: [authentication]
+      operationId: hmacAuth
+      parameters:
+        - { name: X-Client-Id, in: header, required: true, schema: { type: string } }
+        - { name: X-Timestamp, in: header, required: true, schema: { type: string } }
+        - { name: X-Signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: {} }
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /auth/mac:
+    post:
+      tags: [authentication]
+      operationId: macAuth
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /auth/application-token:
+    post:
+      tags: [authentication]
+      operationId: applicationToken
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /protected/keysets:
+    get:
+      tags: [authentication]
+      operationId: protectedKeysets
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /cookies/login:
+    post:
+      tags: [stateful]
+      operationId: cookieLogin
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /cookies/profile:
+    get:
+      tags: [stateful]
+      operationId: cookieProfile
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "401": { $ref: "#/components/responses/JSONError" }
+  /status/{code}:
+    get:
+      tags: [transport]
+      operationId: statusCode
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: integer, minimum: 100, maximum: 599 } }
+      responses:
+        default: { $ref: "#/components/responses/JSONSuccess" }
+  /delay-ms/{milliseconds}:
+    get:
+      tags: [transport]
+      operationId: delayMilliseconds
+      parameters:
+        - { name: milliseconds, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /redirect/{count}:
+    get:
+      tags: [transport]
+      operationId: redirectCount
+      parameters:
+        - { name: count, in: path, required: true, schema: { type: integer, minimum: 0 } }
+      responses:
+        "302": { description: Redirect hop }
+  /response/json:
+    get:
+      tags: [response]
+      operationId: responseJson
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /response/malformed-json:
+    get:
+      tags: [response]
+      operationId: malformedJson
+      responses:
+        "200": { description: Intentionally malformed JSON }
+  /response/xml:
+    get:
+      tags: [response]
+      operationId: responseXml
+      responses:
+        "200": { description: XML fixture }
+  /response/large/{size}:
+    get:
+      tags: [response]
+      operationId: responseLarge
+      parameters:
+        - { name: size, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Bounded response body }
+  /upload:
+    post:
+      tags: [transport]
+      operationId: upload
+      requestBody:
+        content:
+          multipart/form-data:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /unstable/{successAfter}:
+    get:
+      tags: [stateful]
+      operationId: unstable
+      parameters:
+        - { name: successAfter, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+        "503": { $ref: "#/components/responses/JSONError" }
+  /extract/json:
+    get:
+      tags: [extraction]
+      operationId: extractJson
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /metrics/test-lab:
+    get:
+      tags: [operations]
+      operationId: metrics
+      responses:
+        "200": { $ref: "#/components/responses/JSONSuccess" }
+  /admin/reset:
+    post:
+      tags: [operations]
+      operationId: reset
+      responses:
+        "204": { description: State reset }
+components:
+  securitySchemes:
+    basicAuth: { type: http, scheme: basic }
+    bearerAuth: { type: http, scheme: bearer }
+    apiKeyAuth: { type: apiKey, in: header, name: X-API-Key }
+  responses:
+    JSONSuccess:
+      description: Successful JSON fixture response
+      content:
+        application/json:
+          schema: { type: object, additionalProperties: true }
+    JSONError:
+      description: Structured test failure
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error: { type: string }
+              message: { type: string }

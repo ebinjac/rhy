@@ -39,13 +39,24 @@ type NullableService = Omit<ELFServiceContract, "semanticMapping"> & {
 }
 type NullableApplication = Omit<
   ELFApplicationContract,
-  "services" | "monitorIds" | "maskingRules" | "semanticMapping" | "alertEmails"
+  | "services"
+  | "monitorIds"
+  | "maskingRules"
+  | "semanticMapping"
+  | "alertEmails"
+  | "saharaEnabled"
 > & {
   services?: NullableService[] | null
   monitorIds?: string[] | null
   maskingRules?: string[] | null
   semanticMapping?: Record<string, string> | null
   alertEmails?: string[] | null
+  saharaEnabled?: boolean | null
+  saharaAssignmentGroup?: string | null
+  saharaReporterGroup?: string | null
+  saharaEnvironmentAffected?: string | null
+  saharaEventGenerator?: string | null
+  saharaDefaultSeverity?: string | null
 }
 type NullableQuery = Omit<
   ELFQueryContract,
@@ -116,6 +127,12 @@ function normalizeApplication(
     alertEmails: Array.isArray(application.alertEmails)
       ? application.alertEmails
       : [],
+    saharaEnabled: Boolean(application.saharaEnabled),
+    saharaAssignmentGroup: application.saharaAssignmentGroup ?? "",
+    saharaReporterGroup: application.saharaReporterGroup ?? "",
+    saharaEnvironmentAffected: application.saharaEnvironmentAffected ?? "",
+    saharaEventGenerator: application.saharaEventGenerator ?? "",
+    saharaDefaultSeverity: application.saharaDefaultSeverity ?? "",
   }
 }
 
@@ -158,6 +175,12 @@ const applicationSchema = z.object({
   maskingRules: z.array(z.string()),
   semanticMapping: z.record(z.string(), z.string()),
   alertEmails: z.array(z.string()),
+  saharaEnabled: z.boolean().optional(),
+  saharaAssignmentGroup: z.string().optional(),
+  saharaReporterGroup: z.string().optional(),
+  saharaEnvironmentAffected: z.string().optional(),
+  saharaEventGenerator: z.string().optional(),
+  saharaDefaultSeverity: z.string().optional(),
 })
 const serviceSchema = z.object({
   applicationId: z.string().min(1),
@@ -545,6 +568,7 @@ export const runELFQuery = createServerFn({ method: "POST" })
       mode: z.enum(["probe", "test"]),
       windowSeconds: z.number().int().min(60),
       size: z.number().int().min(0).max(100),
+      timeField: z.string().min(1).optional(),
     })
   )
   .handler(async ({ data }) => {
@@ -559,6 +583,7 @@ export const runELFQuery = createServerFn({ method: "POST" })
               body: JSON.stringify({
                 windowSeconds: data.windowSeconds,
                 size: data.size,
+                ...(data.timeField ? { timeField: data.timeField } : {}),
               }),
             }
           )

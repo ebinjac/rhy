@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { createFileRoute, Link } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -41,7 +41,9 @@ import {
   X,
 } from "lucide-react"
 
+import { InvestigationChecklist } from "@/features/alerts/investigation-checklist"
 import type {
+  InvestigationReportContract,
   JsonValue,
   RunContract,
   RunDiagnosticsContract,
@@ -49,8 +51,10 @@ import type {
   StepInsightContract,
   StepRunContract,
 } from "@/lib/api-client/contracts"
+import { getRunInvestigation } from "@/lib/api-client/investigation"
 import { cancelRun, getRunDiagnostics } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
+import { InfoHint } from "@/components/info-hint"
 import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/monitors/$monitorId/runs/$runId")({
@@ -261,6 +265,11 @@ function RunDiagnosticsPage() {
       ) : (
         <SuccessInsight diagnostics={diagnostics} />
       )}
+      {diagnostics.primaryFailure ? (
+        <div className="mt-6">
+          <RunInvestigation runId={runId} />
+        </div>
+      ) : null}
       <Waterfall
         diagnostics={diagnostics}
         selectedStepID={selectedStep?.stepDefinitionId ?? ""}
@@ -286,6 +295,39 @@ function RunDiagnosticsPage() {
         </div>
       </section>
     </PageContainer>
+  )
+}
+
+function RunInvestigation({ runId }: { runId: string }) {
+  const [report, setReport] = useState<InvestigationReportContract>({
+    alertId: "",
+    runId,
+    items: [],
+  })
+  const refresh = useCallback(
+    () => getRunInvestigation({ data: { runId } }),
+    [runId]
+  )
+  useEffect(() => {
+    let cancelled = false
+    void refresh().then((next) => {
+      if (!cancelled) setReport(next)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [refresh])
+  if (!report.alertId || !report.items.length) return null
+  return (
+    <InvestigationChecklist
+      alertId={report.alertId}
+      onRefresh={async () => {
+        const next = await refresh()
+        setReport(next)
+        return next
+      }}
+      report={report}
+    />
   )
 }
 
@@ -318,11 +360,12 @@ function RunHeader({ diagnostics }: { diagnostics: RunDiagnosticsContract }) {
           </p>
         </div>
         <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-4 xl:grid-cols-3">
-          <Meta
-            label="Revision"
-            value={`#${printable(context.revisionNumber)}`}
-            mono
-          />
+            <Meta
+              help="The published monitor revision that executed this run. Draft edits do not change in-flight or historical executions."
+              label="Revision"
+              value={`#${printable(context.revisionNumber)}`}
+              mono
+            />
           <Meta
             label="Agent"
             value={printable(context.agentId ?? run.agentId) || "Local worker"}
@@ -341,6 +384,7 @@ function RunHeader({ diagnostics }: { diagnostics: RunDiagnosticsContract }) {
       </div>
       <div className="mt-6 flex flex-wrap divide-x rounded-xl border bg-muted/20">
         <Metric
+          help="Target-facing time: DNS, proxy, TCP, TLS, request write, server wait, and download. Queueing, scripts, extraction, and assertions are shown separately."
           label="API response time"
           value={
             activeStatuses.has(run.status)
@@ -352,6 +396,7 @@ function RunHeader({ diagnostics }: { diagnostics: RunDiagnosticsContract }) {
           icon={Gauge}
         />
         <Metric
+          help="Wall-clock duration of the run, including Rhythm orchestration, scripts, retries, checks, and post-processing."
           label="Execution duration"
           value={
             activeStatuses.has(run.status)
@@ -361,16 +406,19 @@ function RunHeader({ diagnostics }: { diagnostics: RunDiagnosticsContract }) {
           icon={Timer}
         />
         <Metric
+          help="Time spent resolving secrets, building the request, and running pre-request scripts before the first network byte."
           label="Preparation"
           value={formatDuration(analysis.preparationTimeMs)}
           icon={Clock3}
         />
         <Metric
+          help="Extractor and assertion time after the response body is fully read."
           label="Post-processing"
           value={formatDuration(analysis.postProcessingMs)}
           icon={Check}
         />
         <Metric
+          help="Time the run waited in the worker queue before execution started. Not part of API response time."
           label="Queue delay"
           value={
             run.queueDelayMs ? formatDuration(run.queueDelayMs) : "Not queued"
@@ -431,6 +479,7 @@ function FailurePanel({
               value={failure.stepName || failure.stepId || "Unknown"}
             />
             <Meta
+              help="Primary failure class used for metrics and triage. One run has a single category even if multiple checks failed."
               label="Category"
               value={failure.category.replaceAll("_", " ")}
             />
@@ -1702,16 +1751,25 @@ function Metric({
   label,
   value,
   icon: Icon,
+  help,
 }: {
   label: string
   value: string
   icon: typeof Timer
+  help?: string
 }) {
   return (
     <div className="flex min-w-48 flex-1 items-center gap-3 px-4 py-3">
       <Icon className="size-4 text-muted-foreground" />
       <div className="min-w-0">
-        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+          {label}
+          {help ? (
+            <InfoHint className="size-5" title={label}>
+              {help}
+            </InfoHint>
+          ) : null}
+        </p>
         <p className="mt-0.5 truncate text-sm font-medium">{value}</p>
       </div>
     </div>
@@ -1721,14 +1779,23 @@ function Meta({
   label,
   value,
   mono = false,
+  help,
 }: {
   label: string
   value: string
   mono?: boolean
+  help?: string
 }) {
   return (
     <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="flex items-center gap-1 text-xs text-muted-foreground">
+        {label}
+        {help ? (
+          <InfoHint className="size-5" title={label}>
+            {help}
+          </InfoHint>
+        ) : null}
+      </dt>
       <dd
         className={`mt-0.5 max-w-56 truncate ${mono ? "font-mono text-xs" : "text-sm"}`}
       >

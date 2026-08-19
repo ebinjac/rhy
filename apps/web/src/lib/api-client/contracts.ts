@@ -130,6 +130,37 @@ export type AlertEventContract = {
   occurredAt: string
 }
 
+export type InvestigationItemContract = {
+  id: string
+  kind: "ELF_QUERY" | "DYNATRACE"
+  label: string
+  queryId?: string
+  applicationId?: string
+  environmentBindingId?: string
+  serviceIds?: string[]
+  status:
+    | "PENDING"
+    | "RUNNING"
+    | "PASSED"
+    | "FAILED"
+    | "ERROR"
+    | "SKIPPED"
+  attempt: number
+  summary: string
+  evidence: Record<string, JsonValue>
+  lastError?: string
+  startedAt?: string
+  endedAt?: string
+  elfHref?: string
+  dynatraceHref?: string
+}
+
+export type InvestigationReportContract = {
+  alertId: string
+  runId?: string
+  items: InvestigationItemContract[]
+}
+
 export type OpenSearchAlertReceiverContract = {
   id: string
   applicationId: string
@@ -793,6 +824,7 @@ export type RunContract = {
   warningCount: number
   durationMs: number
   apiResponseTimeMs?: number
+  preparationMs?: number
   startedAt?: string
   endedAt?: string
   createdAt: string
@@ -805,6 +837,19 @@ export type RunContract = {
   events?: RunEventContract[]
   steps?: StepRunContract[]
   setupScript?: ScriptResultContract
+}
+
+export type RunMetricBucketCountsContract = {
+  success: number
+  failed: number
+  timeout: number
+  class1xx?: number
+  class2xx: number
+  class3xx: number
+  class4xx: number
+  class5xx: number
+  httpTimeout: number
+  noResponse: number
 }
 
 export type RunMetricPointContract = {
@@ -822,6 +867,8 @@ export type RunMetricPointContract = {
   retryCount: number
   warningCount: number
   spike: boolean
+  responseStatus?: number
+  bucketCounts?: RunMetricBucketCountsContract
 }
 
 export type RunHistoryMetricsContract = {
@@ -856,6 +903,7 @@ export type RunHistoryMetricsContract = {
   }
   statusDistribution: Record<string, number>
   failureCategories: Record<string, number>
+  responseStatusDistribution?: Record<string, number>
   points: RunMetricPointContract[]
 }
 
@@ -910,6 +958,8 @@ export type ScriptResultContract = {
     cached: boolean
   }>
   variables: Record<string, string>
+  service?: Record<string, string>
+  application?: Record<string, string>
   environment: Record<string, string>
   collection: Record<string, string>
   globals?: Record<string, string>
@@ -1114,6 +1164,12 @@ export type ELFApplicationContract = {
   maskingRules: string[]
   semanticMapping: Record<string, string>
   alertEmails: string[]
+  saharaEnabled: boolean
+  saharaAssignmentGroup?: string
+  saharaReporterGroup?: string
+  saharaEnvironmentAffected?: string
+  saharaEventGenerator?: string
+  saharaDefaultSeverity?: string
   active: boolean
   services: ELFServiceContract[]
   monitorIds: string[]

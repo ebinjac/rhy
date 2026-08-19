@@ -166,8 +166,8 @@ function AppSidebar() {
               <span>Documentation</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <WorkspacePreferences />
         </SidebarMenu>
-        <WorkspacePreferences />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
@@ -194,49 +194,43 @@ function WorkspacePreferences() {
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            aria-label="Open user preferences"
-            className="flex min-h-11 w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors outline-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-            type="button"
-          />
-        }
-      >
-        <div className="grid size-8 shrink-0 place-items-center rounded-full bg-secondary text-xs font-semibold">
-          EJ
-        </div>
-        <div className="min-w-0 flex-1 group-data-[collapsible=icon]:hidden">
-          <p className="truncate text-sm font-medium">Ebin Jacob</p>
-          <p className="truncate text-xs text-muted-foreground">
-            Administrator
+    <SidebarMenuItem>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <SidebarMenuButton
+              aria-label="Open display preferences"
+              tooltip="Display"
+              className="h-9 rounded-lg text-muted-foreground"
+            />
+          }
+        >
+          <SlidersHorizontal aria-hidden="true" />
+          <span>Display</span>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuGroup>
+            <DropdownMenuLabel>Display preferences</DropdownMenuLabel>
+            <DropdownMenuItem onClick={() => updateDensity("comfortable")}>
+              {density === "comfortable" ? (
+                <Check />
+              ) : (
+                <span className="size-4" />
+              )}
+              Comfortable tables
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => updateDensity("compact")}>
+              {density === "compact" ? <Check /> : <span className="size-4" />}
+              Compact tables
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+          <DropdownMenuSeparator />
+          <p className="px-2 py-1.5 text-xs text-muted-foreground">
+            Preferences are stored in this browser.
           </p>
-        </div>
-        <SlidersHorizontal className="size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Display preferences</DropdownMenuLabel>
-          <DropdownMenuItem onClick={() => updateDensity("comfortable")}>
-            {density === "comfortable" ? (
-              <Check />
-            ) : (
-              <span className="size-4" />
-            )}
-            Comfortable tables
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => updateDensity("compact")}>
-            {density === "compact" ? <Check /> : <span className="size-4" />}
-            Compact tables
-          </DropdownMenuItem>
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <p className="px-2 py-1.5 text-xs text-muted-foreground">
-          Preferences are stored for this browser profile.
-        </p>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </SidebarMenuItem>
   )
 }
 

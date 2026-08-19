@@ -3,10 +3,11 @@ import { join } from "node:path"
 
 const root = process.cwd()
 const services = [
-  { name: "rhythm-frontdoor", role: "frontdoor", workflow: "deploy-rhythm-frontdoor.yml" },
+  { name: "rhythm-standalone", role: "standalone", workflow: "deploy-rhythm-standalone.yml", browser: true, public: true },
+  { name: "rhythm-frontdoor", role: "frontdoor", workflow: "deploy-rhythm-frontdoor.yml", public: true },
   { name: "rhythm-control", role: "control", workflow: "deploy-rhythm-control.yml" },
   { name: "rhythm-api-executor", role: "api-executor", workflow: "deploy-rhythm-api-executor.yml" },
-  { name: "rhythm-browser-executor", role: "browser-executor", workflow: "deploy-rhythm-browser-executor.yml" },
+  { name: "rhythm-browser-executor", role: "browser-executor", workflow: "deploy-rhythm-browser-executor.yml", browser: true },
 ]
 const environments = ["e1", "e2", "e3_ipc1", "e3_ipc2"]
 const failures = []
@@ -37,8 +38,8 @@ for (const service of services) {
       failures.push(`${service.name} has a non-Hydra default buildpack: ${line}`)
     }
   }
-  if (service.name === "rhythm-browser-executor" && !dockerfile.includes("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1")) {
-    failures.push("browser executor must use the buildpack Chromium and skip Playwright's public browser download")
+  if (service.browser && !dockerfile.includes("PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1")) {
+    failures.push(`${service.name} must use buildpack Chromium and skip Playwright's public browser download`)
   }
   const vault = readFileSync(vaultPath, "utf8")
   if (!vault.includes("/opt/epaas/vault/secrets/secrets")) {
@@ -69,7 +70,7 @@ for (const service of services) {
     if (!values.includes('RHYTHM_UNRESTRICTED_OUTBOUND: "true"')) {
       failures.push(`${service.name} values_${environment}.yaml must enable unrestricted outbound access`)
     }
-    if (service.name === "rhythm-frontdoor" && !values.includes("RHYTHM_AUTH_MODE: anonymous")) {
+    if (service.public && !values.includes("RHYTHM_AUTH_MODE: anonymous")) {
       failures.push(`${service.name} values_${environment}.yaml must use anonymous access`)
     }
     if (/RHYTHM_(?:IDENTITY_HEADER|GROUPS_HEADER|REQUIRE_VERIFIED_IDENTITY|TRUSTED_PROXY_CIDRS)/.test(values)) {
@@ -114,4 +115,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log("Hydra deployment contract verified for four independently onboarded services.")
+console.log("Hydra deployment contract verified for the standalone and four-service profiles.")

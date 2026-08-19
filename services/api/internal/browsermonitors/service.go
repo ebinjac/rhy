@@ -26,6 +26,7 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/id"
 	"github.com/rhythm-monitoring/rhythm/internal/library"
 	queueutil "github.com/rhythm-monitoring/rhythm/internal/queue"
+	"github.com/rhythm-monitoring/rhythm/internal/sahara"
 	"github.com/rhythm-monitoring/rhythm/internal/secretscrypto"
 )
 
@@ -1109,7 +1110,13 @@ func (s *Service) updateBrowserAlert(
 		INSERT INTO alert_events(id,alert_id,event_type,summary,evidence,occurred_at)
 		VALUES($1,$2,'FAILURE_OBSERVED',$3,$4,$5)`,
 		eventID, persistedAlertID, result.FailureReason, evidence, occurred)
-	return err
+	if err != nil {
+		return err
+	}
+	if persistedAlertID == alertID {
+		sahara.Enqueue(ctx, tx, persistedAlertID, occurred)
+	}
+	return nil
 }
 
 func (s *Service) persistArtifacts(

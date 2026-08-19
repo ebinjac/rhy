@@ -5,9 +5,12 @@ import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@workspace/ui/components/native-select"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import {
   ArrowLeft,
   CalendarClock,
@@ -20,6 +23,7 @@ import {
 
 import { EditorLoading } from "@/components/editor-loading"
 import { PageContainer } from "@/components/page-container"
+import { InvestigationChecksEditor } from "@/features/monitors/investigation-checks-editor"
 import { normalizeDefinitionScripts } from "@/features/monitors/request-definition"
 import type { RequestDefinition } from "@/features/monitors/request-definition"
 import type { ScheduleContract } from "@/lib/api-client/contracts"
@@ -279,25 +283,35 @@ function EditMonitorPage() {
               </p>
             </div>
             <ScheduleField label="Application">
-              <NativeSelect
-                className="w-full md:w-72"
-                value={applicationId}
-                onChange={(event) => {
-                  setApplicationId(event.target.value)
-                  setState("idle")
-                }}
-              >
-                <NativeSelectOption value="">Not assigned</NativeSelectOption>
-                {loaded.applications.map((application) => (
-                  <NativeSelectOption
-                    key={application.id}
-                    value={application.id}
-                  >
-                    {application.name}
-                    {application.carId ? ` · ${application.carId}` : ""}
-                  </NativeSelectOption>
-                ))}
-              </NativeSelect>
+              <div className="w-full md:w-72">
+                <Select
+                  value={applicationId || null}
+                  onValueChange={(value) => {
+                    setApplicationId(value ?? "")
+                    setState("idle")
+                  }}
+                  items={[
+                    { value: null, label: "Not assigned" },
+                    ...loaded.applications.map((application) => ({
+                      value: application.id,
+                      label: `${application.name}${application.carId ? ` · ${application.carId}` : ""}`,
+                    })),
+                  ]}
+                >
+                  <SelectTrigger className="h-9 w-full">
+                    <SelectValue placeholder="Not assigned" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={null}>Not assigned</SelectItem>
+                    {loaded.applications.map((application) => (
+                      <SelectItem key={application.id} value={application.id}>
+                        {application.name}
+                        {application.carId ? ` · ${application.carId}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </ScheduleField>
           </div>
         </section>
@@ -331,23 +345,30 @@ function EditMonitorPage() {
               </p>
             </div>
             <ScheduleField label="Mode">
-              <NativeSelect
+              <Select
                 value={schedule.type}
-                onChange={(event) =>
+                onValueChange={(value) => {
+                  if (value == null) return
                   setSchedule({
                     ...schedule,
-                    type: event.target.value as ScheduleContract["type"],
+                    type: value as ScheduleContract["type"],
                   })
-                }
+                }}
+                items={[
+                  { value: "MANUAL", label: "Manual only" },
+                  { value: "INTERVAL", label: "Interval" },
+                  { value: "CRON", label: "Cron" },
+                ]}
               >
-                <NativeSelectOption value="MANUAL">
-                  Manual only
-                </NativeSelectOption>
-                <NativeSelectOption value="INTERVAL">
-                  Interval
-                </NativeSelectOption>
-                <NativeSelectOption value="CRON">Cron</NativeSelectOption>
-              </NativeSelect>
+                <SelectTrigger className="h-9 w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="MANUAL">Manual only</SelectItem>
+                  <SelectItem value="INTERVAL">Interval</SelectItem>
+                  <SelectItem value="CRON">Cron</SelectItem>
+                </SelectContent>
+              </Select>
             </ScheduleField>
             {schedule.type === "INTERVAL" ? (
               <ScheduleField label="Every seconds">
@@ -422,6 +443,15 @@ function EditMonitorPage() {
             </span>
           </div>
         </section>
+        <div className="mt-6">
+          <InvestigationChecksEditor
+            applicationId={applicationId}
+            onChange={(investigationChecks) =>
+              change({ ...definition, investigationChecks })
+            }
+            value={definition.investigationChecks ?? []}
+          />
+        </div>
         <div className="mt-5 flex justify-end">
           <Button
             type="button"
@@ -466,6 +496,7 @@ function normalizeDefinition(value: RequestDefinition): RequestDefinition {
     code: "",
     runtimeVersion: "rhythm-js-2",
   }
+  next.investigationChecks ??= []
   for (const step of next.steps) {
     step.request.preRequestScript ??= {
       enabled: false,

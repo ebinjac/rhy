@@ -25,10 +25,12 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/id"
+	"github.com/rhythm-monitoring/rhythm/internal/investigation"
 	"github.com/rhythm-monitoring/rhythm/internal/library"
 	"github.com/rhythm-monitoring/rhythm/internal/monitors"
 	"github.com/rhythm-monitoring/rhythm/internal/notifications"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
+	"github.com/rhythm-monitoring/rhythm/internal/sahara"
 	"github.com/rhythm-monitoring/rhythm/internal/scheduler"
 	"github.com/rhythm-monitoring/rhythm/internal/scripts"
 	"github.com/rhythm-monitoring/rhythm/internal/suites"
@@ -45,6 +47,8 @@ type Dependencies struct {
 	Suites              *suites.Service
 	Agents              *agents.Service
 	Notifications       *notifications.Service
+	Sahara              *sahara.Service
+	Investigation       *investigation.Service
 	Scripts             *scripts.Client
 	ELF                 *elf.Service
 	Dynatrace           *dynatrace.Service
@@ -67,6 +71,8 @@ type server struct {
 	suites              *suites.Service
 	agents              *agents.Service
 	notifications       *notifications.Service
+	sahara              *sahara.Service
+	investigation       *investigation.Service
 	scripts             *scripts.Client
 	elf                 *elf.Service
 	dynatrace           *dynatrace.Service
@@ -111,7 +117,7 @@ type errorResponse struct {
 type requestIDContextKey struct{}
 
 func NewServer(dependencies Dependencies) http.Handler {
-	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, browserMonitors: dependencies.BrowserMonitors, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}, webhookRateLimiter: dependencies.WebhookRateLimiter}
+	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, sahara: dependencies.Sahara, investigation: dependencies.Investigation, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, browserMonitors: dependencies.BrowserMonitors, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}, webhookRateLimiter: dependencies.WebhookRateLimiter}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", s.liveness)
 	mux.HandleFunc("GET /readyz", s.readiness)
@@ -150,6 +156,7 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/metrics/series", s.getMonitorMetricsSeries)
 	mux.HandleFunc("GET /api/v1/monitors/{monitorId}/metrics", s.getMonitorMetrics)
 	mux.HandleFunc("GET /api/v1/runs/{runId}", s.getRun)
+	mux.HandleFunc("GET /api/v1/runs/{runId}/investigation", s.getRunInvestigation)
 	mux.HandleFunc("GET /api/v1/runs/{runId}/status", s.getRunStatus)
 	mux.HandleFunc("GET /api/v1/runs/{runId}/diagnostics", s.getRunDiagnostics)
 	mux.HandleFunc("GET /api/v1/runs/{runId}/diagnostics/summary", s.getRunDiagnosticsSummary)
@@ -161,6 +168,8 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("GET /api/v1/alerts", s.listAlerts)
 	mux.HandleFunc("GET /api/v1/alerts/summary", s.getAlertSummary)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}", s.getAlert)
+	mux.HandleFunc("GET /api/v1/alerts/{alertId}/investigation", s.getAlertInvestigation)
+	mux.HandleFunc("POST /api/v1/alerts/{alertId}/investigation/{checkId}/run", s.runAlertInvestigation)
 	mux.HandleFunc("GET /api/v1/alerts/{alertId}/events", s.listAlertEvents)
 	mux.HandleFunc("POST /api/v1/alerts/{alertId}/acknowledge", s.acknowledgeAlert)
 	mux.HandleFunc("POST /api/v1/alerts/{alertId}/resolve", s.resolveAlert)
@@ -196,6 +205,9 @@ func NewServer(dependencies Dependencies) http.Handler {
 	mux.HandleFunc("POST /api/v1/agents/{agentId}/revoke", s.revokeAgent)
 	mux.HandleFunc("GET /api/v1/notification-deliveries", s.listNotificationDeliveries)
 	mux.HandleFunc("POST /api/v1/config/notifications/{profileId}/test-email", s.testNotificationEmail)
+	mux.HandleFunc("GET /api/v1/internal/test-notifications", s.getTestNotificationStatus)
+	mux.HandleFunc("POST /api/v1/internal/test-notifications/email", s.sendTestNotificationEmail)
+	mux.HandleFunc("POST /api/v1/internal/test-notifications/sahara", s.sendTestNotificationSahara)
 	mux.HandleFunc("GET /api/v1/applications", s.listApplications)
 	mux.HandleFunc("POST /api/v1/applications", s.createApplication)
 	mux.HandleFunc("GET /api/v1/applications/{applicationId}", s.getApplication)
@@ -1253,7 +1265,40 @@ func (s *server) cancelMonitorPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listMonitorRuns(w http.ResponseWriter, r *http.Request) {
-	items, err := s.runs.List(r.Context(), r.PathValue("monitorId"))
+	limit := 50
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 200 {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "limit must be between 1 and 200", nil)
+			return
+		}
+		limit = parsed
+	}
+	afterCreatedAt, afterID, cursorErr := decodeTimeIDCursor(strings.TrimSpace(r.URL.Query().Get("cursor")), "run")
+	if cursorErr != nil {
+		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "cursor is invalid or has expired", nil)
+		return
+	}
+	query := runs.PageQuery{
+		Limit:          limit,
+		AfterCreatedAt: afterCreatedAt,
+		AfterID:        afterID,
+		Status:         strings.TrimSpace(r.URL.Query().Get("status")),
+		TriggerType:    strings.TrimSpace(r.URL.Query().Get("triggerType")),
+		Query:          strings.TrimSpace(r.URL.Query().Get("query")),
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("since")); raw != "" {
+		parsed, parseErr := time.Parse(time.RFC3339Nano, raw)
+		if parseErr != nil {
+			parsed, parseErr = time.Parse(time.RFC3339, raw)
+		}
+		if parseErr != nil {
+			s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", "since must be an RFC3339 timestamp", nil)
+			return
+		}
+		query.Since = parsed
+	}
+	page, err := s.runs.ListPage(r.Context(), r.PathValue("monitorId"), query)
 	if errors.Is(err, monitors.ErrNotFound) {
 		s.writeError(w, r, http.StatusNotFound, "MONITOR_NOT_FOUND", "Monitor was not found.", nil)
 		return
@@ -1262,12 +1307,12 @@ func (s *server) listMonitorRuns(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Unable to list monitor runs.", nil)
 		return
 	}
-	pageItems, page, pageErr := paginate(r, items, 50, 200)
-	if pageErr != nil {
-		s.writeError(w, r, http.StatusBadRequest, "INVALID_PAGINATION", pageErr.Error(), nil)
-		return
+	metadata := &pageMetadata{Limit: limit, Total: page.Total}
+	if page.HasMore && len(page.Items) > 0 {
+		last := page.Items[len(page.Items)-1]
+		metadata.NextCursor = encodeTimeIDCursor("run", last.CreatedAt, last.ID)
 	}
-	s.writeJSON(w, r, http.StatusOK, successResponse{Data: pageItems, Meta: s.paginatedMeta(r, page)})
+	s.writeJSON(w, r, http.StatusOK, successResponse{Data: page.Items, Meta: s.paginatedMeta(r, metadata)})
 }
 
 func (s *server) getMonitorMetrics(w http.ResponseWriter, r *http.Request) {

@@ -39,13 +39,6 @@ type Config struct {
 	DevelopmentActorID      string
 	StorageMode             string
 	DatabaseURL             string
-	RedisURL                string
-	RedisMode               string
-	RedisAddrs              []string
-	RedisUsername           string
-	RedisPassword           string
-	RedisDB                 int
-	RedisTLS                bool
 	AllowPrivateTargets     bool
 	UnrestrictedOutbound    bool
 	PrivateTargetHosts      []string
@@ -74,6 +67,8 @@ type Config struct {
 	SMTPPassword            string
 	SMTPTo                  []string
 	DynatraceAllowedHosts   []string
+	SaharaIngestURL         string
+	SaharaTimeoutMS         int
 }
 
 func Load() (Config, error) {
@@ -93,13 +88,8 @@ func Load() (Config, error) {
 		DevelopmentActorID:    valueOrDefault("RHYTHM_DEVELOPMENT_ACTOR_ID", "local-admin"),
 		StorageMode:           valueOrDefault("RHYTHM_STORAGE_MODE", "memory"),
 		DatabaseURL:           strings.TrimSpace(os.Getenv("RHYTHM_DATABASE_URL")),
-		QueueBackend:          strings.ToLower(strings.TrimSpace(os.Getenv("RHYTHM_QUEUE_BACKEND"))),
+		QueueBackend:          "memory",
 		RequiredSchemaVersion: strings.TrimSpace(os.Getenv("RHYTHM_REQUIRED_SCHEMA_VERSION")),
-		RedisURL:              strings.TrimSpace(os.Getenv("RHYTHM_REDIS_URL")),
-		RedisMode:             strings.ToLower(valueOrDefault("RHYTHM_REDIS_MODE", "single")),
-		RedisAddrs:            splitCSV(os.Getenv("RHYTHM_REDIS_ADDRS")),
-		RedisUsername:         strings.TrimSpace(os.Getenv("RHYTHM_REDIS_USERNAME")),
-		RedisPassword:         os.Getenv("RHYTHM_REDIS_PASSWORD"),
 		PrivateTargetHosts:    splitCSV(os.Getenv("RHYTHM_PRIVATE_TARGET_ALLOWED_HOSTS")),
 		PrivateTargetCIDRs:    splitCSV(os.Getenv("RHYTHM_PRIVATE_TARGET_ALLOWED_CIDRS")),
 		ScriptRunnerURL:       valueOrDefault("RHYTHM_SCRIPT_RUNNER_URL", "http://script-runner:8090"),
@@ -130,7 +120,7 @@ func Load() (Config, error) {
 			os.Getenv("RHYTHM_SECRETS_KEY"),
 			os.Getenv("SECRETS_ENCRYPTION_KEY"),
 		),
-		SMTPHost: firstNonEmpty(os.Getenv("RHYTHM_SMTP_HOST"), os.Getenv("SMTP_HOST")),
+		SMTPHost: firstNonEmpty(os.Getenv("RHYTHM_SMTP_HOST"), os.Getenv("SMTP_HOST"), "usphx-smtp-qa.axp.com"),
 		SMTPFrom: firstNonEmpty(
 			os.Getenv("RHYTHM_SMTP_FROM"),
 			os.Getenv("SMTP_FROM"),
@@ -145,6 +135,7 @@ func Load() (Config, error) {
 		SMTPPassword:          firstNonEmpty(os.Getenv("RHYTHM_SMTP_PASSWORD"), os.Getenv("SMTP_PASSWORD")),
 		SMTPTo:                splitCSV(firstNonEmpty(os.Getenv("RHYTHM_SMTP_TO"), os.Getenv("SMTP_TO"))),
 		DynatraceAllowedHosts: splitCSV(valueOrDefault("RHYTHM_DYNATRACE_ALLOWED_HOSTS", "amex-prod.live.dynatrace.com,amex.live.dynatrace.com")),
+		SaharaIngestURL:       strings.TrimSpace(os.Getenv("RHYTHM_SAHARA_INGEST_URL")),
 	}
 	// AWS must use the SDK's normal regional endpoint unless an endpoint override
 	// was explicitly supplied. MinIO keeps the local Compose default.
@@ -152,12 +143,6 @@ func Load() (Config, error) {
 		cfg.ArtifactStoreURL = ""
 	}
 	var err error
-	if cfg.RedisDB, err = integerInRange("RHYTHM_REDIS_DB", 0, 0, 15); err != nil {
-		return Config{}, err
-	}
-	if cfg.RedisTLS, err = booleanValue("RHYTHM_REDIS_TLS", false); err != nil {
-		return Config{}, err
-	}
 	if cfg.ArtifactPathStyle, err = booleanValue("RHYTHM_ARTIFACT_STORE_PATH_STYLE", cfg.ArtifactProvider == "minio"); err != nil {
 		return Config{}, err
 	}
@@ -197,6 +182,9 @@ func Load() (Config, error) {
 	if cfg.TargetHostConcurrency, err = integerInRange("RHYTHM_TARGET_HOST_CONCURRENCY", 16, 1, 1024); err != nil {
 		return Config{}, err
 	}
+	if cfg.SaharaTimeoutMS, err = integerInRange("RHYTHM_SAHARA_TIMEOUT_MS", 10000, 1000, 60000); err != nil {
+		return Config{}, err
+	}
 	if cfg.DatabaseMaxConns, err = integerInRange("RHYTHM_DATABASE_MAX_CONNS", 20, 2, 500); err != nil {
 		return Config{}, err
 	}
@@ -233,15 +221,8 @@ func Load() (Config, error) {
 	if cfg.UnrestrictedOutbound {
 		cfg.AllowPrivateTargets = true
 	}
-	if cfg.QueueBackend == "" {
-		switch {
-		case cfg.RedisURL != "" || len(cfg.RedisAddrs) > 0:
-			cfg.QueueBackend = "redis"
-		case cfg.StorageMode == "postgres":
-			cfg.QueueBackend = "postgres"
-		default:
-			cfg.QueueBackend = "memory"
-		}
+	if cfg.StorageMode == "postgres" {
+		cfg.QueueBackend = "postgres"
 	}
 
 	if !strings.HasPrefix(cfg.HTTPAddr, ":") && !strings.Contains(cfg.HTTPAddr, ":") {
@@ -270,20 +251,11 @@ func Load() (Config, error) {
 	if cfg.AuthMode == "trusted_headers" && (len(cfg.AdminGroups)+len(cfg.EditorGroups)+len(cfg.OperatorGroups)+len(cfg.ViewerGroups) == 0) {
 		return Config{}, fmt.Errorf("trusted-header authentication requires at least one role group mapping")
 	}
-	if cfg.RedisMode != "single" && cfg.RedisMode != "cluster" {
-		return Config{}, fmt.Errorf("RHYTHM_REDIS_MODE must be single or cluster")
-	}
-	if cfg.RedisMode == "cluster" && cfg.RedisDB != 0 {
-		return Config{}, fmt.Errorf("RHYTHM_REDIS_DB must be 0 in cluster mode")
-	}
-	if cfg.QueueBackend != "memory" && cfg.QueueBackend != "postgres" && cfg.QueueBackend != "redis" {
-		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND must be memory, postgres, or redis")
+	if cfg.QueueBackend != "memory" && cfg.QueueBackend != "postgres" {
+		return Config{}, fmt.Errorf("queue backend must be memory or postgres")
 	}
 	if cfg.QueueBackend == "postgres" && cfg.StorageMode != "postgres" {
 		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND=postgres requires RHYTHM_STORAGE_MODE=postgres")
-	}
-	if cfg.QueueBackend == "redis" && cfg.RedisURL == "" && len(cfg.RedisAddrs) == 0 {
-		return Config{}, fmt.Errorf("RHYTHM_QUEUE_BACKEND=redis requires RHYTHM_REDIS_URL or RHYTHM_REDIS_ADDRS")
 	}
 	if cfg.ArtifactProvider != "minio" && cfg.ArtifactProvider != "s3" {
 		return Config{}, fmt.Errorf("RHYTHM_ARTIFACT_STORE_PROVIDER must be minio or s3")

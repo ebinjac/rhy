@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as TestNotificationsRouteImport } from './routes/test-notifications'
 import { Route as SuitesRouteImport } from './routes/suites'
 import { Route as SitemapDotxmlRouteImport } from './routes/sitemap[.]xml'
 import { Route as RobotsDottxtRouteImport } from './routes/robots[.]txt'
@@ -60,6 +61,11 @@ import { Route as MonitorsMonitorIdRunsIndexRouteImport } from './routes/monitor
 import { Route as UiMonitoringMonitorIdRunsRunIdRouteImport } from './routes/ui-monitoring/$monitorId/runs/$runId'
 import { Route as MonitorsMonitorIdRunsRunIdRouteImport } from './routes/monitors/$monitorId/runs/$runId'
 
+const TestNotificationsRoute = TestNotificationsRouteImport.update({
+  id: '/test-notifications',
+  path: '/test-notifications',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SuitesRoute = SuitesRouteImport.update({
   id: '/suites',
   path: '/suites',
@@ -341,6 +347,7 @@ export interface FileRoutesByFullPath {
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/test-notifications': typeof TestNotificationsRoute
   '/alerts/$alertId': typeof AlertsAlertIdRoute
   '/api/docs-search': typeof ApiDocsSearchRoute
   '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
@@ -390,6 +397,7 @@ export interface FileRoutesByTo {
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/test-notifications': typeof TestNotificationsRoute
   '/alerts/$alertId': typeof AlertsAlertIdRoute
   '/api/docs-search': typeof ApiDocsSearchRoute
   '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
@@ -439,6 +447,7 @@ export interface FileRoutesById {
   '/robots.txt': typeof RobotsDottxtRoute
   '/sitemap.xml': typeof SitemapDotxmlRoute
   '/suites': typeof SuitesRoute
+  '/test-notifications': typeof TestNotificationsRoute
   '/alerts/$alertId': typeof AlertsAlertIdRoute
   '/api/docs-search': typeof ApiDocsSearchRoute
   '/applications/$applicationId': typeof ApplicationsApplicationIdRoute
@@ -493,6 +502,7 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
+    | '/test-notifications'
     | '/alerts/$alertId'
     | '/api/docs-search'
     | '/applications/$applicationId'
@@ -542,6 +552,7 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
+    | '/test-notifications'
     | '/alerts/$alertId'
     | '/api/docs-search'
     | '/applications/$applicationId'
@@ -590,6 +601,7 @@ export interface FileRouteTypes {
     | '/robots.txt'
     | '/sitemap.xml'
     | '/suites'
+    | '/test-notifications'
     | '/alerts/$alertId'
     | '/api/docs-search'
     | '/applications/$applicationId'
@@ -643,6 +655,7 @@ export interface RootRouteChildren {
   RobotsDottxtRoute: typeof RobotsDottxtRoute
   SitemapDotxmlRoute: typeof SitemapDotxmlRoute
   SuitesRoute: typeof SuitesRoute
+  TestNotificationsRoute: typeof TestNotificationsRoute
   ApiDocsSearchRoute: typeof ApiDocsSearchRoute
   DeploymentRunsDeploymentRunIdRoute: typeof DeploymentRunsDeploymentRunIdRoute
   DocsMarkdownSplatRoute: typeof DocsMarkdownSplatRoute
@@ -659,6 +672,13 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/test-notifications': {
+      id: '/test-notifications'
+      path: '/test-notifications'
+      fullPath: '/test-notifications'
+      preLoaderRoute: typeof TestNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/suites': {
       id: '/suites'
       path: '/suites'
@@ -1145,6 +1165,7 @@ const rootRouteChildren: RootRouteChildren = {
   RobotsDottxtRoute: RobotsDottxtRoute,
   SitemapDotxmlRoute: SitemapDotxmlRoute,
   SuitesRoute: SuitesRoute,
+  TestNotificationsRoute: TestNotificationsRoute,
   ApiDocsSearchRoute: ApiDocsSearchRoute,
   DeploymentRunsDeploymentRunIdRoute: DeploymentRunsDeploymentRunIdRoute,
   DocsMarkdownSplatRoute: DocsMarkdownSplatRoute,

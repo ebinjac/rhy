@@ -19,3 +19,5 @@ Check connection health and the resolved application/service index before editin
 - **Response limit**: reduce displayed fields, hits, or aggregation buckets.
 
 Debug evidence contains the compiled body and a redacted cURL command, not unrestricted credentials or raw sensitive documents.
+
+Time filtering uses `@timestamp` when that field token appears in the query, `timestamp` when only the bare field appears, and otherwise the application or service default (`@timestamp` unless you configured another field).

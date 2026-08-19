@@ -47,6 +47,7 @@ import {
 import { toast } from "@workspace/ui/components/sonner"
 
 import { PageContainer } from "@/components/page-container"
+import { InfoHint } from "@/components/info-hint"
 import { PageEmptyState } from "@/components/page-empty-state"
 import {
   BrowserHealthBadge,
@@ -275,7 +276,19 @@ function UIMonitoringPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Monitor</TableHead>
-                    <TableHead>Health</TableHead>
+                    <TableHead>
+                      <span className="inline-flex items-center gap-0.5">
+                        Health
+                        <InfoHint
+                          className="size-5"
+                          title="UI monitor health"
+                        >
+                          Derived from the latest browser run and whether the
+                          schedule is enabled. No signal means no recent
+                          measured execution.
+                        </InfoHint>
+                      </span>
+                    </TableHead>
                     <TableHead>Application / service</TableHead>
                     <TableHead>Schedule</TableHead>
                     <TableHead>Latest run</TableHead>

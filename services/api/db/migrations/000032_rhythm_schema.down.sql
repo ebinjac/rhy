@@ -1,0 +1,2 @@
+-- Schema consolidation is intentionally irreversible. Moving tables back to
+-- public can collide with unrelated objects and is handled through PITR.

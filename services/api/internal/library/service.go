@@ -612,8 +612,8 @@ type SMTPDefaults struct {
 }
 
 // EnsureDefaultEmailChannel creates a single active EMAIL notification profile
-// from env defaults when none exists. It also upgrades the exact legacy
-// Compose-seeded freesmtpservers.com profile to the current local SMTP catcher.
+// from env defaults when none exists. It also upgrades the exact seeded
+// Local SMTP profile when it still points at a previous bootstrap host.
 func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDefaults, actor string) (Profile, bool, error) {
 	host := strings.TrimSpace(defaults.Host)
 	from := strings.TrimSpace(defaults.From)
@@ -634,15 +634,8 @@ func (s *Service) EnsureDefaultEmailChannel(ctx context.Context, defaults SMTPDe
 			return Profile{}, false, decodeErr
 		}
 		existingHost := strings.TrimSpace(fmt.Sprint(existingConfig["smtpHost"]))
-		legacyHosts := map[string]bool{
-			"smtp.freesmtpservers.com": true,
-			"mailpit":                  true,
-			"localhost":                true,
-			"127.0.0.1":                true,
-		}
 		if existingName == "Local SMTP" &&
 			existingDescription == seededDescription &&
-			legacyHosts[strings.ToLower(existingHost)] &&
 			!strings.EqualFold(host, existingHost) {
 			existingConfig["smtpHost"] = host
 			existingConfig["smtpPort"] = port

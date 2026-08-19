@@ -15,6 +15,7 @@ import {
 import { toast } from "@workspace/ui/components/sonner"
 
 import { PageContainer } from "@/components/page-container"
+import { InfoHint } from "@/components/info-hint"
 import {
   approveBrowserBaseline,
   deleteBrowserBaseline,
@@ -150,8 +151,12 @@ function BrowserBaselinesPage() {
       <section className="mt-8" aria-labelledby="active-baselines">
         <div className="flex items-end justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold" id="active-baselines">
+            <h2 className="inline-flex items-center gap-1 text-lg font-semibold" id="active-baselines">
               Baseline library
+              <InfoHint title="Visual baselines">
+                Approved screenshots this journey is compared against. Proposed
+                candidates need review before they become the active baseline.
+              </InfoHint>
             </h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
               Approved, proposed, and superseded visual evidence.

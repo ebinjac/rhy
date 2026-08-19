@@ -143,7 +143,7 @@ func (s *Service) StepDiagnostics(ctx context.Context, runID, stepRunID string) 
 	if err != nil {
 		return StepDiagnostics{}, err
 	}
-	apiResponseMS := timingMilliseconds(step.Timing, "apiResponseTimeMs")
+	apiResponseMS, _ := StepAPIResponseMS(step)
 	phase, phaseMS := slowestTimingPhase(step.Timing)
 	insight := &StepInsight{
 		StepDefinitionID:  step.StepDefinitionID,
@@ -194,7 +194,7 @@ func (s *Service) Diagnostics(ctx context.Context, runID string) (Diagnostics, e
 	ranks := make([]ranked, len(run.Steps))
 	var totalAPIResponseMS int64
 	for index, step := range run.Steps {
-		apiResponseMS := timingMilliseconds(step.Timing, "apiResponseTimeMs")
+		apiResponseMS, _ := StepAPIResponseMS(step)
 		totalAPIResponseMS += apiResponseMS
 		ranks[index] = ranked{index, apiResponseMS}
 	}
@@ -205,10 +205,12 @@ func (s *Service) Diagnostics(ctx context.Context, runID string) (Diagnostics, e
 	}
 	for index, step := range run.Steps {
 		result.Analysis.StepTimeMS += step.DurationMS
-		apiResponseMS := timingMilliseconds(step.Timing, "apiResponseTimeMs")
+		apiResponseMS, _ := StepAPIResponseMS(step)
 		result.Analysis.APIResponseTimeMS += apiResponseMS
 		result.Analysis.NetworkTimeMS += timingMilliseconds(step.Timing, "networkTotalMs")
-		result.Analysis.PreparationTimeMS += timingMilliseconds(step.Timing, "preparationMs")
+		if preparationMS, recorded := RecordedPreparationMS(step.Timing); recorded {
+			result.Analysis.PreparationTimeMS += preparationMS
+		}
 		result.Analysis.PostProcessingMS += timingMilliseconds(step.Timing, "postProcessingMs")
 		if step.Status == StatusFailed || step.Status == StatusTimedOut || step.Status == StatusAborted {
 			result.Analysis.FailedSteps++

@@ -35,6 +35,7 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
+import { HintedLabel } from "@/components/info-hint"
 import { PageContainer } from "@/components/page-container"
 
 import {
@@ -364,7 +365,12 @@ function ELFQueriesPage() {
             />
             <span>Query</span>
             <span>Application</span>
-            <span>Latest result</span>
+            <HintedLabel
+              body="Latest probe or test-check outcome. Hits are the exact matching event count, not the sample documents shown."
+              title="Latest ELF result"
+            >
+              Latest result
+            </HintedLabel>
             <span className="text-right">Actions</span>
           </div>
           {visible.map((query) => (

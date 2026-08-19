@@ -42,6 +42,7 @@ import type {
   RunContract,
 } from "@/lib/api-client/contracts"
 import { getOperationalOverview } from "@/lib/api-client/overview"
+import { HintedLabel, InfoHint } from "@/components/info-hint"
 import { formatDateTime, formatFullDate } from "@/lib/format-date"
 
 export const Route = createFileRoute("/")({
@@ -239,8 +240,13 @@ function OverviewPage() {
               </p>
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4 lg:gap-x-8">
-              <Stat label="Enabled" value={String(counts.enabledMonitors)} />
               <Stat
+                help="Published monitors that currently run on schedule or accept manual execution."
+                label="Enabled"
+                value={String(counts.enabledMonitors)}
+              />
+              <Stat
+                help="Enabled monitors that are healthy and at or above 99% success over the last 24 hours."
                 label="Healthy"
                 value={
                   counts.enabledMonitors
@@ -383,8 +389,19 @@ function OverviewPage() {
                       <span>Monitor</span>
                       <span>State</span>
                       <span>Last run</span>
-                      <span>Success · 24h</span>
-                      <span className="text-right">Latency</span>
+                      <HintedLabel
+                        body="Share of completed runs in the last 24 hours that succeeded or succeeded with warnings. Active and cancelled runs are excluded."
+                        title="Success rate (24h)"
+                      >
+                        Success · 24h
+                      </HintedLabel>
+                      <HintedLabel
+                        body="Latest API response time. Excludes Rhythm preparation, scripts, extractors, and assertions."
+                        className="justify-end"
+                        title="API response latency"
+                      >
+                        Latency
+                      </HintedLabel>
                     </div>
                     {visibleMonitors.length ? (
                       visibleMonitors.slice(0, 8).map((monitor) => {
@@ -948,10 +965,12 @@ function Stat({
   label,
   value,
   tone = "default",
+  help,
 }: {
   label: string
   value: string
   tone?: "default" | "success" | "warning" | "danger"
+  help?: string
 }) {
   const toneClass =
     tone === "success"
@@ -963,7 +982,14 @@ function Stat({
           : "text-foreground"
   return (
     <div>
-      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dt className="flex items-center gap-1 text-xs text-muted-foreground">
+        {label}
+        {help ? (
+          <InfoHint className="size-5" title={label}>
+            {help}
+          </InfoHint>
+        ) : null}
+      </dt>
       <dd
         className={`mt-0.5 font-heading text-xl font-semibold tabular-nums ${toneClass}`}
       >

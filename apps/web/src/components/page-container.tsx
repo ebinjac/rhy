@@ -2,7 +2,7 @@ import type { ComponentPropsWithoutRef, ElementType } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
 
-/** Shared content width for authenticated app pages (`max-w-7xl` = 1280px). */
+/** Shared content width for app pages (`max-w-7xl` = 1280px). */
 export const APP_PAGE_MAX_WIDTH_CLASS = "max-w-7xl"
 
 /** Horizontal centering + padding rhythm for main app content. */
@@ -34,7 +34,7 @@ type PageContainerProps<T extends ElementType = "div"> = {
 } & Omit<ComponentPropsWithoutRef<T>, "as" | "className">
 
 /**
- * Shared width + horizontal padding for authenticated app pages and nested tabs.
+ * Shared width + horizontal padding for app pages and nested tabs.
  * Marketing (`/rhythm`) and docs keep their own layouts.
  */
 export function PageContainer<T extends ElementType = "div">({

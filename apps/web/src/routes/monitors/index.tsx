@@ -60,6 +60,8 @@ import {
   Workflow,
 } from "lucide-react"
 
+import { HintedLabel } from "@/components/info-hint"
+
 import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
 import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
 import type { MonitorStatus } from "@/features/monitors/seed-data"
@@ -96,23 +98,22 @@ export const Route = createFileRoute("/monitors/")({
       ? { trail: search.trail }
       : {}),
   }),
-  loader: ({ location }) => {
-    const search = location.search as {
-      q?: string
-      status?: string
-      application?: string
-      cursor?: string
-    }
-    return listMonitorPage({
+  loaderDeps: ({ search }) => ({
+    q: search.q,
+    status: search.status,
+    application: search.application,
+    cursor: search.cursor,
+  }),
+  loader: ({ deps }) =>
+    listMonitorPage({
       data: {
-        query: search.q,
-        status: search.status,
-        applicationId: search.application,
-        cursor: search.cursor,
+        query: deps.q,
+        status: deps.status,
+        applicationId: deps.application,
+        cursor: deps.cursor,
         limit: 25,
       },
-    })
-  },
+    }),
   component: MonitorsPage,
 })
 
@@ -485,9 +486,23 @@ function MonitorsPage() {
                   <SelectAllCheckbox />
                 </TableHead>
                 <TableHead>Monitor</TableHead>
-                <TableHead>Status</TableHead>
+                <TableHead>
+                  <HintedLabel
+                    body="Derived from the latest runs and 24h success rate. Paused means the published monitor is disabled and will not run on schedule."
+                    title="Monitor status"
+                  >
+                    Status
+                  </HintedLabel>
+                </TableHead>
                 <TableHead>Application</TableHead>
-                <TableHead>Success · 24h</TableHead>
+                <TableHead>
+                  <HintedLabel
+                    body="Share of completed runs in the last 24 hours that succeeded or succeeded with warnings."
+                    title="Success rate (24h)"
+                  >
+                    Success · 24h
+                  </HintedLabel>
+                </TableHead>
                 <TableHead>Last run</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>

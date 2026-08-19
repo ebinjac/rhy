@@ -3,16 +3,20 @@ package scripts
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/md5" //nolint:gosec -- required only for explicit legacy CryptoJS compatibility
 	"crypto/rand"
+	"crypto/sha1" //nolint:gosec -- required only for explicit legacy CryptoJS compatibility
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/tls"
+	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net"
 	"net/http"
@@ -68,7 +72,42 @@ func (r *Runtime) Validate(code string) Validation {
 		line, column := errorPosition(err.Error())
 		problems = append(problems, Problem{Severity: "error", Message: safeError(err.Error(), nil), Line: line, Column: column, Code: "SCRIPT_SYNTAX_ERROR"})
 	}
-	return Validation{Valid: len(problems) == 0, Problems: problems}
+	for _, match := range potentialSecretLiteralPattern.FindAllStringSubmatchIndex(code, -1) {
+		if len(match) < 6 {
+			continue
+		}
+		line, column := sourcePosition(code, match[4])
+		problems = append(problems, Problem{
+			Severity: "warning",
+			Message:  "Potential credential literal detected. Store sensitive material in Rhythm Secrets and read it with rhythm.secrets.get() or pm.vault.get().",
+			Line:     line,
+			Column:   column,
+			Code:     "POTENTIAL_SECRET_LITERAL",
+		})
+	}
+	valid := true
+	for _, problem := range problems {
+		if problem.Severity == "error" {
+			valid = false
+			break
+		}
+	}
+	return Validation{Valid: valid, Problems: problems}
+}
+
+func sourcePosition(source string, offset int) (line, column int) {
+	line, column = 1, 1
+	if offset > len(source) {
+		offset = len(source)
+	}
+	for _, character := range source[:offset] {
+		if character == '\n' {
+			line, column = line+1, 1
+		} else {
+			column++
+		}
+	}
+	return line, column
 }
 
 func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, returnErr error) {
@@ -78,8 +117,8 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 		return failed(result, started, "SCRIPT_POLICY_VIOLATION", "Unsupported JavaScript runtime version."), nil
 	}
 	validation := r.Validate(input.Script.Code)
+	result.Problems = validation.Problems
 	if !validation.Valid {
-		result.Problems = validation.Problems
 		result.ErrorLine, result.ErrorColumn = validation.Problems[0].Line, validation.Problems[0].Column
 		return failed(result, started, "SCRIPT_SYNTAX_ERROR", validation.Problems[0].Message), nil
 	}
@@ -142,7 +181,7 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 		if count > maxAuxRequests {
 			return nil, errors.New("pm.sendRequest exceeded the five-call limit")
 		}
-		response, evidence, err := r.sendRequest(wallContext, raw, input.AllowPrivateTargets, input.AllowedPrivateHosts, input.AllowedPrivateCIDRs)
+		response, evidence, err := r.sendRequest(wallContext, raw, input.AllowPrivateTargets, input.AllowedPrivateHosts, input.AllowedPrivateCIDRs, input.Transport)
 		evidence.URL = mask(evidence.URL, secretValues)
 		mu.Lock()
 		result.AuxiliaryRequests = append(result.AuxiliaryRequests, evidence)
@@ -202,8 +241,10 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			}
 			return out, nil
 		},
-		"digest": digest,
-		"hmac":   digestHMAC,
+		"digest":      digest,
+		"hmac":        digestHMAC,
+		"digestBytes": digestBytes,
+		"hmacBytes":   digestHMACBytes,
 		"parseURL": func(raw, base string) (map[string]string, error) {
 			var parsed *url.URL
 			var err error
@@ -225,17 +266,23 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			}
 			return map[string]string{"href": parsed.String(), "protocol": parsed.Scheme + ":", "host": parsed.Host, "hostname": parsed.Hostname(), "port": parsed.Port(), "pathname": parsed.EscapedPath(), "search": queryPrefix(parsed.RawQuery), "hash": fragmentPrefix(parsed.Fragment), "origin": parsed.Scheme + "://" + parsed.Host}, nil
 		},
-		"base64Encode": func(value string) string { return base64.StdEncoding.EncodeToString([]byte(value)) },
+		"base64Encode":      func(value string) string { return base64.StdEncoding.EncodeToString([]byte(value)) },
+		"base64EncodeBytes": func(value []int) string { return base64.StdEncoding.EncodeToString(intsToBytes(value)) },
 		"base64Decode": func(value string) (string, error) {
 			decoded, err := base64.StdEncoding.DecodeString(value)
 			return string(decoded), err
+		},
+		"base64DecodeBytes": func(value string) ([]int, error) {
+			decoded, err := base64.StdEncoding.DecodeString(value)
+			return bytesToInts(decoded), err
 		},
 	}
 	if err := vm.Set("__host", host); err != nil {
 		return Result{}, err
 	}
 	initial := map[string]any{
-		"variables": cloneMap(input.Variables), "environment": cloneMap(input.Environment),
+		"variables": cloneMap(input.Variables), "service": cloneMap(input.Service),
+		"application": cloneMap(input.Application), "environment": cloneMap(input.Environment),
 		"collection": cloneMap(input.Collection), "globals": cloneMap(input.Globals),
 		"cookies": cloneMap(input.Cookies), "request": genericJSON(input.Request), "response": genericJSON(input.Response),
 		"iterationData": cloneMap(input.IterationData), "state": input.State, "info": genericJSON(input.Info),
@@ -271,6 +318,9 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			category = "SCRIPT_TIMEOUT"
 		}
 		message := safeError(err.Error(), secretValues)
+		if category == "SCRIPT_TIMEOUT" {
+			message = "Pre-request script exceeded execution timeout."
+		}
 		line, column := errorPosition(message)
 		result.ErrorLine, result.ErrorColumn = line, column
 		result.SafeStack = safeStack(message)
@@ -283,12 +333,14 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 			_ = json.Unmarshal([]byte(testsJSON), &result.Tests)
 		}
 	}
-	stateValue, err := vm.RunString("JSON.stringify({variables:__stores.variables,environment:__stores.environment,collection:__stores.collection,globals:__stores.globals,cookies:__stores.cookies,state:__stores.state,request:__serializeRequest(),visualizer:globalThis.__visualizer||null,execution:globalThis.__execution||{}})")
+	stateValue, err := vm.RunString("JSON.stringify({variables:__stores.variables,service:__stores.service,application:__stores.application,environment:__stores.environment,collection:__stores.collection,globals:__stores.globals,cookies:__stores.cookies,state:__stores.state,request:__serializeRequest(),visualizer:globalThis.__visualizer||null,execution:globalThis.__execution||{}})")
 	if err != nil {
 		return failed(result, started, "SCRIPT_RUNTIME_ERROR", safeError(err.Error(), secretValues)), nil
 	}
 	var state struct {
 		Variables   map[string]string `json:"variables"`
+		Service     map[string]string `json:"service"`
+		Application map[string]string `json:"application"`
 		Environment map[string]string `json:"environment"`
 		Collection  map[string]string `json:"collection"`
 		Globals     map[string]string `json:"globals"`
@@ -301,14 +353,16 @@ func (r *Runtime) Execute(ctx context.Context, input Input) (result Result, retu
 	if err := json.Unmarshal([]byte(stateValue.String()), &state); err != nil {
 		return failed(result, started, "SCRIPT_OUTPUT_LIMIT", "Script produced values that cannot be serialized."), nil
 	}
-	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies = state.Variables, state.Environment, state.Collection, state.Globals, state.Cookies
+	result.InternalVariables, result.InternalService, result.InternalApplication, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies = state.Variables, state.Service, state.Application, state.Environment, state.Collection, state.Globals, state.Cookies
 	result.InternalState = state.State
 	result.InternalRequest = state.Request
 	result.State = maskedObject(state.State, secretValues, false)
 	result.Visualizer = maskedVisualizer(state.Visualizer, secretValues)
 	result.Execution = state.Execution
-	result.Variables, result.Environment, result.Collection, result.Globals, result.Cookies, result.Request = maskedMap(state.Variables, secretValues), maskedMap(state.Environment, secretValues), maskedMap(state.Collection, secretValues), maskedMap(state.Globals, secretValues), maskedMap(state.Cookies, secretValues), maskedRequest(state.Request, secretValues)
+	result.Variables, result.Service, result.Application, result.Environment, result.Collection, result.Globals, result.Cookies, result.Request = maskedMap(state.Variables, secretValues), maskedMap(state.Service, secretValues), maskedMap(state.Application, secretValues), maskedMap(state.Environment, secretValues), maskedMap(state.Collection, secretValues), maskedMap(state.Globals, secretValues), maskedMap(state.Cookies, secretValues), maskedRequest(state.Request, secretValues)
 	result.VariableChanges = append(result.VariableChanges, diffMap("variables", input.Variables, state.Variables, secretValues)...)
+	result.VariableChanges = append(result.VariableChanges, diffMap("service", input.Service, state.Service, secretValues)...)
+	result.VariableChanges = append(result.VariableChanges, diffMap("application", input.Application, state.Application, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("environment", input.Environment, state.Environment, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("collection", input.Collection, state.Collection, secretValues)...)
 	result.VariableChanges = append(result.VariableChanges, diffMap("globals", input.Globals, state.Globals, secretValues)...)
@@ -377,6 +431,7 @@ func failed(result Result, started time.Time, category, message string) Result {
 }
 
 var externalPackagePattern = regexp.MustCompile(`^(npm|jsr):(@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)@([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)$`)
+var potentialSecretLiteralPattern = regexp.MustCompile(`(?i)\b(secret|password|token|private[_-]?key|client[_-]?secret)\w*\s*=\s*["']([^"']{8,})["']`)
 var externalPackageCallPattern = regexp.MustCompile(`(?:pm\.)?require\(\s*["']((?:npm|jsr):(?:@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+|[A-Za-z0-9_.-]+)@[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)["']\s*\)`)
 var teamPackagePattern = regexp.MustCompile(`^@[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 
@@ -532,7 +587,7 @@ func convertESModuleBundle(source string) (string, error) {
 	return trimmed[:index] + "\nreturn {" + strings.Join(properties, ",") + "};\n", nil
 }
 
-func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, allowedHosts, allowedCIDRs []string) (response map[string]any, evidence AuxiliaryRequest, err error) {
+func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, allowedHosts, allowedCIDRs []string, inherited *TransportConfig) (response map[string]any, evidence AuxiliaryRequest, err error) {
 	started := time.Now()
 	evidence = AuxiliaryRequest{Source: "pm.sendRequest", Method: http.MethodGet}
 	defer func() {
@@ -553,6 +608,9 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, a
 			evidence.Error = "invalid request"
 			return nil, evidence, errors.New("pm.sendRequest requires a URL or request object")
 		}
+	}
+	if source := strings.TrimSpace(fmt.Sprint(config["__source"])); source == "rhythm.sendRequest" {
+		evidence.Source = source
 	}
 	target := strings.TrimSpace(fmt.Sprint(config["url"]))
 	method := strings.ToUpper(strings.TrimSpace(fmt.Sprint(config["method"])))
@@ -578,10 +636,24 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, a
 		evidence.Error = "target blocked by network policy"
 		return nil, evidence, policyErr
 	}
-	body := strings.NewReader("")
-	if bodyConfig, exists := config["body"].(map[string]any); exists {
-		body = strings.NewReader(fmt.Sprint(first(bodyConfig["raw"], bodyConfig["content"])))
+	bodyText := ""
+	if bodyValue, exists := config["body"]; exists && bodyValue != nil {
+		switch bodyConfig := bodyValue.(type) {
+		case string:
+			bodyText = bodyConfig
+		case map[string]any:
+			if rawBody := first(bodyConfig["raw"], bodyConfig["content"]); strings.TrimSpace(fmt.Sprint(rawBody)) != "" {
+				bodyText = fmt.Sprint(rawBody)
+			} else if encoded, encodeErr := json.Marshal(bodyConfig); encodeErr == nil {
+				bodyText = string(encoded)
+			}
+		default:
+			if encoded, encodeErr := json.Marshal(bodyValue); encodeErr == nil {
+				bodyText = string(encoded)
+			}
+		}
 	}
+	body := strings.NewReader(bodyText)
 	request, requestErr := http.NewRequestWithContext(ctx, method, target, body)
 	if requestErr != nil {
 		evidence.Error = "request construction failed"
@@ -589,11 +661,25 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, a
 	}
 	applySendRequestHeaders(request, config["header"])
 	applySendRequestHeaders(request, config["headers"])
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	transport.DialContext = policy.dialContext
+	if bodyText != "" && request.Header.Get("Content-Type") == "" {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	transport, transportErr := auxiliaryTransport(inherited)
+	if transportErr != nil {
+		evidence.Error = "transport configuration failed"
+		return nil, evidence, transportErr
+	}
+	if inherited == nil || !slicesContain([]string{"http", "https"}, strings.ToLower(strings.TrimSpace(inherited.ProxyMode))) {
+		transport.DialContext = policy.dialContext
+	}
 	client := *r.client
 	client.Transport = transport
+	if timeoutMS := int64FromScriptValue(config["timeout"]); timeoutMS > 0 {
+		if timeoutMS > 30000 {
+			timeoutMS = 30000
+		}
+		client.Timeout = time.Duration(timeoutMS) * time.Millisecond
+	}
 	client.CheckRedirect = func(next *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("pm.sendRequest redirect limit exceeded")
@@ -625,7 +711,107 @@ func (r *Runtime) sendRequest(ctx context.Context, raw any, allowPrivate bool, a
 	for key, values := range httpResponse.Header {
 		headers[key] = strings.Join(values, ", ")
 	}
-	return map[string]any{"code": httpResponse.StatusCode, "status": httpResponse.Status, "body": string(data), "headers": headers}, evidence, nil
+	return map[string]any{
+		"code": httpResponse.StatusCode, "statusCode": httpResponse.StatusCode,
+		"status": httpResponse.Status, "body": string(data), "headers": headers,
+		"responseTimeMs": evidence.DurationMS, "responseSize": len(data),
+	}, evidence, nil
+}
+
+func int64FromScriptValue(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		parsed, _ := typed.Int64()
+		return parsed
+	default:
+		parsed, _ := strconv.ParseInt(strings.TrimSpace(fmt.Sprint(value)), 10, 64)
+		return parsed
+	}
+}
+
+func auxiliaryTransport(config *TransportConfig) (*http.Transport, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	minimumVersion := uint16(tls.VersionTLS12)
+	verifyHostname := true
+	if config != nil {
+		if config.MinimumTLSVersion == "TLS 1.3" {
+			minimumVersion = tls.VersionTLS13
+		}
+		verifyHostname = config.VerifyHostname
+	}
+	transport.TLSClientConfig = &tls.Config{MinVersion: minimumVersion, InsecureSkipVerify: !verifyHostname} //nolint:gosec -- inherited explicit monitor setting
+	if config == nil {
+		return transport, nil
+	}
+	if config.CABundlePEM != "" {
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM([]byte(config.CABundlePEM)) {
+			return nil, errors.New("dependency request CA bundle is invalid")
+		}
+		transport.TLSClientConfig.RootCAs = pool
+	}
+	if config.ClientCertificate != "" || config.ClientKey != "" {
+		certificate, err := tls.X509KeyPair([]byte(config.ClientCertificate), []byte(config.ClientKey))
+		if err != nil {
+			return nil, errors.New("dependency request client certificate is invalid")
+		}
+		transport.TLSClientConfig.Certificates = []tls.Certificate{certificate}
+	}
+	switch strings.ToLower(strings.TrimSpace(config.ProxyMode)) {
+	case "", "environment":
+		transport.Proxy = http.ProxyFromEnvironment
+	case "none":
+		transport.Proxy = nil
+	case "http", "https":
+		proxyURL, err := url.Parse(config.ProxyURL)
+		if err != nil || proxyURL.Host == "" {
+			return nil, errors.New("dependency request proxy URL is invalid")
+		}
+		if config.ProxyUsername != "" || config.ProxyPassword != "" {
+			proxyURL.User = url.UserPassword(config.ProxyUsername, config.ProxyPassword)
+		}
+		transport.Proxy = func(request *http.Request) (*url.URL, error) {
+			if auxiliaryProxyBypassed(request.URL.Hostname(), config.ProxyNoProxy) {
+				return nil, nil
+			}
+			return proxyURL, nil
+		}
+		// The target was already DNS-validated above. The proxy itself is a
+		// configured platform resource and may resolve to a private address.
+		transport.DialContext = (&net.Dialer{Timeout: 10 * time.Second}).DialContext
+	default:
+		return nil, errors.New("dependency request proxy mode is unsupported")
+	}
+	return transport, nil
+}
+
+func slicesContain(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func auxiliaryProxyBypassed(host, rules string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, raw := range strings.Split(rules, ",") {
+		rule := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		if rule == "*" || rule == host || strings.HasPrefix(rule, "*.") && strings.HasSuffix(host, strings.TrimPrefix(rule, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 type auxiliaryNetworkPolicy struct {
@@ -715,50 +901,74 @@ func (p auxiliaryNetworkPolicy) allowed(host string, address net.IP) bool {
 }
 
 func digest(algorithm, value string) ([]int, error) {
+	return digestBytes(algorithm, bytesToInts([]byte(value)))
+}
+
+func digestHMAC(algorithm, key, value string) ([]int, error) {
+	return digestHMACBytes(algorithm, bytesToInts([]byte(key)), bytesToInts([]byte(value)))
+}
+
+func digestBytes(algorithm string, value []int) ([]int, error) {
+	input := intsToBytes(value)
 	var output []byte
 	switch strings.ToUpper(strings.ReplaceAll(algorithm, "-", "")) {
+	case "MD5":
+		sum := md5.Sum(input) //nolint:gosec -- explicit legacy compatibility
+		output = sum[:]
+	case "SHA1":
+		sum := sha1.Sum(input) //nolint:gosec -- explicit legacy compatibility
+		output = sum[:]
 	case "SHA256":
-		sum := sha256.Sum256([]byte(value))
+		sum := sha256.Sum256(input)
 		output = sum[:]
 	case "SHA384":
-		sum := sha512.Sum384([]byte(value))
+		sum := sha512.Sum384(input)
 		output = sum[:]
 	case "SHA512":
-		sum := sha512.Sum512([]byte(value))
+		sum := sha512.Sum512(input)
 		output = sum[:]
 	default:
 		return nil, errors.New("unsupported digest algorithm")
 	}
-	values := make([]int, len(output))
-	for index := range output {
-		values[index] = int(output[index])
-	}
-	return values, nil
+	return bytesToInts(output), nil
 }
 
-func digestHMAC(algorithm, key, value string) ([]int, error) {
-	var output []byte
+func digestHMACBytes(algorithm string, key, value []int) ([]int, error) {
+	keyBytes, valueBytes := intsToBytes(key), intsToBytes(value)
+	var factory func() hash.Hash
 	switch strings.ToUpper(strings.ReplaceAll(algorithm, "-", "")) {
+	case "MD5":
+		factory = md5.New //nolint:gosec -- explicit legacy compatibility
+	case "SHA1":
+		factory = sha1.New //nolint:gosec -- explicit legacy compatibility
 	case "SHA256":
-		h := hmac.New(sha256.New, []byte(key))
-		_, _ = h.Write([]byte(value))
-		output = h.Sum(nil)
+		factory = sha256.New
 	case "SHA384":
-		h := hmac.New(sha512.New384, []byte(key))
-		_, _ = h.Write([]byte(value))
-		output = h.Sum(nil)
+		factory = sha512.New384
 	case "SHA512":
-		h := hmac.New(sha512.New, []byte(key))
-		_, _ = h.Write([]byte(value))
-		output = h.Sum(nil)
+		factory = sha512.New
 	default:
 		return nil, errors.New("unsupported HMAC algorithm")
 	}
-	values := make([]int, len(output))
-	for index := range output {
-		values[index] = int(output[index])
+	h := hmac.New(factory, keyBytes)
+	_, _ = h.Write(valueBytes)
+	return bytesToInts(h.Sum(nil)), nil
+}
+
+func intsToBytes(values []int) []byte {
+	output := make([]byte, len(values))
+	for index, value := range values {
+		output[index] = byte(value)
 	}
-	return values, nil
+	return output
+}
+
+func bytesToInts(values []byte) []int {
+	output := make([]int, len(values))
+	for index, value := range values {
+		output[index] = int(value)
+	}
+	return output
 }
 
 func diffMap(scope string, before, after map[string]string, secrets []string) []Change {

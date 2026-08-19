@@ -9,10 +9,12 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,12 +24,30 @@ import (
 
 type fakeRuntimeResolver struct {
 	secret    string
+	secrets   map[string]string
 	proxy     ProxyMaterial
 	tls       TLSMaterial
 	telemetry TelemetryMaterial
 }
 
-func (f fakeRuntimeResolver) ResolveSecret(_ context.Context, _ string) (string, error) {
+func TestResolveScriptSecretsSupportsRhythmAndPostmanAPIs(t *testing.T) {
+	executor := NewHTTPExecutorWithResolver(true, fakeRuntimeResolver{secret: "resolved-secret"})
+	resolved, err := executor.resolveScriptSecrets(context.Background(), `
+const native = rhythm.secrets.get("native-secret");
+const compatible = await pm.vault.get("postman-secret");
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved["native-secret"] != "resolved-secret" || resolved["postman-secret"] != "resolved-secret" {
+		t.Fatalf("expected both secret APIs to resolve, got %#v", resolved)
+	}
+}
+
+func (f fakeRuntimeResolver) ResolveSecret(_ context.Context, alias string) (string, error) {
+	if value, exists := f.secrets[alias]; exists {
+		return value, nil
+	}
 	return f.secret, nil
 }
 func (f fakeRuntimeResolver) ResolveTLSProfile(_ context.Context, _, _ string) (TLSMaterial, error) {
@@ -116,6 +136,123 @@ pm.test("path prepared", () => pm.expect(pm.variables.get("path")).to.equal("gen
 	encoded, _ := json.Marshal(result.PreRequestScript)
 	if strings.Contains(string(encoded), "internalVariables") || strings.Contains(string(encoded), "internalCookies") {
 		t.Fatalf("internal script state leaked into evidence: %s", encoded)
+	}
+}
+
+func TestHTTPExecutorSendsMainRequestAfterEnterpriseMACPreRequest(t *testing.T) {
+	const secret = "enterprise-mac-secret"
+	mainAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		parts := regexp.MustCompile(`MAC id="([^"]+)",ts="([^"]+)",nonce="([^"]+)",bodyhash="([^"]+)",mac="([^"]+)"`).FindStringSubmatch(request.Header.Get("Authorization"))
+		if len(parts) != 6 || parts[1] != "client-123" || len(parts[3]) != 36 {
+			t.Errorf("main request did not receive a valid MAC header: %q", request.Header.Get("Authorization"))
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		bodyMAC := hmac.New(sha256.New, []byte(secret))
+		_, _ = bodyMAC.Write(body)
+		bodyHash := base64.StdEncoding.EncodeToString(bodyMAC.Sum(nil))
+		host, port, _ := net.SplitHostPort(request.Host)
+		canonical := parts[2] + "\n" + parts[3] + "\nPOST\n" + request.URL.RequestURI() + "\n" + host + "\n" + port + "\n" + bodyHash + "\n"
+		mac := hmac.New(sha256.New, []byte(secret))
+		_, _ = mac.Write([]byte(canonical))
+		if parts[4] != bodyHash || parts[5] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
+			t.Errorf("main request MAC did not match canonical input")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer mainAPI.Close()
+
+	executor := NewHTTPExecutorWithResolver(true, fakeRuntimeResolver{secrets: map[string]string{"mac_key": "client-123", "mac_secret": secret}})
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "mac", Name: "MAC request", Type: "HTTP_REQUEST", Enabled: true, TimeoutMS: 2000, Request: RequestConfig{
+		Method: "POST", URL: mainAPI.URL + "/api/v1/events?id=123", Body: BodyConfig{Type: "raw", Content: `{"amount":10}`},
+		PreRequestScript: scripts.Script{Enabled: true, RuntimeVersion: scripts.RuntimeVersion, Code: `
+const key = rhythm.secrets.get("mac_key");
+const secret = rhythm.secrets.get("mac_secret");
+const ts = rhythm.time.timestampMs();
+const nonce = rhythm.random.string(36);
+const url = new URL(rhythm.variables.replaceIn(rhythm.request.url));
+const payload = rhythm.variables.replaceIn(rhythm.request.body || "");
+const bodyHash = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(payload, secret));
+const canonical = ts + "\n" + nonce + "\n" + rhythm.request.method + "\n" + url.pathname + url.search + "\n" + url.hostname + "\n" + (url.port || "443") + "\n" + bodyHash + "\n";
+const mac = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(canonical, secret));
+rhythm.request.headers.set("Authorization", 'MAC id="' + key + '",ts="' + ts + '",nonce="' + nonce + '",bodyhash="' + bodyHash + '",mac="' + mac + '"');
+`}, Settings: SettingsConfig{TimeoutMS: 2000, CaptureBody: true},
+	}}
+	result := executor.Execute(context.Background(), step)
+	if result.Status != StatusSuccess || result.ResponseSummary["status"] != http.StatusNoContent {
+		t.Fatalf("main request did not complete after MAC pre-request: %#v", result)
+	}
+}
+
+func TestHTTPExecutorChainsAuthenticationBeforeMainRequest(t *testing.T) {
+	authAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("X-Auth-AppID") != "client-456" || request.Header.Get("X-Auth-Version") != "2" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_token":"issued-enterprise-token"}`))
+	}))
+	defer authAPI.Close()
+	mainAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "Bearer issued-enterprise-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer mainAPI.Close()
+
+	secret := base64.StdEncoding.EncodeToString([]byte("binary-signing-key"))
+	executor := NewHTTPExecutorWithResolver(true, fakeRuntimeResolver{secrets: map[string]string{"clientId": "client-456", "secret": secret}})
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "chained", Name: "Chained authentication", Type: "HTTP_REQUEST", Enabled: true, TimeoutMS: 3000, Request: RequestConfig{
+		Method: "GET", URL: mainAPI.URL + "/protected", PreRequestScript: scripts.Script{Enabled: true, RuntimeVersion: scripts.RuntimeVersion, Code: `
+const clientId = rhythm.secrets.get("clientId");
+const secret = rhythm.secrets.get("secret");
+const version = "2";
+const timestamp = rhythm.time.timestampMs();
+const secretBytes = CryptoJS.enc.Base64.parse(secret);
+let signature = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(clientId + "-" + version + "-" + timestamp, secretBytes));
+signature = signature.replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+const response = await rhythm.sendRequest({ url: "{{AUTH_BASE_URL}}", method: "POST", headers: { "X-Auth-AppID": clientId, "X-Auth-Signature": signature, "X-Auth-Timestamp": String(timestamp), "X-Auth-Version": version }, body: { scope: ["*"] } });
+if (response.statusCode !== 200) throw new Error("Authentication failed: " + response.statusCode);
+const token = response.json().authorization_token;
+rhythm.environment.set("auth_token_keyset", token);
+rhythm.request.headers.set("Authorization", "Bearer " + token);
+`}, Settings: SettingsConfig{TimeoutMS: 3000, CaptureBody: true},
+	}}
+	result := executor.ExecuteWithScriptState(context.Background(), step, nil, map[string]string{"environment.AUTH_BASE_URL": authAPI.URL}, ScriptExecutionContext{})
+	if result.Status != StatusSuccess || result.ResponseSummary["status"] != http.StatusNoContent || result.PreRequestScript == nil || len(result.PreRequestScript.AuxiliaryRequests) != 1 {
+		t.Fatalf("main request did not complete after authentication chaining: %#v", result)
+	}
+}
+
+func TestHTTPExecutorCanContinueMainRequestAfterPreRequestFailure(t *testing.T) {
+	var called atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	executor := NewHTTPExecutor(true)
+	executor.SetScriptExecutor(scripts.NewRuntime())
+	step := StepDefinition{ID: "continue", Name: "Continue after script failure", Type: "HTTP_REQUEST", Enabled: true, Request: RequestConfig{
+		Method: "GET", URL: target.URL,
+		PreRequestScript: scripts.Script{Enabled: true, RuntimeVersion: scripts.RuntimeVersion, ContinueOnFailure: true, Code: `throw new Error("dependency unavailable")`},
+		Settings:         SettingsConfig{TimeoutMS: 1000},
+	}}
+	result := executor.Execute(context.Background(), step)
+	if result.Status != StatusSuccess || called.Load() != 1 || result.PreRequestScript == nil || result.PreRequestScript.Status != "FAILED" {
+		t.Fatalf("expected main request with failed script evidence, got %#v", result)
+	}
+	if _, ok := result.Outputs["preRequestWarning"]; !ok {
+		t.Fatalf("expected a structured pre-request warning, got %#v", result.Outputs)
 	}
 }
 

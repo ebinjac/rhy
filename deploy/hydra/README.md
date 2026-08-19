@@ -1,8 +1,20 @@
 # Rhythm on Hydra
 
-This package maps Rhythm to four independently created Hydra services. Each
-service has its own Dockerfile, Helm values, Vault secret inventory, workflow
-URL, routability setting, and scaling policy. Local development remains in
+Rhythm now has two mutually exclusive Hydra profiles:
+
+| Profile | Hydra services | Intended use |
+|---|---:|---|
+| **Standalone** | 1 | Tonight's presentation, constrained onboarding, and smaller installations on 4 vCPU / 8 GiB |
+| **Scale-out** | 4 | Production isolation, independent Chromium capacity, and the 2,000-active-API-run target |
+
+Use [STANDALONE.md](./STANDALONE.md) when only one Hydra service is available.
+It packages web, API, scheduler/background work, API execution, JavaScript, and
+Chromium in one pod without changing the PostgreSQL/S3 contracts. The switch to
+the four-service profile later requires no data migration.
+
+The remainder of this guide describes the scale-out profile. Each service has
+its own Dockerfile, Helm values, Vault secret inventory, workflow URL,
+routability setting, and scaling policy. Local development remains in
 `compose.yaml`; never deploy the Compose stack to Hydra.
 
 ## Services to create in the Hydra console
@@ -112,7 +124,7 @@ Replace `<HYDRA_PROJECT_NAME>` in every values file. Keep
 `automaticFailover: true` on destination services. The control and executor
 services do not receive GTM/LTM routes and do not use SSO. The initial job
 transport is PostgreSQL, so normal executor traffic does not traverse service
-HTTP. Redis Streams can be enabled later without changing job records.
+HTTP.
 
 ## Vault configuration per service
 
@@ -133,8 +145,7 @@ IPC2. Do not copy the union of all credentials into every service.
 | Browser executor | `services/rhythm-browser-executor/vault/secrets.example` | Database/encryption bootstrap values, browser runner token |
 
 Database, encryption, and permitted S3 configuration appears in each inventory
-only where the process requires it. Redis credentials are commented optional
-entries and are not needed while `RHYTHM_QUEUE_BACKEND=postgres`.
+only where the process requires it.
 `RHYTHM_SECRETS_ENCRYPTION_KEY`
 must be the same value for all four services in an environment. The browser
 runner token must match between callers and `rhythm-browser-executor`.
@@ -150,7 +161,7 @@ mode: AES-GCM encrypted values in PostgreSQL, selected by a plain alias.
 ## Health behavior during dependency outages
 
 Hydra probes `/health`, `/healthz`, or `/livez` to determine whether the process
-started. These endpoints do not contact PostgreSQL, Redis, S3, the script
+started. These endpoints do not contact PostgreSQL, S3, the script
 runner, or the browser agent. A configured service therefore starts and remains
 running while any dependency is unavailable.
 
@@ -250,24 +261,19 @@ Release in this order:
 
 Before E3, all four images must pass the official security/compliance gates,
 PostgreSQL queue recovery, S3/KMS, database recovery, service DNS, anonymous
-access verification, browser trust, and one-hour capacity soak tests. Run a
-separate Redis TLS/failover test only when switching the queue backend to Redis.
+access verification, browser trust, and one-hour capacity soak tests.
 
 ## Queue backend and unrestricted access
 
 Every values file starts with:
 
 ```text
-RHYTHM_QUEUE_BACKEND=postgres
 RHYTHM_AUTH_MODE=anonymous        # frontdoor
 RHYTHM_UNRESTRICTED_OUTBOUND=true
 ```
 
-PostgreSQL is the durable queue and transport until Redis Enterprise is
-available. To switch later, add the three Redis Vault values, set
-`RHYTHM_QUEUE_BACKEND=redis` and `RHYTHM_REDIS_TLS=true` in all four services,
-then roll control, executors, and frontdoor. Existing queued jobs remain in
-PostgreSQL and are published through the outbox after the switch.
+PostgreSQL is the durable queue, outbox, lease, cancellation, and coordination
+authority for every service.
 
 Unrestricted outbound mode removes private-address, hostname, CIDR, Dynatrace
 host, and browser navigation-origin enforcement. TLS verification and evidence

@@ -4,9 +4,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+)
+
+const DefaultTimeField = "@timestamp"
+
+var (
+	atTimestampToken    = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])@timestamp(?:[^A-Za-z0-9_]|$)`)
+	timestampFieldToken = regexp.MustCompile(`["']timestamp["']|(?:^|[^A-Za-z0-9_@])timestamp\s*:|\.timestamp(?:[^A-Za-z0-9_]|$)|(?:^|[^A-Za-z0-9_@])timestamp\s*(?:>=|<=|>|<|==|=)`)
 )
 
 var allowedQueries = map[string]bool{
@@ -27,7 +35,24 @@ var allowedAggs = map[string]bool{
 	"stats": true, "extended_stats": true,
 }
 
+func DetectTimeField(queryText, fallback string) string {
+	if atTimestampToken.MatchString(queryText) {
+		return "@timestamp"
+	}
+	if timestampFieldToken.MatchString(queryText) {
+		return "timestamp"
+	}
+	if field := strings.TrimSpace(fallback); field != "" {
+		return field
+	}
+	return DefaultTimeField
+}
+
 func ValidateAndCompile(body json.RawMessage, timeField string, from, to time.Time, size int) ValidationResult {
+	return compileSearch(body, DetectTimeField(string(body), timeField), from, to, size)
+}
+
+func compileSearch(body json.RawMessage, timeField string, from, to time.Time, size int) ValidationResult {
 	result := ValidationResult{Valid: false, Problems: []ValidationProblem{}, PolicyNotes: []string{}}
 	if len(body) == 0 || len(body) > 64*1024 {
 		result.Problems = append(result.Problems, ValidationProblem{Path: "$", Code: "BODY_SIZE", Message: "Search JSON must be between 1 byte and 64 KB."})
@@ -46,6 +71,11 @@ func ValidateAndCompile(body json.RawMessage, timeField string, from, to time.Ti
 	if len(result.Problems) > 0 {
 		return result
 	}
+	timeField = strings.TrimSpace(timeField)
+	if timeField == "" {
+		timeField = DefaultTimeField
+	}
+	rewriteTimeFieldNodes(authored, timeField)
 	query := authored["query"]
 	if query == nil {
 		query = map[string]any{"match_all": map[string]any{}}
@@ -75,8 +105,37 @@ func ValidateAndCompile(body json.RawMessage, timeField string, from, to time.Ti
 	encoded, _ := json.MarshalIndent(compiled, "", "  ")
 	result.Valid = true
 	result.CompiledBody = encoded
-	result.PolicyNotes = append(result.PolicyNotes, "Rhythm injected the UTC time filter, exact hit counting, bounded timeout, and deterministic sort.")
+	result.PolicyNotes = append(result.PolicyNotes, fmt.Sprintf("Rhythm injected the UTC time filter on %s, exact hit counting, bounded timeout, and deterministic sort.", timeField))
 	return result
+}
+
+func rewriteTimeFieldNodes(value any, timeField string) {
+	switch node := value.(type) {
+	case map[string]any:
+		for _, alias := range []string{"@timestamp", "timestamp"} {
+			if alias == timeField {
+				continue
+			}
+			child, ok := node[alias]
+			if !ok {
+				continue
+			}
+			if _, exists := node[timeField]; !exists {
+				node[timeField] = child
+			}
+			delete(node, alias)
+		}
+		if field, ok := node["field"].(string); ok && (field == "@timestamp" || field == "timestamp") {
+			node["field"] = timeField
+		}
+		for _, child := range node {
+			rewriteTimeFieldNodes(child, timeField)
+		}
+	case []any:
+		for _, child := range node {
+			rewriteTimeFieldNodes(child, timeField)
+		}
+	}
 }
 
 func validateNode(value any, path string, aggDepth int, clauses *int, problems *[]ValidationProblem) {

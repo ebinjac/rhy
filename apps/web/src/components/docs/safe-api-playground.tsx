@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react"
 import { Play, ShieldCheck } from "lucide-react"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 
 const safeEndpoints = [
   { label: "Health", path: "/healthz" },
@@ -7,6 +14,8 @@ const safeEndpoints = [
   { label: "Applications", path: "/api/v1/applications?limit=20" },
   { label: "ELF queries", path: "/api/v1/elf/queries?limit=20" },
 ] as const
+
+const SAME_INSTALLATION = "__same_installation__"
 
 const originPresets = [
   { label: "Local Docker", value: "http://localhost:18080" },
@@ -59,33 +68,58 @@ export function SafeApiPlayground() {
       </div>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
-        <label className="grid gap-1.5 text-sm font-medium">
+        <label className="grid gap-1.5 text-sm font-medium" htmlFor="api-origin">
           API origin
-          <select
-            className="h-11 rounded-lg border bg-background px-3 font-normal"
-            onChange={(event) => setOrigin(event.target.value)}
-            value={origin}
+          <Select
+            value={origin || SAME_INSTALLATION}
+            onValueChange={(value) => {
+              if (value == null) return
+              setOrigin(value === SAME_INSTALLATION ? "" : value)
+            }}
+            items={originPresets.map((preset) => ({
+              value: preset.value || SAME_INSTALLATION,
+              label: preset.label,
+            }))}
           >
-            {originPresets.map((preset) => (
-              <option key={preset.label} value={preset.value}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="api-origin" className="h-11 w-full font-normal">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {originPresets.map((preset) => (
+                <SelectItem
+                  key={preset.label}
+                  value={preset.value || SAME_INSTALLATION}
+                >
+                  {preset.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
-        <label className="grid gap-1.5 text-sm font-medium">
+        <label className="grid gap-1.5 text-sm font-medium" htmlFor="safe-operation">
           Safe operation
-          <select
-            className="h-11 rounded-lg border bg-background px-3 font-normal"
-            onChange={(event) => setPath(event.target.value)}
+          <Select
             value={path}
+            onValueChange={(value) => {
+              if (value == null) return
+              setPath(value)
+            }}
+            items={safeEndpoints.map((endpoint) => ({
+              value: endpoint.path,
+              label: endpoint.label,
+            }))}
           >
-            {safeEndpoints.map((endpoint) => (
-              <option key={endpoint.path} value={endpoint.path}>
-                {endpoint.label}
-              </option>
-            ))}
-          </select>
+            <SelectTrigger id="safe-operation" className="h-11 w-full font-normal">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {safeEndpoints.map((endpoint) => (
+                <SelectItem key={endpoint.path} value={endpoint.path}>
+                  {endpoint.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </label>
       </div>
 

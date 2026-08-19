@@ -233,7 +233,10 @@ export function TelemetryPanel({
               placeholder="builtin:service.response.time:avg"
             />
           </FormField>
-          <FormField label="Default lookback window">
+          <FormField
+            label="Default lookback window"
+            info="Dynatrace timeseries window applied when a metric check does not override it. Example: 10m."
+          >
             <Input aria-label="Default lookback window"
               className="font-mono"
               value={windowValue}
@@ -241,7 +244,10 @@ export function TelemetryPanel({
               placeholder="10m"
             />
           </FormField>
-          <FormField label="Default resolution">
+          <FormField
+            label="Default resolution"
+            info="Sampling resolution for Dynatrace metric queries. Finer resolution increases datapoints and query cost."
+          >
             <Input aria-label="Default resolution"
               className="font-mono"
               value={resolution}

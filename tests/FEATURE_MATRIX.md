@@ -20,6 +20,7 @@ Legend: **Y** = covered, **P** = partial, **—** = not yet, **skip** = graceful
 | Proxies config + test endpoint | Y (`proxies_test`) | P `proxy.test.mjs` | topology-dependent | create profile; monitor-via-proxy may skip |
 | Auth profiles (config library) | Y | — | | |
 | Notifications (email/webhook) | Y (`notifications_test`) | P `webhook.test.mjs` | webhook capture | optional; needs notification dispatch path |
+| Sahara incident dispatch | Y (`sahara` event/post tests) | — | ingest URL | fires once per newly opened alert when the application has Sahara enabled |
 | Telemetry / Dynatrace profiles | Y | — | live Dynatrace | |
 | Environments / variables | Y | P (extractors) | | |
 | JSONPath extractors + chained steps | Y (`server_test`) | Y `extractors.test.mjs` | `/json` | |

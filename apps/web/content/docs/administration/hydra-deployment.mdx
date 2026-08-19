@@ -19,14 +19,34 @@ keywords:
 
 # Deploy Rhythm on Hydra
 
-Create Rhythm as four separate services in the same Hydra project. Each service
-has an independent Dockerfile, workflow URL, values set, Vault mount, scaling
-policy, and security boundary.
+Choose the deployment profile that matches the number of Hydra services
+currently available. Both profiles use the same PostgreSQL schema, S3 evidence
+contract, and encrypted application values.
 
 <Callout type="warn" title="Preview procedure">
   Complete E1 deployment, anonymous-access review, database and queue recovery,
   S3/KMS, browser certificate, and 2,000-run acceptance testing before E3.
 </Callout>
+
+## Deployment profiles
+
+| Profile | Services | Use it when |
+|---|---:|---|
+| Standalone | 1 | A presentation or constrained onboarding needs one 4-vCPU, 8-GiB service |
+| Scale-out | 4 | API execution, Chromium, web traffic, and orchestration need independent capacity |
+
+The standalone image runs the web server, complete Go runtime, JavaScript
+sandbox, and one Chromium agent in one pod. It is capped at 96 active API runs,
+four JavaScript VMs, and one browser journey. PostgreSQL and S3 remain managed
+external services; Redis and persistent pod storage are not required.
+
+<Callout type="info" title="One service available">
+  Follow `deploy/hydra/STANDALONE.md` for exact console settings, Vault values,
+  migration order, presentation capacity, health checks, and the no-data-move
+  transition back to the four-service profile.
+</Callout>
+
+The rest of this page describes the scale-out production profile.
 
 ## Services
 
@@ -90,6 +110,7 @@ deploy/hydra/services/rhythm-frontdoor/Dockerfile
 deploy/hydra/services/rhythm-control/Dockerfile
 deploy/hydra/services/rhythm-api-executor/Dockerfile
 deploy/hydra/services/rhythm-browser-executor/Dockerfile
+deploy/hydra/services/rhythm-standalone/Dockerfile
 ```
 
 Every default base uses the approved internal Hydra buildpack catalog. Corporate
@@ -117,8 +138,7 @@ Do not upload the union of all secrets everywhere. Database, encryption,
 runner-token, and SMTP bootstrap credentials appear only where
 needed. The encryption key must match across services in one environment, and
 the browser runner token must match between callers and browser executors. S3
-uses workload identity—never long-lived AWS access keys. Redis entries are
-optional and remain commented until the queue backend is changed to `redis`.
+uses workload identity—never long-lived AWS access keys.
 
 The Hydra mount only injects infrastructure bootstrap values into a process.
 It is not a Rhythm secret-storage option. Application credentials created under
@@ -128,7 +148,7 @@ referenced by plain alias.
 ## Startup and dependency recovery
 
 Hydra uses `/health` for pod and GTM probes. `/health`, `/healthz`, and `/livez`
-are dependency-free liveness endpoints, so PostgreSQL, Redis, S3, script-runner,
+are dependency-free liveness endpoints, so PostgreSQL, S3, script-runner,
 or browser-agent outages do not prevent a pod from starting. `/readyz` remains
 the detailed dependency check and returns a sanitized `503` while a dependency
 is unavailable. Services reconnect automatically; do not configure `/readyz`
@@ -136,10 +156,9 @@ as the Hydra pod probe when outage-tolerant startup is required.
 
 ## Queue and outbound mode
 
-All service values select `RHYTHM_QUEUE_BACKEND=postgres`, so Redis is not a
-deployment dependency. Redis Streams remain available later by setting the
-backend to `redis`, adding its Vault credentials, enabling TLS, and rolling all
-services. PostgreSQL remains the durable job authority in both modes.
+PostgreSQL is the only deployment queue and coordination backend. Jobs, outbox
+records, leases, cancellation, and recovery remain transactional in the
+`rhythm` schema.
 
 `RHYTHM_UNRESTRICTED_OUTBOUND=true` disables target hostname, CIDR, private-IP,
 Dynatrace endpoint, and browser navigation-origin restrictions. TLS certificate
@@ -200,9 +219,8 @@ an automatic destructive database rollback.
 7. Enable schedules gradually and complete the 2,000-run soak.
 
 <Callout type="info" title="Local Compose remains supported">
-  Local Compose uses PostgreSQL as its default queue and starts without Redis.
-  Redis remains an opt-in profile for compatibility testing. Hydra files do not
-  replace the local developer topology.
+  Local Compose uses the same PostgreSQL queue and coordination model as Hydra.
+  Hydra files do not replace the local developer topology.
 </Callout>
 
 See `deploy/hydra/README.md` for exact console selections, Vault variables,

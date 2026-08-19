@@ -399,7 +399,7 @@ func (r *MonitorRepository) SetState(ctx context.Context, monitorID string, stat
 			return monitors.Monitor{}, fmt.Errorf("deactivate monitor schedule: %w", err)
 		}
 	} else {
-		if _, err := r.pool.Exec(ctx, `UPDATE monitor_schedules SET active = schedule_type <> 'MANUAL', next_run_at = CASE WHEN schedule_type = 'MANUAL' THEN NULL ELSE NOW() END, updated_at = $2 WHERE monitor_id = $1`, monitorID, updatedAt); err != nil {
+		if _, err := r.pool.Exec(ctx, `UPDATE monitor_schedules SET active = schedule_type <> 'MANUAL', next_run_at = CASE WHEN schedule_type = 'MANUAL' THEN NULL ELSE CURRENT_TIMESTAMP END, updated_at = $2 WHERE monitor_id = $1`, monitorID, updatedAt); err != nil {
 			return monitors.Monitor{}, fmt.Errorf("activate monitor schedule: %w", err)
 		}
 	}

@@ -10,27 +10,35 @@ import {
   MonitorCheck,
   ShieldCheck,
 } from "lucide-react"
+import { useCallback } from "react"
 
+import { InvestigationChecklist } from "@/features/alerts/investigation-checklist"
 import {
   getUnifiedAlert,
   listAlertEvents,
 } from "@/lib/api-client/opensearch-alerts"
+import { getAlertInvestigation } from "@/lib/api-client/investigation"
 import { formatDateTime } from "@/lib/format-date"
 import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/alerts/$alertId")({
   loader: async ({ params }) => {
-    const [alert, events] = await Promise.all([
+    const [alert, events, investigation] = await Promise.all([
       getUnifiedAlert({ data: { alertId: params.alertId } }),
       listAlertEvents({ data: { alertId: params.alertId } }),
+      getAlertInvestigation({ data: { alertId: params.alertId } }),
     ])
-    return { alert, events }
+    return { alert, events, investigation }
   },
   component: AlertDetail,
 })
 
 function AlertDetail() {
-  const { alert, events } = Route.useLoaderData()
+  const { alert, events, investigation } = Route.useLoaderData()
+  const refreshInvestigation = useCallback(
+    () => getAlertInvestigation({ data: { alertId: alert.id } }),
+    [alert.id]
+  )
   const external = alert.sourceType === "OPENSEARCH_ALERTING"
   const browser = alert.sourceType === "RHYTHM_BROWSER_MONITOR"
   return (
@@ -182,6 +190,15 @@ function AlertDetail() {
               }
             />
           </dl>
+          {investigation.items.length ? (
+            <div className="mt-6">
+              <InvestigationChecklist
+                alertId={alert.id}
+                onRefresh={refreshInvestigation}
+                report={investigation}
+              />
+            </div>
+          ) : null}
           <pre className="mt-4 max-h-80 overflow-auto rounded-lg border bg-muted/25 p-4 font-mono text-xs leading-5 whitespace-pre-wrap">
             {Object.keys(alert.evidence).length
               ? JSON.stringify(alert.evidence, null, 2)

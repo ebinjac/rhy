@@ -9,7 +9,7 @@ owners: [Rhythm Platform]
 keywords: [architecture, workers, agents]
 ---
 
-Rhythm separates authoring and execution. The API persists immutable revisions and durable jobs. Workers execute monitors, while isolated agents reach target networks. PostgreSQL stores durable state and is the default queue transport; Redis Streams can be selected later for higher-throughput coordination.
+Rhythm separates authoring and execution. The API persists immutable revisions and durable jobs. Workers execute monitors, while isolated agents reach target networks. PostgreSQL stores durable state and provides the queue and coordination transport.
 
 The JavaScript runner receives bounded, masked input and creates a fresh VM for every script. ELF searches use the configured OpenSearch connection and store only sanitized, bounded evidence.
 

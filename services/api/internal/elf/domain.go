@@ -7,16 +7,16 @@ import (
 )
 
 type Settings struct {
-	BaseURL              string    `json:"baseUrl"`
-	DashboardURL         string    `json:"dashboardUrl,omitempty"`
-	DefaultIndexPattern  string    `json:"defaultIndexPattern"`
-	TimeoutSeconds       int       `json:"timeoutSeconds"`
-	AllowedIndexPatterns []string  `json:"allowedIndexPatterns"`
-	TLSProfileID         string    `json:"tlsProfileId,omitempty"`
-	ProxyProfileID       string    `json:"proxyProfileId,omitempty"`
-	AuthMode             string    `json:"authMode"`
-	Username             string    `json:"username,omitempty"`
-	CredentialSecretRef  string    `json:"credentialSecretRef,omitempty"`
+	BaseURL              string   `json:"baseUrl"`
+	DashboardURL         string   `json:"dashboardUrl,omitempty"`
+	DefaultIndexPattern  string   `json:"defaultIndexPattern"`
+	TimeoutSeconds       int      `json:"timeoutSeconds"`
+	AllowedIndexPatterns []string `json:"allowedIndexPatterns"`
+	TLSProfileID         string   `json:"tlsProfileId,omitempty"`
+	ProxyProfileID       string   `json:"proxyProfileId,omitempty"`
+	AuthMode             string   `json:"authMode"`
+	Username             string   `json:"username,omitempty"`
+	CredentialSecretRef  string   `json:"credentialSecretRef,omitempty"`
 	// Credential is write-only plaintext accepted on save/test; never returned by GetSettings.
 	Credential string `json:"credential,omitempty"`
 	// HasCredential is true when an encrypted value or secret ref is stored.
@@ -28,21 +28,27 @@ type Settings struct {
 }
 
 type Application struct {
-	ID                  string            `json:"id"`
-	CARID               string            `json:"carId,omitempty"`
-	Name                string            `json:"name"`
-	Owner               string            `json:"owner,omitempty"`
-	Environment         string            `json:"environment,omitempty"`
-	DefaultIndexPattern string            `json:"defaultIndexPattern,omitempty"`
-	DefaultTimeField    string            `json:"defaultTimeField"`
-	MaskingRules        []string          `json:"maskingRules"`
-	SemanticMapping     map[string]string `json:"semanticMapping"`
-	AlertEmails         []string          `json:"alertEmails"`
-	Active              bool              `json:"active"`
-	Services            []AppService      `json:"services"`
-	MonitorIDs          []string          `json:"monitorIds"`
-	CreatedAt           time.Time         `json:"createdAt"`
-	UpdatedAt           time.Time         `json:"updatedAt"`
+	ID                        string            `json:"id"`
+	CARID                     string            `json:"carId,omitempty"`
+	Name                      string            `json:"name"`
+	Owner                     string            `json:"owner,omitempty"`
+	Environment               string            `json:"environment,omitempty"`
+	DefaultIndexPattern       string            `json:"defaultIndexPattern,omitempty"`
+	DefaultTimeField          string            `json:"defaultTimeField"`
+	MaskingRules              []string          `json:"maskingRules"`
+	SemanticMapping           map[string]string `json:"semanticMapping"`
+	AlertEmails               []string          `json:"alertEmails"`
+	SaharaEnabled             bool              `json:"saharaEnabled"`
+	SaharaAssignmentGroup     string            `json:"saharaAssignmentGroup,omitempty"`
+	SaharaReporterGroup       string            `json:"saharaReporterGroup,omitempty"`
+	SaharaEnvironmentAffected string            `json:"saharaEnvironmentAffected,omitempty"`
+	SaharaEventGenerator      string            `json:"saharaEventGenerator,omitempty"`
+	SaharaDefaultSeverity     string            `json:"saharaDefaultSeverity,omitempty"`
+	Active                    bool              `json:"active"`
+	Services                  []AppService      `json:"services"`
+	MonitorIDs                []string          `json:"monitorIds"`
+	CreatedAt                 time.Time         `json:"createdAt"`
+	UpdatedAt                 time.Time         `json:"updatedAt"`
 }
 
 type AppService struct {
@@ -57,16 +63,22 @@ type AppService struct {
 }
 
 type ApplicationInput struct {
-	CARID               string            `json:"carId,omitempty"`
-	Name                string            `json:"name"`
-	Owner               string            `json:"owner,omitempty"`
-	Environment         string            `json:"environment,omitempty"`
-	DefaultIndexPattern string            `json:"defaultIndexPattern,omitempty"`
-	DefaultTimeField    string            `json:"defaultTimeField,omitempty"`
-	MaskingRules        []string          `json:"maskingRules,omitempty"`
-	SemanticMapping     map[string]string `json:"semanticMapping,omitempty"`
-	AlertEmails         []string          `json:"alertEmails,omitempty"`
-	Active              *bool             `json:"active,omitempty"`
+	CARID                     string            `json:"carId,omitempty"`
+	Name                      string            `json:"name"`
+	Owner                     string            `json:"owner,omitempty"`
+	Environment               string            `json:"environment,omitempty"`
+	DefaultIndexPattern       string            `json:"defaultIndexPattern,omitempty"`
+	DefaultTimeField          string            `json:"defaultTimeField,omitempty"`
+	MaskingRules              []string          `json:"maskingRules,omitempty"`
+	SemanticMapping           map[string]string `json:"semanticMapping,omitempty"`
+	AlertEmails               []string          `json:"alertEmails,omitempty"`
+	SaharaEnabled             *bool             `json:"saharaEnabled,omitempty"`
+	SaharaAssignmentGroup     string            `json:"saharaAssignmentGroup,omitempty"`
+	SaharaReporterGroup       string            `json:"saharaReporterGroup,omitempty"`
+	SaharaEnvironmentAffected string            `json:"saharaEnvironmentAffected,omitempty"`
+	SaharaEventGenerator      string            `json:"saharaEventGenerator,omitempty"`
+	SaharaDefaultSeverity     string            `json:"saharaDefaultSeverity,omitempty"`
+	Active                    *bool             `json:"active,omitempty"`
 }
 
 type ServiceInput struct {
@@ -141,6 +153,7 @@ type ProbeInput struct {
 	To              *time.Time `json:"to,omitempty"`
 	WindowSeconds   int        `json:"windowSeconds,omitempty"`
 	Size            int        `json:"size,omitempty"`
+	TimeField       string     `json:"timeField,omitempty"`
 	Cursor          string     `json:"cursor,omitempty"`
 	DeploymentStart *time.Time `json:"deploymentStart,omitempty"`
 }

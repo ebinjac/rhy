@@ -17,6 +17,8 @@ const __blocked = (message) => {
 
 globalThis.__stores = {
   variables: __clone(__initial.variables || {}),
+  service: __clone(__initial.service || {}),
+  application: __clone(__initial.application || {}),
   environment: __clone(__initial.environment || {}),
   collection: __clone(__initial.collection || {}),
   globals: __clone(__initial.globals || {}),
@@ -65,21 +67,38 @@ const __scope = (store, writable = true) => ({
   replaceIn: (text) => __replaceIn(text, (key) => store[key]),
   toObject: () => __clone(store),
 });
+const __explicitScope = (key) => {
+  const match = String(key).match(
+    /^(variables|service|application|environment|collection|globals)\.(.+)$/,
+  );
+  if (!match) return null;
+  return { store: __stores[match[1]], key: match[2] };
+};
 const __resolved = {
-  has: (key) =>
-    [
+  has: (key) => {
+    const explicit = __explicitScope(key);
+    if (explicit)
+      return Object.prototype.hasOwnProperty.call(explicit.store, explicit.key);
+    return [
       __stores.variables,
       __stores.iterationData,
+      __stores.service,
+      __stores.application,
       __stores.environment,
       __stores.collection,
       __stores.globals,
     ].some((store) =>
       Object.prototype.hasOwnProperty.call(store, String(key)),
-    ),
+    );
+  },
   get: (key) => {
+    const explicit = __explicitScope(key);
+    if (explicit) return explicit.store[explicit.key];
     for (const store of [
       __stores.variables,
       __stores.iterationData,
+      __stores.service,
+      __stores.application,
       __stores.environment,
       __stores.collection,
       __stores.globals,
@@ -107,6 +126,8 @@ const __resolved = {
       __stores.globals,
       __stores.collection,
       __stores.environment,
+      __stores.application,
+      __stores.service,
       __stores.iterationData,
       __stores.variables,
     ),
@@ -135,6 +156,10 @@ const __list = (entries) => {
       if (found) Object.assign(found, next);
       else entries.push(next);
       return list;
+    },
+    set(name, value) {
+      if (name && typeof name === "object") return list.upsert(name);
+      return list.upsert({ key: String(name), value: String(value ?? "") });
     },
     remove(key) {
       const normalized = String(key).toLowerCase();
@@ -309,7 +334,10 @@ if (__request) {
     configurable: true,
   });
   __request.body.update = (value) => {
-    __request.body.content = String(value ?? "");
+    __request.body.content =
+      value != null && typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value ?? "");
     return __request.body;
   };
   Object.defineProperty(__request, "headers", {
@@ -322,6 +350,23 @@ if (__request) {
     enumerable: false,
     configurable: true,
   });
+  __request.setUrl = (value) => {
+    __requestURLValue = String(value ?? "");
+    return __request;
+  };
+  __request.setMethod = (value) => {
+    __request.method = String(value || "GET").toUpperCase();
+    return __request;
+  };
+  __request.setBody = (value) => {
+    __request.body ||= {};
+    __request.body.content =
+      value != null && typeof value === "object"
+        ? JSON.stringify(value)
+        : String(value ?? "");
+    if (!__request.body.type) __request.body.type = "json";
+    return __request;
+  };
 }
 globalThis.__serializeRequest = () =>
   __request
@@ -490,12 +535,16 @@ const __headerMap = (headers) => {
 };
 const __scriptResponse = (raw) => {
   const headers = __headerMap(raw.headers || {});
+  const statusCode = Number(raw.statusCode || raw.code || 0);
+  const responseSize = Number(raw.responseSize || String(raw.body || "").length);
   return {
-    code: Number(raw.code || 0),
+    code: statusCode,
+    statusCode,
     status: String(raw.status || ""),
     headers,
     responseTime: Number(raw.responseTimeMs || 0),
-    responseSize: Number(raw.responseSize || String(raw.body || "").length),
+    responseSize,
+    size: responseSize,
     stream: Uint8Array.from(
       Array.from(unescape(encodeURIComponent(String(raw.body || "")))).map(
         (character) => character.charCodeAt(0),
@@ -507,10 +556,19 @@ const __scriptResponse = (raw) => {
   };
 };
 const __normalizeSendRequest = (config) => {
-  if (typeof config === "string") return config;
+  if (typeof config === "string") return __resolved.replaceIn(config);
   const next = __clone(config) || {};
   if (next.headers != null && next.header == null) next.header = next.headers;
-  return next;
+  const render = (value) => {
+    if (typeof value === "string") return __resolved.replaceIn(value);
+    if (Array.isArray(value)) return value.map(render);
+    if (value && typeof value === "object")
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [key, render(item)]),
+      );
+    return value;
+  };
+  return render(next);
 };
 const __sendRequest = (config, callback) => {
   try {
@@ -1614,6 +1672,273 @@ globalThis.pm = {
 };
 pm.test.skip = __test.skip;
 
+// Rhythm-native API. It intentionally shares the same stores and governed
+// request implementation as the Postman-compatible pm API so behavior cannot
+// drift between editor modes.
+const __utf8Bytes = (value) =>
+  Array.from(unescape(encodeURIComponent(String(value ?? "")))).map(
+    (character) => character.charCodeAt(0),
+  );
+const __bytesToUtf8 = (value) =>
+  decodeURIComponent(
+    escape(String.fromCharCode(...Array.from(value || []))),
+  );
+const __wordArray = (value) => {
+  const bytes = Array.from(value || [], (item) => Number(item) & 255);
+  return {
+    __rhythmWordArray: true,
+    bytes,
+    sigBytes: bytes.length,
+    toString(encoder) {
+      return (encoder || CryptoJS.enc.Hex).stringify(this);
+    },
+  };
+};
+const __valueBytes = (value) => {
+  if (value?.__rhythmWordArray) return Array.from(value.bytes || []);
+  if (value instanceof ArrayBuffer) return Array.from(new Uint8Array(value));
+  if (ArrayBuffer.isView(value))
+    return Array.from(
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
+    );
+  if (Array.isArray(value)) return value.map((item) => Number(item) & 255);
+  return __utf8Bytes(value);
+};
+const __hexString = (bytes) =>
+  Array.from(bytes || [], (byte) =>
+    Number(byte).toString(16).padStart(2, "0"),
+  ).join("");
+const __base64String = (bytes) =>
+  __host.base64EncodeBytes(Array.from(bytes || []));
+const __decodeBase64Bytes = (value) =>
+  Array.from(__host.base64DecodeBytes(String(value).replace(/\s+/g, "")));
+const __cryptoEncoder = {
+  Hex: {
+    stringify: (value) => __hexString(__valueBytes(value)),
+    parse(value) {
+      const source = String(value).replace(/\s+/g, "");
+      if (source.length % 2 !== 0 || /[^0-9a-f]/i.test(source))
+        throw new Error("Hex input is invalid.");
+      const bytes = [];
+      for (let index = 0; index < source.length; index += 2)
+        bytes.push(parseInt(source.slice(index, index + 2), 16));
+      return __wordArray(bytes);
+    },
+  },
+  Base64: {
+    stringify: (value) => __base64String(__valueBytes(value)),
+    parse: (value) => __wordArray(__decodeBase64Bytes(value)),
+  },
+  Utf8: {
+    stringify: (value) => __bytesToUtf8(__valueBytes(value)),
+    parse: (value) => __wordArray(__utf8Bytes(value)),
+  },
+};
+const __digestWordArray = (algorithm, value) =>
+  __wordArray(__host.digestBytes(algorithm, __valueBytes(value)));
+const __hmacWordArray = (algorithm, value, key) =>
+  __wordArray(
+    __host.hmacBytes(algorithm, __valueBytes(key), __valueBytes(value)),
+  );
+
+globalThis.CryptoJS = {
+  enc: __cryptoEncoder,
+  lib: {
+    WordArray: {
+      create: (value = []) => __wordArray(__valueBytes(value)),
+      random: (length) => __wordArray(__host.randomBytes(Number(length))),
+    },
+  },
+  HmacSHA256: (value, key) => __hmacWordArray("SHA-256", value, key),
+  HmacSHA384: (value, key) => __hmacWordArray("SHA-384", value, key),
+  HmacSHA512: (value, key) => __hmacWordArray("SHA-512", value, key),
+  HmacSHA1: (value, key) => __hmacWordArray("SHA-1", value, key),
+  SHA256: (value) => __digestWordArray("SHA-256", value),
+  SHA1: (value) => __digestWordArray("SHA-1", value),
+  MD5: (value) => __digestWordArray("MD5", value),
+};
+
+const __formatCrypto = (bytes, options = {}) => {
+  const encoding = String(
+    typeof options === "string" ? options : options.encoding || "hex",
+  ).toLowerCase();
+  if (encoding === "raw" || encoding === "bytes")
+    return Uint8Array.from(bytes);
+  if (encoding === "base64") return __base64String(bytes);
+  if (encoding === "base64url")
+    return __base64String(bytes)
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "");
+  if (encoding === "hex") return __hexString(bytes);
+  throw new Error(`Unsupported crypto output encoding '${encoding}'.`);
+};
+const __rhythmHMAC = (algorithm, input, key, options) => {
+  __host.log("debug", `Generated ${algorithm} signature.`);
+  return __formatCrypto(
+    __host.hmacBytes(algorithm, __valueBytes(key), __valueBytes(input)),
+    options,
+  );
+};
+const __rhythmDigest = (algorithm, input, options) =>
+  __formatCrypto(__host.digestBytes(algorithm, __valueBytes(input)), options);
+const __rhythmHeaders = {
+  add(name, value) {
+    if (name && typeof name === "object") __request?.headers.add(name);
+    else __request?.headers.add({ key: String(name), value: String(value ?? "") });
+    __host.log("debug", `Added request header ${String(name?.key ?? name)}.`);
+  },
+  set(name, value) {
+    __request?.headers.set(name, value);
+    __host.log("debug", `Updated request header ${String(name?.key ?? name)}.`);
+  },
+  remove(name) {
+    __request?.headers.remove(name);
+    __host.log("debug", `Removed request header ${String(name)}.`);
+  },
+  get: (name) => __request?.headers.get(name),
+  has: (name) => Boolean(__request?.headers.has(name)),
+  toObject: () => __request?.headers.toObject() || {},
+};
+const __rhythmRequest = __request
+  ? {
+      get method() {
+        return __request.method;
+      },
+      set method(value) {
+        __request.setMethod(value);
+      },
+      get url() {
+        return __requestURLValue;
+      },
+      set url(value) {
+        __request.setUrl(value);
+      },
+      get body() {
+        return __request.body?.content ?? "";
+      },
+      set body(value) {
+        __request.setBody(value);
+      },
+      headers: __rhythmHeaders,
+      query: __request.query,
+      auth: __request.auth,
+      setUrl: (value) => __request.setUrl(value),
+      setMethod: (value) => __request.setMethod(value),
+      setBody: (value) => __request.setBody(value),
+    }
+  : null;
+const __rhythmSendRequest = (config, callback) => {
+  const tagged =
+    typeof config === "string"
+      ? { url: config, method: "GET", __source: "rhythm.sendRequest" }
+      : Object.assign({}, config || {}, { __source: "rhythm.sendRequest" });
+  return __sendRequest(tagged, callback);
+};
+
+globalThis.rhythm = {
+  variables: __resolved,
+  environment: __scope(__stores.environment),
+  globals: __scope(__stores.globals),
+  application: __scope(__stores.application),
+  service: __scope(__stores.service),
+  secrets: {
+    get: (alias) => __host.vaultGet(String(alias)),
+    has(alias) {
+      try {
+        return __host.vaultGet(String(alias)) !== undefined;
+      } catch (_error) {
+        return false;
+      }
+    },
+  },
+  request: __rhythmRequest,
+  response: __pmResponse,
+  sendRequest: __rhythmSendRequest,
+  time: {
+    timestampMs() {
+      __host.log("debug", "Generated millisecond timestamp.");
+      return Date.now();
+    },
+    timestampSeconds: () => Math.floor(Date.now() / 1000),
+    iso: () => new Date().toISOString(),
+  },
+  random: {
+    string(length = 36, alphabet = "abcdefghijklmnopqrstuvwxyz0123456789") {
+      const size = Math.max(0, Math.min(4096, Number(length) || 0));
+      const characters = String(alphabet);
+      if (!characters) throw new Error("Random string alphabet cannot be empty.");
+      const bytes = __host.randomBytes(size);
+      const output = bytes
+        .map((byte) => characters[byte % characters.length])
+        .join("");
+      __host.log("debug", `Generated ${size}-character random value.`);
+      return output;
+    },
+    uuid: () => __host.randomUUID(),
+    hex: (length = 32) =>
+      __hexString(__host.randomBytes(Math.ceil(Number(length) / 2))).slice(
+        0,
+        Number(length),
+      ),
+    bytes: (length = 32) => Uint8Array.from(__host.randomBytes(Number(length))),
+  },
+  crypto: {
+    hmacSHA256: (input, key, options) =>
+      __rhythmHMAC("SHA-256", input, key, options),
+    hmacSHA384: (input, key, options) =>
+      __rhythmHMAC("SHA-384", input, key, options),
+    hmacSHA512: (input, key, options) =>
+      __rhythmHMAC("SHA-512", input, key, options),
+    sha256: (input, options) => __rhythmDigest("SHA-256", input, options),
+    base64Encode: (value) => __base64String(__valueBytes(value)),
+    base64Decode: (value) => __bytesToUtf8(__decodeBase64Bytes(value)),
+    base64UrlEncode(value, options = {}) {
+      const encoded = __base64String(__valueBytes(value))
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_");
+      return options.padding === true ? encoded : encoded.replace(/=+$/g, "");
+    },
+    base64UrlDecode(value) {
+      const source = String(value).replace(/-/g, "+").replace(/_/g, "/");
+      return __bytesToUtf8(
+        __decodeBase64Bytes(source + "=".repeat((4 - (source.length % 4)) % 4)),
+      );
+    },
+    jwt: {
+      sign(options = {}) {
+        const algorithm = String(options.alg || "HS256").toUpperCase();
+        if (algorithm !== "HS256")
+          throw __blocked(
+            "The current Rhythm sandbox supports HS256 JWT signing. RS256 and ES256 require a governed asymmetric-key profile.",
+          );
+        const header = Object.assign(
+          { typ: "JWT", alg: algorithm },
+          options.header || {},
+        );
+        const segment = (value) =>
+          rhythm.crypto.base64UrlEncode(JSON.stringify(value), {
+            padding: false,
+          });
+        const signingInput = `${segment(header)}.${segment(options.payload || {})}`;
+        const signature = rhythm.crypto.hmacSHA256(
+          signingInput,
+          options.secret,
+          "base64url",
+        );
+        return `${signingInput}.${signature}`;
+      },
+    },
+  },
+};
+
+// Legacy Postman global-variable helpers retained only for migration.
+globalThis.postman = {
+  setGlobalVariable: (name, value) => pm.globals.set(name, value),
+  getGlobalVariable: (name) => pm.globals.get(name),
+  clearGlobalVariable: (name) => pm.globals.unset(name),
+};
+
 Object.defineProperty(pm, "message", {
   get() {
     throw __contextError("pm.message", "HTTP scripts");
@@ -1642,6 +1967,7 @@ globalThis.console = {
     __host.log("info", `${String(label)}: ${Date.now() - start}ms`);
   },
 };
+rhythm.console = globalThis.console;
 
 globalThis.setTimeout = (callback, milliseconds = 0, ...args) => {
   __host.sleep(Number(milliseconds));

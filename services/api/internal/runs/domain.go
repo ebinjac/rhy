@@ -22,20 +22,21 @@ const (
 )
 
 type Run struct {
-	ID               string          `json:"id"`
-	MonitorID        string          `json:"monitorId"`
-	RevisionID       string          `json:"revisionId"`
-	Status           Status          `json:"status"`
-	TriggerType      string          `json:"triggerType"`
-	TriggerSource    string          `json:"triggerSource,omitempty"`
-	AgentID          string          `json:"agentId,omitempty"`
-	FailureCategory  string          `json:"failureCategory,omitempty"`
-	FailureReason    string          `json:"failureReason,omitempty"`
-	FailedStepID     string          `json:"failedStepId,omitempty"`
+	ID                string          `json:"id"`
+	MonitorID         string          `json:"monitorId"`
+	RevisionID        string          `json:"revisionId"`
+	Status            Status          `json:"status"`
+	TriggerType       string          `json:"triggerType"`
+	TriggerSource     string          `json:"triggerSource,omitempty"`
+	AgentID           string          `json:"agentId,omitempty"`
+	FailureCategory   string          `json:"failureCategory,omitempty"`
+	FailureReason     string          `json:"failureReason,omitempty"`
+	FailedStepID      string          `json:"failedStepId,omitempty"`
 	QueueDelayMS      int64           `json:"queueDelayMs,omitempty"`
 	WarningCount      int             `json:"warningCount"`
 	DurationMS        int64           `json:"durationMs"`
 	APIResponseTimeMS *int64          `json:"apiResponseTimeMs,omitempty"`
+	PreparationMS     *int64          `json:"preparationMs,omitempty"`
 	StartedAt         *time.Time      `json:"startedAt,omitempty"`
 	EndedAt           *time.Time      `json:"endedAt,omitempty"`
 	CreatedAt         time.Time       `json:"createdAt"`

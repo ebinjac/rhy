@@ -24,7 +24,22 @@ type HistoryMetricPoint struct {
 	RetryCount          int                      `json:"retryCount"`
 	WarningCount        int                      `json:"warningCount"`
 	Spike               bool                     `json:"spike"`
+	ResponseStatus      *int                     `json:"responseStatus,omitempty"`
+	BucketCounts        *HistoryBucketCounts     `json:"bucketCounts,omitempty"`
 	Steps               []HistoryStepMetricPoint `json:"steps,omitempty"`
+}
+
+type HistoryBucketCounts struct {
+	Success     int `json:"success"`
+	Failed      int `json:"failed"`
+	Timeout     int `json:"timeout"`
+	Class1xx    int `json:"class1xx,omitempty"`
+	Class2xx    int `json:"class2xx"`
+	Class3xx    int `json:"class3xx"`
+	Class4xx    int `json:"class4xx"`
+	Class5xx    int `json:"class5xx"`
+	HTTPTimeout int `json:"httpTimeout"`
+	NoResponse  int `json:"noResponse"`
 }
 
 type HistoryStepMetricPoint struct {
@@ -64,14 +79,15 @@ type HistoryMetricSummary struct {
 }
 
 type HistoryMetrics struct {
-	Window             string               `json:"window"`
-	WindowStart        time.Time            `json:"windowStart"`
-	WindowEnd          time.Time            `json:"windowEnd"`
-	Summary            HistoryMetricSummary `json:"summary"`
-	Percentiles        PercentileMetrics    `json:"percentiles"`
-	StatusDistribution map[string]int       `json:"statusDistribution"`
-	FailureCategories  map[string]int       `json:"failureCategories"`
-	Points             []HistoryMetricPoint `json:"points"`
+	Window                     string               `json:"window"`
+	WindowStart                time.Time            `json:"windowStart"`
+	WindowEnd                  time.Time            `json:"windowEnd"`
+	Summary                    HistoryMetricSummary `json:"summary"`
+	Percentiles                PercentileMetrics    `json:"percentiles"`
+	StatusDistribution         map[string]int       `json:"statusDistribution"`
+	FailureCategories          map[string]int       `json:"failureCategories"`
+	ResponseStatusDistribution map[string]int       `json:"responseStatusDistribution"`
+	Points                     []HistoryMetricPoint `json:"points"`
 }
 
 type MetricsRepository interface {
@@ -144,7 +160,7 @@ func (s *Service) MetricsSummary(ctx context.Context, monitorID, window string) 
 		return HistoryMetrics{}, err
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].CreatedAt.Before(points[j].CreatedAt) })
-	result := HistoryMetrics{Window: strings.ToLower(window), WindowStart: start, WindowEnd: end, Points: points, StatusDistribution: map[string]int{}, FailureCategories: map[string]int{}}
+	result := HistoryMetrics{Window: strings.ToLower(window), WindowStart: start, WindowEnd: end, Points: points, StatusDistribution: map[string]int{}, FailureCategories: map[string]int{}, ResponseStatusDistribution: map[string]int{}}
 	responseValues := make([]int64, 0, len(points))
 	var successCount, completedCount, errorCount, timeoutCount int
 	var responseTotal, preparationTotal, postTotal, executionTotal, queueTotal int64
@@ -163,6 +179,12 @@ func (s *Service) MetricsSummary(ctx context.Context, monitorID, window string) 
 			if point.Status == StatusTimedOut {
 				timeoutCount++
 			}
+			hasStatus := point.ResponseStatus != nil && *point.ResponseStatus > 0
+			statusCode := 0
+			if hasStatus {
+				statusCode = *point.ResponseStatus
+			}
+			result.ResponseStatusDistribution[ResponseStatusDistributionKey(statusCode, hasStatus)]++
 		}
 		preparationTotal += point.PreparationMS
 		postTotal += point.PostProcessingMS
@@ -255,7 +277,62 @@ func (s *Service) MetricSeries(ctx context.Context, monitorID, window string, ma
 		return nil, err
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].CreatedAt.Before(points[j].CreatedAt) })
-	return SampleHistoryMetricPoints(points, maxPoints), nil
+	return AttachSeriesBucketCounts(points, start, duration, maxPoints), nil
+}
+
+// AttachSeriesBucketCounts collapses runs into at most maxPoints time buckets,
+// keeping the slowest API response as the representative latency point and
+// attaching full-bucket HTTP and outcome counts for the aligned status charts.
+func AttachSeriesBucketCounts(points []HistoryMetricPoint, windowStart time.Time, duration time.Duration, maxPoints int) []HistoryMetricPoint {
+	if len(points) == 0 {
+		return points
+	}
+	if maxPoints < 1 {
+		maxPoints = 1
+	}
+	bucketSeconds := max(1, int(math.Ceil(duration.Seconds()/float64(maxPoints))))
+	bucketDuration := time.Duration(bucketSeconds) * time.Second
+	type bucket struct {
+		counts            HistoryBucketCounts
+		representative    HistoryMetricPoint
+		representativeAPI int64
+		hasRepresentative bool
+	}
+	buckets := map[int64]*bucket{}
+	order := make([]int64, 0)
+	for _, point := range points {
+		offset := point.CreatedAt.Sub(windowStart)
+		if offset < 0 {
+			offset = 0
+		}
+		key := int64(offset / bucketDuration)
+		current, ok := buckets[key]
+		if !ok {
+			current = &bucket{}
+			buckets[key] = current
+			order = append(order, key)
+		}
+		incrementBucketCounts(&current.counts, point)
+		api := int64(-1)
+		if point.APIResponseTimeMS != nil {
+			api = *point.APIResponseTimeMS
+		}
+		if !current.hasRepresentative || api > current.representativeAPI || (api == current.representativeAPI && point.CreatedAt.After(current.representative.CreatedAt)) {
+			current.representative = point
+			current.representativeAPI = api
+			current.hasRepresentative = true
+		}
+	}
+	sort.Slice(order, func(i, j int) bool { return order[i] < order[j] })
+	out := make([]HistoryMetricPoint, 0, len(order))
+	for _, key := range order {
+		current := buckets[key]
+		point := current.representative
+		counts := current.counts
+		point.BucketCounts = &counts
+		out = append(out, point)
+	}
+	return out
 }
 
 func roundedPercent(value, total int) float64 {

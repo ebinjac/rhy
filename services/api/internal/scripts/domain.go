@@ -11,11 +11,13 @@ const (
 )
 
 type Script struct {
-	Enabled        bool          `json:"enabled"`
-	Language       string        `json:"language"`
-	Code           string        `json:"code"`
-	RuntimeVersion string        `json:"runtimeVersion"`
-	Packages       []TeamPackage `json:"packages,omitempty"`
+	Enabled           bool          `json:"enabled"`
+	Language          string        `json:"language"`
+	Code              string        `json:"code"`
+	RuntimeVersion    string        `json:"runtimeVersion"`
+	APIMode           string        `json:"apiMode,omitempty"`
+	ContinueOnFailure bool          `json:"continueOnFailure,omitempty"`
+	Packages          []TeamPackage `json:"packages,omitempty"`
 }
 
 type TeamPackage struct {
@@ -69,6 +71,8 @@ type Input struct {
 	AllowedPrivateHosts []string          `json:"allowedPrivateHosts,omitempty"`
 	AllowedPrivateCIDRs []string          `json:"allowedPrivateCidrs,omitempty"`
 	Variables           map[string]string `json:"variables"`
+	Service             map[string]string `json:"service,omitempty"`
+	Application         map[string]string `json:"application,omitempty"`
 	Environment         map[string]string `json:"environment"`
 	Collection          map[string]string `json:"collection"`
 	Globals             map[string]string `json:"globals"`
@@ -80,6 +84,23 @@ type Input struct {
 	State               map[string]any    `json:"state,omitempty"`
 	Info                Info              `json:"info"`
 	TimeoutMS           int               `json:"timeoutMs"`
+	Transport           *TransportConfig  `json:"transport,omitempty"`
+}
+
+// TransportConfig contains resolved, execution-only network material for
+// governed auxiliary requests. It crosses only the authenticated internal
+// script-runner boundary and is never copied into Result evidence.
+type TransportConfig struct {
+	CABundlePEM       string `json:"caBundlePem,omitempty"`
+	ClientCertificate string `json:"clientCertificatePem,omitempty"`
+	ClientKey         string `json:"clientKeyPem,omitempty"`
+	MinimumTLSVersion string `json:"minimumTlsVersion,omitempty"`
+	VerifyHostname    bool   `json:"verifyHostname"`
+	ProxyMode         string `json:"proxyMode,omitempty"`
+	ProxyURL          string `json:"proxyUrl,omitempty"`
+	ProxyNoProxy      string `json:"proxyNoProxy,omitempty"`
+	ProxyUsername     string `json:"proxyUsername,omitempty"`
+	ProxyPassword     string `json:"proxyPassword,omitempty"`
 }
 
 type Log struct {
@@ -144,11 +165,15 @@ type Result struct {
 	AuxiliaryRequests   []AuxiliaryRequest `json:"auxiliaryRequests"`
 	PackageImports      []PackageImport    `json:"packageImports"`
 	Variables           map[string]string  `json:"variables"`
+	Service             map[string]string  `json:"service,omitempty"`
+	Application         map[string]string  `json:"application,omitempty"`
 	Environment         map[string]string  `json:"environment"`
 	Collection          map[string]string  `json:"collection"`
 	Globals             map[string]string  `json:"globals"`
 	Cookies             map[string]string  `json:"cookies"`
 	InternalVariables   map[string]string  `json:"internalVariables,omitempty"`
+	InternalService     map[string]string  `json:"internalService,omitempty"`
+	InternalApplication map[string]string  `json:"internalApplication,omitempty"`
 	InternalEnvironment map[string]string  `json:"internalEnvironment,omitempty"`
 	InternalCollection  map[string]string  `json:"internalCollection,omitempty"`
 	InternalGlobals     map[string]string  `json:"internalGlobals,omitempty"`

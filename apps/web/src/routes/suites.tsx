@@ -74,6 +74,7 @@ import {
 } from "@/lib/api-client/dynatrace"
 import { defaultEnvironmentBindingId } from "@/features/applications/default-environment-binding"
 import { DeploymentWorkflow } from "@/features/suites/deployment-workflow"
+import { InfoHint } from "@/components/info-hint"
 import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/suites")({
@@ -649,7 +650,10 @@ function SuitesPage() {
                         }
                       />
                     </Field>
-                    <Field label="Baseline policy">
+                    <Field
+                      info="NONE skips comparison. WARN flags thin history. REQUIRE fails the gate when there are not enough baseline samples."
+                      label="Baseline policy"
+                    >
                       <Select
                         value={baselinePolicy}
                         onValueChange={(value) => {
@@ -1577,14 +1581,29 @@ function Field({
   wide,
   htmlFor,
   error,
+  info,
   children,
 }: {
   label: string
   wide?: boolean
   htmlFor?: string
   error?: boolean
+  info?: string
   children: React.ReactNode
 }) {
+  if (info) {
+    return (
+      <div
+        className={`text-xs font-medium ${wide ? "md:col-span-2" : ""} ${error ? "text-destructive" : ""}`}
+      >
+        <div className="flex items-center gap-1">
+          <label htmlFor={htmlFor}>{label}</label>
+          <InfoHint title={label}>{info}</InfoHint>
+        </div>
+        <div className="mt-2">{children}</div>
+      </div>
+    )
+  }
   return (
     <label
       htmlFor={htmlFor}

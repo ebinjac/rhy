@@ -12,6 +12,7 @@ export const Route = createFileRoute("/robots.txt")({
             "Disallow: /docs/current/",
             "Disallow: /api/docs-search",
             "Disallow: /llms-full.txt",
+            "Disallow: /test-notifications",
             `Sitemap: ${origin}/sitemap.xml`,
             "",
           ].join("\n"),

@@ -33,7 +33,6 @@ import {
   SelectValue,
 } from "@workspace/ui/components/select"
 import { Switch } from "@workspace/ui/components/switch"
-import { Textarea } from "@workspace/ui/components/textarea"
 import {
   ArrowLeft,
   CalendarClock,
@@ -54,8 +53,10 @@ import { createMonitorSchema } from "@/features/monitors/schema"
 import { MonitorImportDialog } from "@/features/monitors/monitor-import-dialog"
 import type { ImportedMonitorDraft } from "@/features/monitors/monitor-import"
 import { EditorLoading } from "@/components/editor-loading"
+import { InfoHint } from "@/components/info-hint"
 import { PageContainer } from "@/components/page-container"
 import { DraftPreviewStatus } from "@/features/monitors/draft-preview-status"
+import { InvestigationChecksEditor } from "@/features/monitors/investigation-checks-editor"
 import {
   initialRequestDefinition,
   normalizeDefinitionScripts,
@@ -156,7 +157,6 @@ function NewMonitorPage() {
   const [slugEdited, setSlugEdited] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(true)
   const [slugAdvancedOpen, setSlugAdvancedOpen] = useState(false)
-  const [moreDetailsOpen, setMoreDetailsOpen] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -398,7 +398,15 @@ function NewMonitorPage() {
         .filter(Boolean),
       definition: normalizeDefinitionScripts(definition),
       enabled,
-      schedule,
+      schedule: {
+        ...schedule,
+        // Interval instants are computed server-side in UTC. Persist UTC so a
+        // Phoenix API node cannot reject or skew an Asia/Kolkata browser TZ.
+        timezone:
+          schedule.type === "INTERVAL"
+            ? "UTC"
+            : schedule.timezone.trim() || "UTC",
+      },
     })
     if (!result.success) {
       const errors: Record<string, string> = {}
@@ -407,8 +415,6 @@ function NewMonitorPage() {
       setFieldErrors(errors)
       setDetailsOpen(true)
       if (errors.slug) setSlugAdvancedOpen(true)
-      if (errors.ownerId || errors.tags || errors.description)
-        setMoreDetailsOpen(true)
       requestAnimationFrame(() => {
         errorSummaryRef.current?.focus()
         document.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus()
@@ -684,7 +690,7 @@ function NewMonitorPage() {
                 Monitor details
               </h2>
               <p className="truncate text-xs text-muted-foreground">
-                Identity, ownership, and tags
+                Name, identifier, and application
                 <span className="hidden sm:inline">
                   {" "}
                   · {values.name || "Unnamed monitor"}
@@ -784,35 +790,18 @@ function NewMonitorPage() {
                 ) : null}
               </p>
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <button
-                  type="button"
-                  className="inline-flex min-h-11 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground sm:min-h-7"
-                  onClick={() => setSlugAdvancedOpen((open) => !open)}
-                  aria-expanded={slugAdvancedOpen}
-                  aria-controls="monitor-slug-advanced"
-                >
-                  <ChevronDown
-                    className={`size-3.5 transition-transform ${slugAdvancedOpen ? "rotate-0" : "-rotate-90"}`}
-                  />
-                  Customize API identifier
-                </button>
-                <button
-                  type="button"
-                  className="inline-flex min-h-11 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground sm:min-h-7"
-                  onClick={() => setMoreDetailsOpen((open) => !open)}
-                  aria-expanded={moreDetailsOpen}
-                  aria-controls="monitor-more-details"
-                >
-                  <ChevronDown
-                    className={`size-3.5 transition-transform ${moreDetailsOpen ? "rotate-0" : "-rotate-90"}`}
-                  />
-                  More details
-                  <span className="font-normal">
-                    · owner, tags, description
-                  </span>
-                </button>
-              </div>
+              <button
+                type="button"
+                className="inline-flex min-h-11 items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground sm:min-h-7"
+                onClick={() => setSlugAdvancedOpen((open) => !open)}
+                aria-expanded={slugAdvancedOpen}
+                aria-controls="monitor-slug-advanced"
+              >
+                <ChevronDown
+                  className={`size-3.5 transition-transform ${slugAdvancedOpen ? "rotate-0" : "-rotate-90"}`}
+                />
+                Customize API identifier
+              </button>
               {slugAdvancedOpen ? (
                 <Field
                   id="monitor-slug-advanced"
@@ -862,95 +851,6 @@ function NewMonitorPage() {
                   </FieldError>
                 </Field>
               ) : null}
-              {moreDetailsOpen ? (
-                <div
-                  id="monitor-more-details"
-                  className="grid gap-x-4 gap-y-3 md:grid-cols-2"
-                >
-                  <Field
-                    className="gap-1.5"
-                    data-invalid={Boolean(fieldErrors.ownerId)}
-                  >
-                    <FieldLabel htmlFor="monitor-owner">
-                      Owner{" "}
-                      <span className="font-normal text-muted-foreground">
-                        Optional
-                      </span>
-                    </FieldLabel>
-                    <Input
-                      id="monitor-owner"
-                      value={values.ownerId}
-                      onChange={(event) =>
-                        updateValue("ownerId", event.target.value)
-                      }
-                      aria-invalid={Boolean(fieldErrors.ownerId)}
-                      aria-describedby={
-                        fieldErrors.ownerId ? "monitor-owner-error" : undefined
-                      }
-                      placeholder="Payments SRE"
-                    />
-                    <FieldError id="monitor-owner-error">
-                      {fieldErrors.ownerId}
-                    </FieldError>
-                  </Field>
-                  <Field
-                    className="gap-1.5"
-                    data-invalid={Boolean(fieldErrors.tags)}
-                  >
-                    <FieldLabel htmlFor="monitor-tags">
-                      Tags{" "}
-                      <span className="font-normal text-muted-foreground">
-                        Optional
-                      </span>
-                    </FieldLabel>
-                    <Input
-                      id="monitor-tags"
-                      value={values.tags}
-                      onChange={(event) =>
-                        updateValue("tags", event.target.value)
-                      }
-                      aria-invalid={Boolean(fieldErrors.tags)}
-                      aria-describedby={
-                        fieldErrors.tags ? "monitor-tags-error" : undefined
-                      }
-                      placeholder="payments, critical"
-                    />
-                    <FieldError id="monitor-tags-error">
-                      {fieldErrors.tags}
-                    </FieldError>
-                  </Field>
-                  <Field
-                    className="gap-1.5 md:col-span-2"
-                    data-invalid={Boolean(fieldErrors.description)}
-                  >
-                    <FieldLabel htmlFor="monitor-description">
-                      Description{" "}
-                      <span className="font-normal text-muted-foreground">
-                        Optional
-                      </span>
-                    </FieldLabel>
-                    <Textarea
-                      id="monitor-description"
-                      rows={2}
-                      className="min-h-9 resize-y py-1.5"
-                      value={values.description}
-                      onChange={(event) =>
-                        updateValue("description", event.target.value)
-                      }
-                      aria-invalid={Boolean(fieldErrors.description)}
-                      aria-describedby={
-                        fieldErrors.description
-                          ? "monitor-description-error"
-                          : undefined
-                      }
-                      placeholder="Business journey and the outcome it protects"
-                    />
-                    <FieldError id="monitor-description-error">
-                      {fieldErrors.description}
-                    </FieldError>
-                  </Field>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </section>
@@ -967,9 +867,13 @@ function NewMonitorPage() {
               <div className="min-w-0">
                 <h2
                   id="monitor-schedule-heading"
-                  className="text-sm font-semibold"
+                  className="inline-flex items-center gap-1 text-sm font-semibold"
                 >
                   Run schedule
+                  <InfoHint title="Run schedule">
+                    Interval monitors run after they are enabled and published.
+                    Manual only waits for an operator or suite to trigger a run.
+                  </InfoHint>
                 </h2>
                 <p className="mt-0.5 text-xs leading-5 text-muted-foreground">
                   How often this monitor runs after enablement.
@@ -1083,6 +987,16 @@ function NewMonitorPage() {
             ) : null}
           </div>
         </section>
+
+        <div className="mt-6">
+          <InvestigationChecksEditor
+            applicationId={applicationId}
+            onChange={(investigationChecks) =>
+              setDefinition((current) => ({ ...current, investigationChecks }))
+            }
+            value={definition.investigationChecks ?? []}
+          />
+        </div>
         </div>
 
         <section

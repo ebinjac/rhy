@@ -1,0 +1,1 @@
+-- The shared Rhythm schema is retained during rollback to protect application data.

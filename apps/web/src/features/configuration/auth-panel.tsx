@@ -2,6 +2,13 @@ import { useState } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@workspace/ui/components/select"
 import { Textarea } from "@workspace/ui/components/textarea"
 import { FilePenLine, KeyRound, ShieldCheck, Trash2 } from "lucide-react"
 
@@ -353,15 +360,25 @@ function AuthFields({
           />
         </FormField>
         <FormField label="Send in" required>
-          <select
-            aria-label="Send in"
-            className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+          <Select
             value={field("location") || "header"}
-            onChange={(e) => setField("location", e.target.value)}
+            onValueChange={(value) => {
+              if (value == null) return
+              setField("location", value)
+            }}
+            items={[
+              { value: "header", label: "Request header" },
+              { value: "query", label: "Query parameter" },
+            ]}
           >
-            <option value="header">Request header</option>
-            <option value="query">Query parameter</option>
-          </select>
+            <SelectTrigger aria-label="Send in" className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="header">Request header</SelectItem>
+              <SelectItem value="query">Query parameter</SelectItem>
+            </SelectContent>
+          </Select>
         </FormField>
         {secret("API key secret", "valueSecretRef")}
       </>
@@ -411,14 +428,25 @@ function AuthFields({
         </FormField>
         {secret("Signing key secret", "keySecretRef")}
         <FormField label="Algorithm" required>
-          <select aria-label="Algorithm"
-            className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+          <Select
             value={field("algorithm") || "RS256"}
-            onChange={(e) => setField("algorithm", e.target.value)}
+            onValueChange={(value) => {
+              if (value == null) return
+              setField("algorithm", value)
+            }}
+            items={[
+              { value: "RS256", label: "RS256" },
+              { value: "HS256", label: "HS256" },
+            ]}
           >
-            <option>RS256</option>
-            <option>HS256</option>
-          </select>
+            <SelectTrigger aria-label="Algorithm" className="h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="RS256">RS256</SelectItem>
+              <SelectItem value="HS256">HS256</SelectItem>
+            </SelectContent>
+          </Select>
         </FormField>
       </>
     )
@@ -426,14 +454,25 @@ function AuthFields({
     <>
       {secret("HMAC secret", "secretRef")}
       <FormField label="Algorithm" required>
-        <select aria-label="Algorithm"
-          className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+        <Select
           value={field("algorithm") || "SHA-256"}
-          onChange={(e) => setField("algorithm", e.target.value)}
+          onValueChange={(value) => {
+            if (value == null) return
+            setField("algorithm", value)
+          }}
+          items={[
+            { value: "SHA-256", label: "SHA-256" },
+            { value: "SHA-512", label: "SHA-512" },
+          ]}
         >
-          <option>SHA-256</option>
-          <option>SHA-512</option>
-        </select>
+          <SelectTrigger aria-label="Algorithm" className="h-9 w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="SHA-256">SHA-256</SelectItem>
+            <SelectItem value="SHA-512">SHA-512</SelectItem>
+          </SelectContent>
+        </Select>
       </FormField>
       <FormField label="Signature header" required>
         <Input aria-label="Signature header"

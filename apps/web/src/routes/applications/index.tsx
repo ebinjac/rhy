@@ -45,7 +45,13 @@ import {
   TriangleAlert,
 } from "lucide-react"
 
+import { HintedLabel } from "@/components/info-hint"
 import { FormField } from "@/features/applications/form-field"
+import {
+  emptySaharaForm,
+  SaharaSettingsFields,
+  type SaharaFormValue,
+} from "@/features/applications/sahara-fields"
 import type { ELFApplicationContract } from "@/lib/api-client/contracts"
 import {
   deleteELFApplication,
@@ -96,6 +102,7 @@ function ApplicationsPage() {
   const [owner, setOwner] = useState("")
   const [index, setIndex] = useState("")
   const [alertEmails, setAlertEmails] = useState("")
+  const [sahara, setSahara] = useState<SaharaFormValue>(emptySaharaForm)
   const [deleteTarget, setDeleteTarget] =
     useState<ELFApplicationContract | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
@@ -109,6 +116,7 @@ function ApplicationsPage() {
     setOwner("")
     setIndex("")
     setAlertEmails("")
+    setSahara(emptySaharaForm)
     setMessage("")
   }
 
@@ -154,6 +162,11 @@ function ApplicationsPage() {
           "http.route": "endpoint",
         },
         alertEmails: parsedEmails,
+        saharaEnabled: sahara.saharaEnabled,
+        saharaAssignmentGroup: sahara.saharaAssignmentGroup.trim(),
+        saharaReporterGroup: sahara.saharaReporterGroup.trim(),
+        saharaEnvironmentAffected: sahara.saharaEnvironmentAffected.trim(),
+        saharaDefaultSeverity: sahara.saharaDefaultSeverity,
       },
     })
     setPending(false)
@@ -248,8 +261,8 @@ function ApplicationsPage() {
               />
             </FormField>
             <FormField
+              info="Your organization’s internal application identifier. Rhythm uses the application relationship—not payload text—as the trusted ownership context."
               label="CAR ID"
-              hint="Internal application identifier"
             >
               <Input aria-label="CAR ID"
                 className="font-mono"
@@ -266,7 +279,10 @@ function ApplicationsPage() {
                 placeholder="Commerce Platform"
               />
             </FormField>
-            <FormField label="Default ELF index pattern">
+            <FormField
+              info="OpenSearch index pattern used when an ELF query does not override it."
+              label="Default ELF index pattern"
+            >
               <Input aria-label="Default ELF index pattern"
                 className="font-mono"
                 value={index}
@@ -285,6 +301,7 @@ function ApplicationsPage() {
                 placeholder="oncall@example.com, platform@example.com"
               />
             </FormField>
+            <SaharaSettingsFields value={sahara} onChange={setSahara} />
           </div>
           {!alertEmails.trim() ? (
             <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
@@ -303,7 +320,7 @@ function ApplicationsPage() {
             <Button variant="ghost" onClick={closeForm}>
               Cancel
             </Button>
-            <Button disabled={pending || !name.trim()} onClick={() => void save()}>
+            <Button disabled={pending || !name.trim() || (sahara.saharaEnabled && !sahara.saharaAssignmentGroup.trim())} onClick={() => void save()}>
               {pending ? <LoaderCircle className="animate-spin" /> : <Plus />}
               Create application
             </Button>
@@ -346,7 +363,14 @@ function ApplicationsPage() {
           <TableHeader>
             <TableRow className="bg-muted/45 hover:bg-muted/45">
               <TableHead scope="col">Application</TableHead>
-              <TableHead scope="col">CAR ID</TableHead>
+              <TableHead scope="col">
+                <HintedLabel
+                  body="Your organization’s internal application identifier. Rhythm trusts the application relationship, not CAR ID text in payloads."
+                  title="CAR ID"
+                >
+                  CAR ID
+                </HintedLabel>
+              </TableHead>
               <TableHead className="hidden md:table-cell" scope="col">
                 Owner
               </TableHead>

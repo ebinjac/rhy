@@ -371,6 +371,8 @@ func (s *Service) listApplications(ctx context.Context, limit int) ([]Applicatio
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::text,car_id,name,owner,environment,default_index_pattern,
 			default_time_field,masking_rules,semantic_mapping,alert_emails,
+			sahara_enabled,sahara_assignment_group,sahara_reporter_group,
+			sahara_environment_affected,sahara_event_generator,sahara_default_severity,
 			active,created_at,updated_at
 		FROM applications
 		ORDER BY name
@@ -455,7 +457,7 @@ func (s *Service) listApplications(ctx context.Context, limit int) ([]Applicatio
 	return items, nil
 }
 func (s *Service) GetApplication(ctx context.Context, applicationID string) (Application, error) {
-	item, err := scanApplication(s.pool.QueryRow(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_at,updated_at FROM applications WHERE id=$1`, applicationID))
+	item, err := scanApplication(s.pool.QueryRow(ctx, `SELECT id::text,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,sahara_enabled,sahara_assignment_group,sahara_reporter_group,sahara_environment_affected,sahara_event_generator,sahara_default_severity,active,created_at,updated_at FROM applications WHERE id=$1`, applicationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Application{}, ErrNotFound
 	}
@@ -468,7 +470,7 @@ func (s *Service) GetApplication(ctx context.Context, applicationID string) (App
 func scanApplication(row interface{ Scan(...any) error }) (Application, error) {
 	var item Application
 	var masks, mapping, emails []byte
-	if err := row.Scan(&item.ID, &item.CARID, &item.Name, &item.Owner, &item.Environment, &item.DefaultIndexPattern, &item.DefaultTimeField, &masks, &mapping, &emails, &item.Active, &item.CreatedAt, &item.UpdatedAt); err != nil {
+	if err := row.Scan(&item.ID, &item.CARID, &item.Name, &item.Owner, &item.Environment, &item.DefaultIndexPattern, &item.DefaultTimeField, &masks, &mapping, &emails, &item.SaharaEnabled, &item.SaharaAssignmentGroup, &item.SaharaReporterGroup, &item.SaharaEnvironmentAffected, &item.SaharaEventGenerator, &item.SaharaDefaultSeverity, &item.Active, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return item, err
 	}
 	_ = json.Unmarshal(masks, &item.MaskingRules)
@@ -542,7 +544,10 @@ func (s *Service) CreateApplication(ctx context.Context, input ApplicationInput,
 	if err != nil {
 		return Application{}, err
 	}
-	_, err = s.pool.Exec(ctx, `INSERT INTO applications(id,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,active,created_by,updated_by)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)`, identifier, input.CARID, input.Name, strings.TrimSpace(input.Owner), strings.TrimSpace(input.Environment), strings.TrimSpace(input.DefaultIndexPattern), strings.TrimSpace(input.DefaultTimeField), masks, mapping, emails, active, actor)
+	if err = applySaharaInput(&Application{}, &input); err != nil {
+		return Application{}, err
+	}
+	_, err = s.pool.Exec(ctx, `INSERT INTO applications(id,car_id,name,owner,environment,default_index_pattern,default_time_field,masking_rules,semantic_mapping,alert_emails,sahara_enabled,sahara_assignment_group,sahara_reporter_group,sahara_environment_affected,sahara_event_generator,sahara_default_severity,active,created_by,updated_by)VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$18)`, identifier, input.CARID, input.Name, strings.TrimSpace(input.Owner), strings.TrimSpace(input.Environment), strings.TrimSpace(input.DefaultIndexPattern), strings.TrimSpace(input.DefaultTimeField), masks, mapping, emails, boolValue(input.SaharaEnabled), strings.TrimSpace(input.SaharaAssignmentGroup), strings.TrimSpace(input.SaharaReporterGroup), strings.TrimSpace(input.SaharaEnvironmentAffected), strings.TrimSpace(input.SaharaEventGenerator), strings.TrimSpace(input.SaharaDefaultSeverity), active, actor)
 	if err != nil {
 		return Application{}, err
 	}
@@ -585,6 +590,9 @@ func (s *Service) UpdateApplication(ctx context.Context, applicationID string, i
 		}
 		current.AlertEmails = normalized
 	}
+	if err = applySaharaInput(&current, &input); err != nil {
+		return Application{}, err
+	}
 	if input.Active != nil {
 		current.Active = *input.Active
 	}
@@ -594,7 +602,7 @@ func (s *Service) UpdateApplication(ctx context.Context, applicationID string, i
 	if err != nil {
 		return Application{}, err
 	}
-	_, err = s.pool.Exec(ctx, `UPDATE applications SET car_id=$2,name=$3,owner=$4,environment=$5,default_index_pattern=$6,default_time_field=$7,masking_rules=$8,semantic_mapping=$9,alert_emails=$10,active=$11,updated_by=$12,updated_at=NOW() WHERE id=$1`, applicationID, current.CARID, current.Name, current.Owner, current.Environment, current.DefaultIndexPattern, current.DefaultTimeField, masks, mapping, emails, current.Active, actor)
+	_, err = s.pool.Exec(ctx, `UPDATE applications SET car_id=$2,name=$3,owner=$4,environment=$5,default_index_pattern=$6,default_time_field=$7,masking_rules=$8,semantic_mapping=$9,alert_emails=$10,sahara_enabled=$11,sahara_assignment_group=$12,sahara_reporter_group=$13,sahara_environment_affected=$14,sahara_event_generator=$15,sahara_default_severity=$16,active=$17,updated_by=$18,updated_at=NOW() WHERE id=$1`, applicationID, current.CARID, current.Name, current.Owner, current.Environment, current.DefaultIndexPattern, current.DefaultTimeField, masks, mapping, emails, current.SaharaEnabled, current.SaharaAssignmentGroup, current.SaharaReporterGroup, current.SaharaEnvironmentAffected, current.SaharaEventGenerator, current.SaharaDefaultSeverity, current.Active, actor)
 	if err != nil {
 		return Application{}, err
 	}
@@ -665,6 +673,42 @@ func marshalAlertEmails(values []string) ([]byte, error) {
 		return nil, err
 	}
 	return json.Marshal(normalized)
+}
+
+func applySaharaInput(current *Application, input *ApplicationInput) error {
+	if input.SaharaEnabled != nil {
+		current.SaharaEnabled = *input.SaharaEnabled
+	}
+	if input.SaharaEnabled != nil || input.SaharaAssignmentGroup != "" || input.SaharaReporterGroup != "" || input.SaharaEnvironmentAffected != "" || input.SaharaEventGenerator != "" || input.SaharaDefaultSeverity != "" {
+		current.SaharaAssignmentGroup = strings.TrimSpace(input.SaharaAssignmentGroup)
+		current.SaharaReporterGroup = strings.TrimSpace(input.SaharaReporterGroup)
+		current.SaharaEnvironmentAffected = strings.TrimSpace(input.SaharaEnvironmentAffected)
+		current.SaharaDefaultSeverity = strings.TrimSpace(input.SaharaDefaultSeverity)
+		if generator := strings.TrimSpace(input.SaharaEventGenerator); generator != "" {
+			current.SaharaEventGenerator = generator
+		}
+	}
+	return validateSahara(*current)
+}
+
+func validateSahara(item Application) error {
+	if item.SaharaEnabled && strings.TrimSpace(item.SaharaAssignmentGroup) == "" {
+		return errors.New("saharaAssignmentGroup is required when Sahara incident dispatch is enabled")
+	}
+	if len(item.SaharaAssignmentGroup) > 255 || len(item.SaharaReporterGroup) > 255 {
+		return errors.New("Sahara support groups must be 255 characters or fewer")
+	}
+	if len(item.SaharaEnvironmentAffected) > 64 || len(item.SaharaEventGenerator) > 64 {
+		return errors.New("Sahara environment and event generator must be 64 characters or fewer")
+	}
+	if item.SaharaDefaultSeverity != "" && item.SaharaDefaultSeverity != "Sev1" && item.SaharaDefaultSeverity != "Sev2" && item.SaharaDefaultSeverity != "Sev3" && item.SaharaDefaultSeverity != "Sev4" {
+		return errors.New("saharaDefaultSeverity must be Sev1, Sev2, Sev3, or Sev4")
+	}
+	return nil
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 func (s *Service) SaveService(ctx context.Context, applicationID, serviceID string, input ServiceInput) (AppService, error) {
 	if strings.TrimSpace(input.Name) == "" {
@@ -964,7 +1008,12 @@ func (s *Service) Run(ctx context.Context, queryID, actor string, input ProbeInp
 	if size == 0 {
 		size = 100
 	}
-	compiled := ValidateAndCompile(query.SearchBody, timeField, from, to, size)
+	if override := strings.TrimSpace(input.TimeField); override != "" {
+		timeField = override
+	} else {
+		timeField = DetectTimeField(string(query.SearchBody), timeField)
+	}
+	compiled := compileSearch(query.SearchBody, timeField, from, to, size)
 	if !compiled.Valid {
 		return s.saveFailure(ctx, query, index, from, to, actor, "POLICY_ERROR", compiled.Problems[0].Message)
 	}

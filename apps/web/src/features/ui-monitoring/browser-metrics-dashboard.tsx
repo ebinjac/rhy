@@ -6,17 +6,10 @@ import {
 } from "@workspace/ui/components/chart"
 import type { ChartConfig } from "@workspace/ui/components/chart"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@workspace/ui/components/tooltip"
-import {
   Activity,
   BarChart3,
   CircleAlert,
   Gauge,
-  Info,
   Network,
   TriangleAlert,
 } from "lucide-react"
@@ -28,6 +21,7 @@ import type {
 } from "@/lib/api-client/browser-monitoring"
 import { formatDuration } from "@/features/ui-monitoring/browser-monitor-status"
 import { formatDateTime } from "@/lib/format-date"
+import { InfoHint } from "@/components/info-hint"
 
 const performanceConfig = {
   journeyMs: { label: "Journey", color: "var(--primary)" },
@@ -71,8 +65,7 @@ export default function BrowserMetricsDashboard({
   )
 
   return (
-    <TooltipProvider>
-      <div>
+    <div>
         {metrics.runCount > 0 && metrics.runCount < 20 ? (
           <div className="mt-5 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 px-3 py-2.5 text-sm">
             <TriangleAlert className="mt-0.5 size-4 shrink-0 text-warning" />
@@ -140,7 +133,10 @@ export default function BrowserMetricsDashboard({
                   link to the exact execution.
                 </p>
               </div>
-              <InfoTooltip text="Lab measurements can differ from real-user field data. TBT is a lab responsiveness proxy and is not field INP." />
+              <InfoHint title="Lab vs field metrics">
+                Lab measurements can differ from real-user field data. TBT is a
+                lab responsiveness proxy and is not field INP.
+              </InfoHint>
             </div>
             <ChartContainer
               className="mt-5 h-[310px] w-full"
@@ -285,7 +281,6 @@ export default function BrowserMetricsDashboard({
           </section>
         ) : null}
       </div>
-    </TooltipProvider>
   )
 }
 
@@ -309,7 +304,7 @@ function MetricCard({
           <Icon className="size-4 text-primary" />
           {label}
         </div>
-        <InfoTooltip text={help} />
+        <InfoHint title={label}>{help}</InfoHint>
       </div>
       <p className="mt-3 text-2xl font-semibold tabular-nums">{value}</p>
       {detail ? (
@@ -418,25 +413,6 @@ function AccessiblePerformanceTable({
         </table>
       </div>
     </details>
-  )
-}
-
-function InfoTooltip({ text }: { text: string }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <button
-            aria-label="Explain this metric"
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
-            type="button"
-          />
-        }
-      >
-        <Info className="size-3.5" />
-      </TooltipTrigger>
-      <TooltipContent className="max-w-xs">{text}</TooltipContent>
-    </Tooltip>
   )
 }
 

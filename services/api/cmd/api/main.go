@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -23,13 +21,14 @@ import (
 	"github.com/rhythm-monitoring/rhythm/internal/dynatrace"
 	"github.com/rhythm-monitoring/rhythm/internal/elf"
 	"github.com/rhythm-monitoring/rhythm/internal/executionjobs"
+	"github.com/rhythm-monitoring/rhythm/internal/investigation"
 	"github.com/rhythm-monitoring/rhythm/internal/library"
 	"github.com/rhythm-monitoring/rhythm/internal/monitors"
 	"github.com/rhythm-monitoring/rhythm/internal/notifications"
 	"github.com/rhythm-monitoring/rhythm/internal/observability"
-	"github.com/rhythm-monitoring/rhythm/internal/queue"
 	"github.com/rhythm-monitoring/rhythm/internal/retention"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
+	"github.com/rhythm-monitoring/rhythm/internal/sahara"
 	"github.com/rhythm-monitoring/rhythm/internal/scheduler"
 	"github.com/rhythm-monitoring/rhythm/internal/scripts"
 	"github.com/rhythm-monitoring/rhythm/internal/storage/postgres"
@@ -55,7 +54,6 @@ func main() {
 	var agentRepository agents.Repository
 	var postgresPool *pgxpool.Pool
 	var postgresRunRepository *postgres.RunRepository
-	var redisClient redis.UniversalClient
 	if cfg.StorageMode == "postgres" {
 		pool, openErr := postgres.OpenWithOptions(context.Background(), cfg.DatabaseURL, postgres.PoolOptions{
 			MaxConnections:  int32(cfg.DatabaseMaxConns),
@@ -86,20 +84,6 @@ func main() {
 		suiteRepository = suites.NewMemoryRepository()
 		agentRepository = agents.NewMemoryRepository()
 	}
-	if cfg.QueueBackend == "redis" {
-		openedRedis, openErr := queue.OpenRedisWithConfig(context.Background(), queue.RedisConfig{
-			URL: cfg.RedisURL, Mode: cfg.RedisMode, Addrs: cfg.RedisAddrs,
-			Username: cfg.RedisUsername, Password: cfg.RedisPassword,
-			DB: cfg.RedisDB, TLS: cfg.RedisTLS, SkipInitialPing: true,
-		})
-		if openErr != nil {
-			logger.Error("open Redis", "error", openErr)
-			os.Exit(1)
-		}
-		redisClient = openedRedis
-		defer func() { _ = redisClient.Close() }()
-		checks["redis"] = func(ctx context.Context) error { return redisClient.Ping(ctx).Err() }
-	}
 	monitorService := monitors.NewService(repository)
 	var libraryService *library.Service
 	if postgresPool != nil {
@@ -119,9 +103,6 @@ func main() {
 		logger.Error("configure private target policy", "error", policyErr)
 		os.Exit(1)
 	}
-	if redisClient != nil {
-		executor.SetTargetConcurrencyLimiter(runs.NewRedisTargetLimiter(redisClient))
-	}
 	scriptClient := scripts.NewClient(cfg.ScriptRunnerURL, cfg.ScriptRunnerToken)
 	executor.SetScriptExecutor(scriptClient)
 	if roleAPI || roleWorker {
@@ -130,7 +111,7 @@ func main() {
 	runService := runs.NewService(monitorService, runRepository, executor)
 	var executionJobService *executionjobs.Service
 	if postgresPool != nil && cfg.QueueBackend != "memory" {
-		executionJobService = executionjobs.New(postgresPool, redisClient, runService, logger, cfg.WorkerConcurrency)
+		executionJobService = executionjobs.New(postgresPool, nil, runService, logger, cfg.WorkerConcurrency)
 		executionJobService.SetMemoryStopPercent(cfg.WorkerMemoryStopPercent)
 	}
 	agentService := agents.New(agentRepository)
@@ -140,6 +121,8 @@ func main() {
 	var alertService *alerts.Service
 	var auditService *audit.Service
 	var notificationService *notifications.Service
+	var saharaService *sahara.Service
+	var investigationService *investigation.Service
 	var elfService *elf.Service
 	var dynatraceService *dynatrace.Service
 	var browserMonitorService *browsermonitors.Service
@@ -149,7 +132,6 @@ func main() {
 	if postgresPool != nil && cfg.QueueBackend != "memory" && (roleAPI || roleControl) {
 		schedulerService = scheduler.NewWithOptions(
 			postgresPool,
-			redisClient,
 			monitorService,
 			runService,
 			logger,
@@ -160,6 +142,18 @@ func main() {
 	if postgresPool != nil && (roleAPI || roleControl) {
 		auditService = audit.New(postgresPool)
 		notificationService = notifications.New(postgresPool, libraryService, logger)
+		notificationService.ConfigureSMTP(notifications.SMTPConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			From:     cfg.SMTPFrom,
+			FromName: cfg.SMTPFromName,
+			Username: cfg.SMTPUsername,
+			Password: cfg.SMTPPassword,
+		})
+		saharaService = sahara.New(postgresPool, sahara.Config{
+			IngestURL: cfg.SaharaIngestURL,
+			Timeout:   time.Duration(cfg.SaharaTimeoutMS) * time.Millisecond,
+		}, logger)
 		elfService = elf.New(postgresPool, libraryService, cfg.AllowPrivateTargets)
 		dynatraceAllowedHosts := cfg.DynatraceAllowedHosts
 		if cfg.UnrestrictedOutbound {
@@ -170,6 +164,7 @@ func main() {
 			libraryService,
 			dynatrace.NewEnvironmentV2Provider(dynatraceAllowedHosts, cfg.AllowPrivateTargets),
 		)
+		investigationService = investigation.New(postgresPool, elfService, dynatraceService, logger)
 		alertService = alerts.New(postgresPool, elfService)
 	}
 	if postgresPool != nil && (roleAPI || roleControl || roleBrowser) {
@@ -201,7 +196,7 @@ func main() {
 			os.Exit(1)
 		}
 		if cfg.QueueBackend != "memory" {
-			browserMonitorService.ConfigureQueue(redisClient, logger, cfg.BrowserJobConcurrency)
+			browserMonitorService.ConfigureQueue(nil, logger, cfg.BrowserJobConcurrency)
 		}
 		if roleAPI || roleBrowser {
 			checks["browser-agent"] = browserRunner.Health
@@ -235,7 +230,7 @@ func main() {
 	suiteService.SetDynatrace(dynatraceService)
 	suiteService.SetBrowser(browserMonitorService)
 	if cfg.QueueBackend != "memory" && postgresPool != nil {
-		suiteService.ConfigureQueue(redisClient, logger, cfg.DeploymentConcurrency)
+		suiteService.ConfigureQueue(nil, logger, cfg.DeploymentConcurrency)
 	}
 	var authenticator authz.Authenticator
 	if cfg.AuthMode == "anonymous" {
@@ -274,6 +269,8 @@ func main() {
 		Suites:              suiteService,
 		Agents:              agentService,
 		Notifications:       notificationService,
+		Sahara:              saharaService,
+		Investigation:       investigationService,
 		Scripts:             scriptClient,
 		ELF:                 elfService,
 		Dynatrace:           dynatraceService,
@@ -282,14 +279,14 @@ func main() {
 		AllowedOrigin:       cfg.AllowedOrigin,
 		AllowPrivateTargets: cfg.AllowPrivateTargets,
 		Checks:              checks,
-		WebhookRateLimiter:  redisWebhookRateLimiter(redisClient),
+		WebhookRateLimiter:  nil,
 	})
 	var handler http.Handler = fullAPIHandler
 	if cfg.RuntimeRole != "all" && cfg.RuntimeRole != "api" {
 		handler = roleHealthHandler(cfg.RuntimeRole, checks)
 	}
 	handler = api.CompressResponse(handler)
-	metrics := observability.New(postgresPool, redisClient, observability.CapacityConfig{
+	metrics := observability.New(postgresPool, observability.CapacityConfig{
 		WorkerConcurrency:        cfg.ExecutorSlotsPerReplica,
 		MinReplicas:              cfg.ExecutorMinReplicas,
 		MaxReplicas:              cfg.ExecutorMaxReplicas,
@@ -324,6 +321,12 @@ func main() {
 	if notificationService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		notificationService.Start(shutdownContext)
 	}
+	if saharaService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
+		saharaService.Start(shutdownContext)
+	}
+	if investigationService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
+		investigationService.Start(shutdownContext)
+	}
 	if alertService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		alertService.Start(shutdownContext)
 	}
@@ -350,31 +353,6 @@ func main() {
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("api shutdown failed", "error", err)
-	}
-}
-
-var webhookRateLimitScript = redis.NewScript(`
-local receiver = redis.call('INCR', KEYS[1])
-if receiver == 1 then redis.call('EXPIRE', KEYS[1], 70) end
-local global = redis.call('INCR', KEYS[2])
-if global == 1 then redis.call('EXPIRE', KEYS[2], 70) end
-if receiver > tonumber(ARGV[1]) or global > tonumber(ARGV[2]) then
-  return 0
-end
-return 1
-`)
-
-func redisWebhookRateLimiter(client redis.UniversalClient) func(context.Context, string) (bool, error) {
-	if client == nil {
-		return nil
-	}
-	return func(ctx context.Context, receiverID string) (bool, error) {
-		window := time.Now().UTC().Unix() / 60
-		result, err := webhookRateLimitScript.Run(ctx, client, []string{
-			"rhythm:webhook:receiver:" + receiverID + ":" + strconv.FormatInt(window, 10),
-			"rhythm:webhook:global:" + strconv.FormatInt(window, 10),
-		}, 120, 2000).Int64()
-		return result == 1, err
 	}
 }
 

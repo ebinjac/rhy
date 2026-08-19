@@ -15,8 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rhythm-monitoring/rhythm/internal/id"
+	"github.com/rhythm-monitoring/rhythm/internal/investigation"
 	"github.com/rhythm-monitoring/rhythm/internal/notifications"
 	"github.com/rhythm-monitoring/rhythm/internal/runs"
+	"github.com/rhythm-monitoring/rhythm/internal/sahara"
 )
 
 type WarmEvidenceStore interface {
@@ -29,6 +31,28 @@ type RunRepository struct {
 }
 
 func NewRunRepository(pool *pgxpool.Pool) *RunRepository { return &RunRepository{pool: pool} }
+
+// stepTimingAPIResponseExpr translates current and historical step timing keys
+// into target-facing HTTP time so older stored points are not dropped.
+const stepTimingAPIResponseExpr = `CASE
+	WHEN sr.timing_json ? 'apiResponseTimeMs' THEN (sr.timing_json->>'apiResponseTimeMs')::bigint
+	WHEN sr.timing_json ? 'networkTotalMs' THEN (sr.timing_json->>'networkTotalMs')::bigint
+	WHEN COALESCE((sr.timing_json->>'dnsMs')::bigint, (sr.timing_json->>'proxyConnectMs')::bigint, (sr.timing_json->>'connectMs')::bigint, (sr.timing_json->>'tlsHandshakeMs')::bigint, (sr.timing_json->>'requestWriteMs')::bigint, (sr.timing_json->>'serverWaitMs')::bigint, (sr.timing_json->>'downloadMs')::bigint) IS NOT NULL THEN
+		COALESCE((sr.timing_json->>'dnsMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'proxyConnectMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'connectMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'tlsHandshakeMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'requestWriteMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'serverWaitMs')::bigint, 0)
+		+ COALESCE((sr.timing_json->>'downloadMs')::bigint, 0)
+	ELSE NULL
+END`
+
+const stepTimingPreparationExpr = `CASE
+	WHEN sr.timing_json ? 'preparationMs' THEN (sr.timing_json->>'preparationMs')::bigint
+	WHEN sr.timing_json ? 'preRequestScriptMs' THEN (sr.timing_json->>'preRequestScriptMs')::bigint
+	ELSE NULL
+END`
 
 func (r *RunRepository) SetWarmEvidenceStore(store WarmEvidenceStore) { r.warmStore = store }
 
@@ -332,26 +356,21 @@ func runAPIResponseTime(run runs.Run) *int64 {
 		value := *run.APIResponseTimeMS
 		return &value
 	}
-	var total int64
-	recorded := false
-	for _, step := range run.Steps {
-		value, ok := numericTiming(step.Timing["apiResponseTimeMs"])
-		if !ok {
-			continue
-		}
-		total += value
-		recorded = true
+	if total, recorded := runs.RunAPIResponseFromSteps(run.Steps); recorded {
+		return &total
 	}
-	if !recorded {
-		return nil
-	}
-	return &total
+	return nil
 }
 
 func runTimingTotals(run runs.Run) (preparation, postProcessing, network, retryBackoff int64, retryCount int) {
+	if run.PreparationMS != nil {
+		preparation = *run.PreparationMS
+	}
 	for _, step := range run.Steps {
-		if value, ok := numericTiming(step.Timing["preparationMs"]); ok {
-			preparation += value
+		if run.PreparationMS == nil {
+			if value, ok := runs.RecordedPreparationMS(step.Timing); ok {
+				preparation += value
+			}
 		}
 		if value, ok := numericTiming(step.Timing["postProcessingMs"]); ok {
 			postProcessing += value
@@ -548,7 +567,14 @@ func evaluateAlertState(ctx context.Context, tx pgx.Tx, run runs.Run) error {
 		if err != nil {
 			return err
 		}
-		return notifications.Enqueue(ctx, tx, persistedAlertID, "ALERT_OPENED", run.CreatedAt)
+		if err := notifications.Enqueue(ctx, tx, persistedAlertID, "ALERT_OPENED", run.CreatedAt); err != nil {
+			return err
+		}
+		if persistedAlertID == alertID {
+			sahara.Enqueue(ctx, tx, persistedAlertID, run.CreatedAt)
+			investigation.Enqueue(ctx, tx, persistedAlertID, run.MonitorID, run.ID, run.CreatedAt)
+		}
+		return nil
 	}
 	if run.Status == runs.StatusSuccess && consecutiveSuccesses >= recoveryThreshold {
 		rows, err := tx.Query(ctx, `UPDATE alerts SET state='RESOLVED', resolved_at=$2, updated_at=$2 WHERE deduplication_key=$1 AND state IN ('OPEN','ACKNOWLEDGED') RETURNING id::text`, key, run.CreatedAt)
@@ -580,30 +606,74 @@ func evaluateAlertState(ctx context.Context, tx pgx.Tx, run runs.Run) error {
 }
 
 func (r *RunRepository) List(ctx context.Context, monitorID string, limit int) ([]runs.Run, error) {
+	page, err := r.ListPage(ctx, monitorID, runs.PageQuery{Limit: limit})
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
+}
+
+func (r *RunRepository) ListPage(ctx context.Context, monitorID string, query runs.PageQuery) (runs.Page, error) {
+	if query.Limit <= 0 {
+		query.Limit = 50
+	}
+	if query.Limit > 200 {
+		query.Limit = 200
+	}
+	const predicates = `
+		WHERE monitor_id=$1
+		  AND ($2::timestamptz IS NULL OR created_at >= $2)
+		  AND ($3='' OR status=$3)
+		  AND ($4='' OR trigger_type=$4)
+		  AND ($5='' OR id::text ILIKE '%' || $5 || '%')`
+	var since any
+	if !query.Since.IsZero() {
+		since = query.Since.UTC()
+	}
+	filterArguments := []any{monitorID, since, query.Status, query.TriggerType, query.Query}
+	var result runs.Page
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM monitor_runs`+predicates, filterArguments...).Scan(&result.Total); err != nil {
+		return runs.Page{}, fmt.Errorf("count monitor runs: %w", err)
+	}
+	var cursorTime any
+	var cursorID any
+	if !query.AfterCreatedAt.IsZero() && query.AfterID != "" {
+		cursorTime = query.AfterCreatedAt.UTC()
+		cursorID = query.AfterID
+	}
 	rows, err := r.pool.Query(ctx, `
 		SELECT id::text, monitor_id::text, revision_id::text, status, trigger_type, COALESCE(trigger_source,''),COALESCE(agent_id::text,''),
 			COALESCE(failure_category,''), COALESCE(failure_reason,''), COALESCE(failed_step_id,''), queue_delay_ms, warning_count, duration_ms,
 			started_at, ended_at, created_at, execution_context_json, alert_impact_json, setup_script_json
-		FROM monitor_runs WHERE monitor_id = $1 ORDER BY created_at DESC LIMIT $2`, monitorID, limit)
+		FROM monitor_runs`+predicates+`
+		  AND ($6::timestamptz IS NULL OR (created_at, id) < ($6, $7::uuid))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $8`,
+		append(filterArguments, cursorTime, cursorID, query.Limit+1)...,
+	)
 	if err != nil {
-		return nil, fmt.Errorf("list monitor runs: %w", err)
+		return runs.Page{}, fmt.Errorf("list monitor runs: %w", err)
 	}
 	defer rows.Close()
-	items := make([]runs.Run, 0)
+	result.Items = make([]runs.Run, 0, min(query.Limit+1, result.Total))
 	for rows.Next() {
-		run, err := scanRun(rows)
-		if err != nil {
-			return nil, err
+		run, scanErr := scanRun(rows)
+		if scanErr != nil {
+			return runs.Page{}, scanErr
 		}
-		items = append(items, run)
+		result.Items = append(result.Items, run)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return runs.Page{}, err
 	}
-	if err := attachListAPIResponseTimes(ctx, r.pool, items); err != nil {
-		return nil, err
+	if len(result.Items) > query.Limit {
+		result.Items = result.Items[:query.Limit]
+		result.HasMore = true
 	}
-	return items, nil
+	if err := attachListAPIResponseTimes(ctx, r.pool, result.Items); err != nil {
+		return runs.Page{}, err
+	}
+	return result, nil
 }
 
 func attachListAPIResponseTimes(ctx context.Context, pool *pgxpool.Pool, items []runs.Run) error {
@@ -617,27 +687,35 @@ func attachListAPIResponseTimes(ctx context.Context, pool *pgxpool.Pool, items [
 		byID[item.ID] = index
 	}
 	rows, err := pool.Query(ctx, `
-		SELECT monitor_run_id::text,
-			SUM(CASE WHEN timing_json ? 'apiResponseTimeMs' THEN (timing_json->>'apiResponseTimeMs')::bigint END)
-		FROM monitor_step_runs
-		WHERE monitor_run_id = ANY($1::uuid[])
-		GROUP BY monitor_run_id`, ids)
+		SELECT mr.id::text,
+			COALESCE(mr.api_response_time_ms, mr.network_time_ms, SUM(`+stepTimingAPIResponseExpr+`)),
+			COALESCE(mr.preparation_time_ms, SUM(`+stepTimingPreparationExpr+`))
+		FROM monitor_runs mr
+		LEFT JOIN monitor_step_runs sr ON sr.monitor_run_id = mr.id
+		WHERE mr.id = ANY($1::uuid[])
+		GROUP BY mr.id, mr.api_response_time_ms, mr.network_time_ms, mr.preparation_time_ms`, ids)
 	if err != nil {
-		return fmt.Errorf("list run api response times: %w", err)
+		return fmt.Errorf("list run timing: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var runID string
-		var apiResponse pgtype.Int8
-		if err := rows.Scan(&runID, &apiResponse); err != nil {
-			return fmt.Errorf("scan run api response time: %w", err)
+		var apiResponse, preparation pgtype.Int8
+		if err := rows.Scan(&runID, &apiResponse, &preparation); err != nil {
+			return fmt.Errorf("scan run timing: %w", err)
 		}
 		index, ok := byID[runID]
-		if !ok || !apiResponse.Valid {
+		if !ok {
 			continue
 		}
-		value := apiResponse.Int64
-		items[index].APIResponseTimeMS = &value
+		if apiResponse.Valid {
+			value := apiResponse.Int64
+			items[index].APIResponseTimeMS = &value
+		}
+		if preparation.Valid {
+			value := preparation.Int64
+			items[index].PreparationMS = &value
+		}
 	}
 	return rows.Err()
 }
@@ -645,12 +723,20 @@ func attachListAPIResponseTimes(ctx context.Context, pool *pgxpool.Pool, items [
 func (r *RunRepository) MetricPoints(ctx context.Context, monitorID string, since time.Time, limit int) ([]runs.HistoryMetricPoint, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT mr.id::text, mr.status, COALESCE(mr.failure_category,''), mr.created_at, mr.duration_ms, mr.queue_delay_ms, mr.warning_count,
-			SUM(CASE WHEN sr.timing_json ? 'apiResponseTimeMs' THEN (sr.timing_json->>'apiResponseTimeMs')::bigint END),
-			COALESCE(SUM(CASE WHEN sr.timing_json ? 'preparationMs' THEN (sr.timing_json->>'preparationMs')::bigint ELSE 0 END),0),
+			COALESCE(mr.api_response_time_ms, mr.network_time_ms, SUM(`+stepTimingAPIResponseExpr+`)),
+			COALESCE(mr.preparation_time_ms, SUM(`+stepTimingPreparationExpr+`), 0),
 			COALESCE(SUM(CASE WHEN sr.timing_json ? 'postProcessingMs' THEN (sr.timing_json->>'postProcessingMs')::bigint ELSE 0 END),0),
-			COALESCE(SUM(CASE WHEN sr.timing_json ? 'networkTotalMs' THEN (sr.timing_json->>'networkTotalMs')::bigint ELSE 0 END),0),
+			COALESCE(mr.network_time_ms, SUM(CASE WHEN sr.timing_json ? 'networkTotalMs' THEN (sr.timing_json->>'networkTotalMs')::bigint ELSE 0 END),0),
 			COALESCE(SUM(CASE WHEN sr.timing_json ? 'retryBackoffMs' THEN (sr.timing_json->>'retryBackoffMs')::bigint ELSE 0 END),0),
-			COALESCE(SUM(GREATEST(sr.attempt_count-1,0)),0)
+			COALESCE(SUM(GREATEST(sr.attempt_count-1,0)),0),
+			(
+				SELECT NULLIF(sa.response_status, 0)
+				FROM monitor_step_runs lsr
+				INNER JOIN step_attempts sa ON sa.step_run_id = lsr.id
+				WHERE lsr.monitor_run_id = mr.id
+				ORDER BY lsr.step_order DESC, sa.attempt_number DESC
+				LIMIT 1
+			)
 		FROM monitor_runs mr
 		LEFT JOIN monitor_step_runs sr ON sr.monitor_run_id=mr.id
 		WHERE mr.monitor_id=$1 AND mr.created_at >= $2
@@ -665,12 +751,17 @@ func (r *RunRepository) MetricPoints(ctx context.Context, monitorID string, sinc
 	for rows.Next() {
 		var point runs.HistoryMetricPoint
 		var apiResponse pgtype.Int8
-		if err := rows.Scan(&point.RunID, &point.Status, &point.FailureCategory, &point.CreatedAt, &point.ExecutionDurationMS, &point.QueueDelayMS, &point.WarningCount, &apiResponse, &point.PreparationMS, &point.PostProcessingMS, &point.NetworkTotalMS, &point.RetryBackoffMS, &point.RetryCount); err != nil {
+		var responseStatus pgtype.Int4
+		if err := rows.Scan(&point.RunID, &point.Status, &point.FailureCategory, &point.CreatedAt, &point.ExecutionDurationMS, &point.QueueDelayMS, &point.WarningCount, &apiResponse, &point.PreparationMS, &point.PostProcessingMS, &point.NetworkTotalMS, &point.RetryBackoffMS, &point.RetryCount, &responseStatus); err != nil {
 			return nil, fmt.Errorf("scan run metric point: %w", err)
 		}
 		if apiResponse.Valid {
 			value := apiResponse.Int64
 			point.APIResponseTimeMS = &value
+		}
+		if responseStatus.Valid && responseStatus.Int32 > 0 {
+			value := int(responseStatus.Int32)
+			point.ResponseStatus = &value
 		}
 		points = append(points, point)
 	}
@@ -683,11 +774,12 @@ func (r *RunRepository) MetricSummary(ctx context.Context, monitorID string, sin
 	}
 	end := time.Now().UTC()
 	result := runs.HistoryMetrics{
-		WindowStart:        since,
-		WindowEnd:          end,
-		StatusDistribution: map[string]int{},
-		FailureCategories:  map[string]int{},
-		Points:             []runs.HistoryMetricPoint{},
+		WindowStart:                since,
+		WindowEnd:                  end,
+		StatusDistribution:         map[string]int{},
+		FailureCategories:          map[string]int{},
+		ResponseStatusDistribution: map[string]int{},
+		Points:                     []runs.HistoryMetricPoint{},
 	}
 	switch {
 	case duration <= 24*time.Hour:
@@ -701,14 +793,25 @@ func (r *RunRepository) MetricSummary(ctx context.Context, monitorID string, sin
 	}
 	batch := &pgx.Batch{}
 	batch.Queue(`
-		WITH base AS (
-			SELECT status,api_response_time_ms,duration_ms,queue_delay_ms,
-				COALESCE(preparation_time_ms,0) preparation_time_ms,
-				COALESCE(post_processing_time_ms,0) post_processing_time_ms,
-				created_at
-			FROM monitor_runs
-			WHERE monitor_id=$1 AND created_at>=$2
-			  AND status NOT IN ('QUEUED','STARTING','RUNNING','CANCELLED','SKIPPED')
+		WITH step_times AS (
+			SELECT sr.monitor_run_id,
+				SUM(`+stepTimingAPIResponseExpr+`) AS api_ms,
+				SUM(`+stepTimingPreparationExpr+`) AS prep_ms
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			GROUP BY sr.monitor_run_id
+		), base AS (
+			SELECT mr.status,
+				COALESCE(mr.api_response_time_ms, mr.network_time_ms, step_times.api_ms) AS api_response_time_ms,
+				mr.duration_ms, mr.queue_delay_ms,
+				COALESCE(mr.preparation_time_ms, step_times.prep_ms, 0) AS preparation_time_ms,
+				COALESCE(mr.post_processing_time_ms,0) AS post_processing_time_ms,
+				mr.created_at
+			FROM monitor_runs mr
+			LEFT JOIN step_times ON step_times.monitor_run_id = mr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING','CANCELLED','SKIPPED')
 		), distribution AS (
 			SELECT
 				percentile_cont(0.50) WITHIN GROUP (ORDER BY api_response_time_ms) AS p50,
@@ -752,6 +855,23 @@ func (r *RunRepository) MetricSummary(ctx context.Context, monitorID string, sin
 		SELECT failure_category,COUNT(*) FROM monitor_runs
 		WHERE monitor_id=$1 AND created_at>=$2 AND failure_category IS NOT NULL
 		GROUP BY failure_category`, monitorID, since)
+	batch.Queue(`
+		WITH last_attempt AS (
+			SELECT DISTINCT ON (sr.monitor_run_id)
+				sr.monitor_run_id,
+				NULLIF(sa.response_status, 0) AS response_status
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			INNER JOIN step_attempts sa ON sa.step_run_id = sr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			ORDER BY sr.monitor_run_id, sr.step_order DESC, sa.attempt_number DESC
+		)
+		SELECT COALESCE(last_attempt.response_status::text, '`+runs.NoResponseStatusKey+`'), COUNT(*)
+		FROM monitor_runs mr
+		LEFT JOIN last_attempt ON last_attempt.monitor_run_id = mr.id
+		WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+		  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING','CANCELLED','SKIPPED','SKIPPED_CONDITION')
+		GROUP BY 1`, monitorID, since)
 	results := r.pool.SendBatch(ctx, batch)
 	defer results.Close()
 	var runCount, measuredCount, successCount, errorCount, timeoutCount, spikeCount int
@@ -799,6 +919,20 @@ func (r *RunRepository) MetricSummary(ctx context.Context, monitorID string, sin
 		result.FailureCategories[key] = value
 	}
 	failureRows.Close()
+	responseStatusRows, err := results.Query()
+	if err != nil {
+		return runs.HistoryMetrics{}, err
+	}
+	for responseStatusRows.Next() {
+		var key string
+		var value int
+		if err := responseStatusRows.Scan(&key, &value); err != nil {
+			responseStatusRows.Close()
+			return runs.HistoryMetrics{}, err
+		}
+		result.ResponseStatusDistribution[key] = value
+	}
+	responseStatusRows.Close()
 	result.Summary.RunCount = runCount
 	result.Summary.MeasuredRunCount = measuredCount
 	result.Summary.AverageResponseMS = int64(averageResponse)
@@ -833,8 +967,10 @@ func (r *RunRepository) metricRollupSummary(
 ) (runs.HistoryMetrics, error) {
 	result := runs.HistoryMetrics{
 		Window: "90d", WindowStart: since, WindowEnd: time.Now().UTC(),
-		StatusDistribution: map[string]int{}, FailureCategories: map[string]int{},
-		Points: []runs.HistoryMetricPoint{},
+		StatusDistribution:         map[string]int{},
+		FailureCategories:          map[string]int{},
+		ResponseStatusDistribution: map[string]int{},
+		Points:                     []runs.HistoryMetricPoint{},
 	}
 	var runCount, measuredCount, successCount, failureCount, timeoutCount, spikeCount int
 	var averageResponse, standardDeviation, minValue, p50, p75, p90, p95, p99, maxValue float64
@@ -919,6 +1055,9 @@ func (r *RunRepository) metricRollupSummary(
 	if timeoutCount > 0 {
 		result.StatusDistribution[string(runs.StatusTimedOut)] = timeoutCount
 	}
+	if err := r.loadResponseStatusDistribution(ctx, &result, monitorID, since); err != nil {
+		return runs.HistoryMetrics{}, err
+	}
 	return result, nil
 }
 
@@ -929,11 +1068,37 @@ func (r *RunRepository) MetricSeries(ctx context.Context, monitorID string, sinc
 	bucketSeconds := int(math.Ceil(duration.Seconds() / float64(maxPoints)))
 	bucketSeconds = max(1, bucketSeconds)
 	rows, err := r.pool.Query(ctx, `
-		WITH raw AS (
-			SELECT *
-			FROM monitor_runs
-			WHERE monitor_id=$1 AND created_at>=$2
-			  AND status NOT IN ('QUEUED','STARTING','RUNNING')
+		WITH last_attempt AS (
+			SELECT DISTINCT ON (sr.monitor_run_id)
+				sr.monitor_run_id,
+				NULLIF(sa.response_status, 0) AS response_status
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			INNER JOIN step_attempts sa ON sa.step_run_id = sr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			ORDER BY sr.monitor_run_id, sr.step_order DESC, sa.attempt_number DESC
+		), step_times AS (
+			SELECT sr.monitor_run_id,
+				SUM(`+stepTimingAPIResponseExpr+`) AS api_ms,
+				SUM(`+stepTimingPreparationExpr+`) AS prep_ms
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			GROUP BY sr.monitor_run_id
+		), raw AS (
+			SELECT mr.id, mr.status, mr.failure_category, mr.created_at, mr.duration_ms,
+				mr.queue_delay_ms, mr.warning_count, mr.retry_count,
+				COALESCE(mr.api_response_time_ms, mr.network_time_ms, step_times.api_ms) AS api_response_time_ms,
+				COALESCE(mr.preparation_time_ms, step_times.prep_ms, 0) AS preparation_time_ms,
+				COALESCE(mr.post_processing_time_ms, 0) AS post_processing_time_ms,
+				COALESCE(mr.network_time_ms, 0) AS network_time_ms,
+				COALESCE(mr.retry_backoff_time_ms, 0) AS retry_backoff_time_ms,
+				last_attempt.response_status
+			FROM monitor_runs mr
+			LEFT JOIN step_times ON step_times.monitor_run_id = mr.id
+			LEFT JOIN last_attempt ON last_attempt.monitor_run_id = mr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING')
 		), distribution AS (
 			SELECT
 				percentile_cont(0.50) WITHIN GROUP (ORDER BY api_response_time_ms) AS p50,
@@ -950,17 +1115,42 @@ func (r *RunRepository) MetricSeries(ctx context.Context, monitorID string, sinc
 					ORDER BY api_response_time_ms DESC NULLS LAST,created_at DESC,id DESC
 				) AS bucket_rank
 			FROM base
+		), bucket_agg AS (
+			SELECT bucket,
+				COUNT(*) FILTER (WHERE status IN ('SUCCESS','SUCCESS_WITH_WARNINGS')) AS success_count,
+				COUNT(*) FILTER (WHERE status IN ('FAILED','ABORTED')) AS failed_count,
+				COUNT(*) FILTER (WHERE status='TIMED_OUT') AS timeout_count,
+				COUNT(*) FILTER (WHERE response_status BETWEEN 100 AND 199) AS class_1xx,
+				COUNT(*) FILTER (WHERE response_status BETWEEN 200 AND 299) AS class_2xx,
+				COUNT(*) FILTER (WHERE response_status BETWEEN 300 AND 399) AS class_3xx,
+				COUNT(*) FILTER (WHERE response_status BETWEEN 400 AND 499) AS class_4xx,
+				COUNT(*) FILTER (WHERE response_status BETWEEN 500 AND 599) AS class_5xx,
+				COUNT(*) FILTER (WHERE response_status IS NULL AND status='TIMED_OUT') AS http_timeout_count,
+				COUNT(*) FILTER (
+					WHERE response_status IS NULL
+					  AND status IS DISTINCT FROM 'TIMED_OUT'
+					  AND status NOT IN ('CANCELLED','SKIPPED','SKIPPED_CONDITION')
+				) AS no_response_count
+			FROM base
+			GROUP BY bucket
 		)
-		SELECT id::text,status,COALESCE(failure_category,''),created_at,
-			api_response_time_ms,duration_ms,COALESCE(preparation_time_ms,0),
-			COALESCE(post_processing_time_ms,0),COALESCE(network_time_ms,0),
-			COALESCE(retry_backoff_time_ms,0),queue_delay_ms,COALESCE(retry_count,0),
-			warning_count,
-			COALESCE(api_response_time_ms>p95
-			  AND api_response_time_ms-p50>=100
-			  AND api_response_time_ms>=p50*1.25,FALSE)
-		FROM ranked WHERE bucket_rank=1
-		ORDER BY created_at`, monitorID, since, bucketSeconds)
+		SELECT ranked.id::text,ranked.status,COALESCE(ranked.failure_category,''),ranked.created_at,
+			ranked.api_response_time_ms,ranked.duration_ms,ranked.preparation_time_ms,
+			ranked.post_processing_time_ms,ranked.network_time_ms,
+			ranked.retry_backoff_time_ms,ranked.queue_delay_ms,COALESCE(ranked.retry_count,0),
+			ranked.warning_count,
+			COALESCE(ranked.api_response_time_ms>ranked.p95
+			  AND ranked.api_response_time_ms-ranked.p50>=100
+			  AND ranked.api_response_time_ms>=ranked.p50*1.25,FALSE),
+			ranked.response_status,
+			bucket_agg.success_count,bucket_agg.failed_count,bucket_agg.timeout_count,
+			bucket_agg.class_1xx,bucket_agg.class_2xx,bucket_agg.class_3xx,
+			bucket_agg.class_4xx,bucket_agg.class_5xx,
+			bucket_agg.http_timeout_count,bucket_agg.no_response_count
+		FROM ranked
+		INNER JOIN bucket_agg ON bucket_agg.bucket = ranked.bucket
+		WHERE ranked.bucket_rank=1
+		ORDER BY ranked.created_at`, monitorID, since, bucketSeconds)
 	if err != nil {
 		return nil, fmt.Errorf("load projected monitor metric series: %w", err)
 	}
@@ -969,11 +1159,18 @@ func (r *RunRepository) MetricSeries(ctx context.Context, monitorID string, sinc
 	for rows.Next() {
 		var point runs.HistoryMetricPoint
 		var apiResponse pgtype.Int8
+		var responseStatus pgtype.Int4
+		counts := runs.HistoryBucketCounts{}
 		if err := rows.Scan(
 			&point.RunID, &point.Status, &point.FailureCategory, &point.CreatedAt,
 			&apiResponse, &point.ExecutionDurationMS, &point.PreparationMS,
 			&point.PostProcessingMS, &point.NetworkTotalMS, &point.RetryBackoffMS,
 			&point.QueueDelayMS, &point.RetryCount, &point.WarningCount, &point.Spike,
+			&responseStatus,
+			&counts.Success, &counts.Failed, &counts.Timeout,
+			&counts.Class1xx, &counts.Class2xx, &counts.Class3xx,
+			&counts.Class4xx, &counts.Class5xx,
+			&counts.HTTPTimeout, &counts.NoResponse,
 		); err != nil {
 			return nil, err
 		}
@@ -981,9 +1178,52 @@ func (r *RunRepository) MetricSeries(ctx context.Context, monitorID string, sinc
 			value := apiResponse.Int64
 			point.APIResponseTimeMS = &value
 		}
+		if responseStatus.Valid && responseStatus.Int32 > 0 {
+			value := int(responseStatus.Int32)
+			point.ResponseStatus = &value
+		}
+		point.BucketCounts = &counts
 		points = append(points, point)
 	}
 	return points, rows.Err()
+}
+
+func (r *RunRepository) loadResponseStatusDistribution(
+	ctx context.Context,
+	result *runs.HistoryMetrics,
+	monitorID string,
+	since time.Time,
+) error {
+	rows, err := r.pool.Query(ctx, `
+		WITH last_attempt AS (
+			SELECT DISTINCT ON (sr.monitor_run_id)
+				sr.monitor_run_id,
+				NULLIF(sa.response_status, 0) AS response_status
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			INNER JOIN step_attempts sa ON sa.step_run_id = sr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			ORDER BY sr.monitor_run_id, sr.step_order DESC, sa.attempt_number DESC
+		)
+		SELECT COALESCE(last_attempt.response_status::text, '`+runs.NoResponseStatusKey+`'), COUNT(*)
+		FROM monitor_runs mr
+		LEFT JOIN last_attempt ON last_attempt.monitor_run_id = mr.id
+		WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+		  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING','CANCELLED','SKIPPED','SKIPPED_CONDITION')
+		GROUP BY 1`, monitorID, since)
+	if err != nil {
+		return fmt.Errorf("load response status distribution: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var value int
+		if err := rows.Scan(&key, &value); err != nil {
+			return err
+		}
+		result.ResponseStatusDistribution[key] = value
+	}
+	return rows.Err()
 }
 
 func (r *RunRepository) metricRollupSeries(
@@ -1033,9 +1273,91 @@ func (r *RunRepository) metricRollupSeries(
 			value := responseSum / measuredCount
 			point.APIResponseTimeMS = &value
 		}
+		failed := int(failureCount - timeoutCount)
+		if failed < 0 {
+			failed = 0
+		}
+		point.BucketCounts = &runs.HistoryBucketCounts{
+			Success: int(successCount),
+			Failed:  failed,
+			Timeout: int(timeoutCount),
+		}
 		points = append(points, point)
 	}
-	return points, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	httpBuckets, err := r.loadHTTPClassBuckets(ctx, monitorID, since, bucketSeconds)
+	if err != nil {
+		return nil, err
+	}
+	for index := range points {
+		counts, ok := httpBuckets[points[index].CreatedAt.UTC().Unix()]
+		if !ok || points[index].BucketCounts == nil {
+			continue
+		}
+		points[index].BucketCounts.Class1xx = counts.Class1xx
+		points[index].BucketCounts.Class2xx = counts.Class2xx
+		points[index].BucketCounts.Class3xx = counts.Class3xx
+		points[index].BucketCounts.Class4xx = counts.Class4xx
+		points[index].BucketCounts.Class5xx = counts.Class5xx
+		points[index].BucketCounts.HTTPTimeout = counts.HTTPTimeout
+		points[index].BucketCounts.NoResponse = counts.NoResponse
+	}
+	return points, nil
+}
+
+func (r *RunRepository) loadHTTPClassBuckets(
+	ctx context.Context,
+	monitorID string,
+	since time.Time,
+	bucketSeconds int,
+) (map[int64]runs.HistoryBucketCounts, error) {
+	rows, err := r.pool.Query(ctx, `
+		WITH last_attempt AS (
+			SELECT DISTINCT ON (sr.monitor_run_id)
+				sr.monitor_run_id,
+				NULLIF(sa.response_status, 0) AS response_status
+			FROM monitor_step_runs sr
+			INNER JOIN monitor_runs mr ON mr.id = sr.monitor_run_id
+			INNER JOIN step_attempts sa ON sa.step_run_id = sr.id
+			WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+			ORDER BY sr.monitor_run_id, sr.step_order DESC, sa.attempt_number DESC
+		)
+		SELECT date_bin(make_interval(secs=>$3), mr.created_at, TIMESTAMPTZ '2000-01-01') AS bucket,
+			COUNT(*) FILTER (WHERE last_attempt.response_status BETWEEN 100 AND 199) AS class_1xx,
+			COUNT(*) FILTER (WHERE last_attempt.response_status BETWEEN 200 AND 299) AS class_2xx,
+			COUNT(*) FILTER (WHERE last_attempt.response_status BETWEEN 300 AND 399) AS class_3xx,
+			COUNT(*) FILTER (WHERE last_attempt.response_status BETWEEN 400 AND 499) AS class_4xx,
+			COUNT(*) FILTER (WHERE last_attempt.response_status BETWEEN 500 AND 599) AS class_5xx,
+			COUNT(*) FILTER (WHERE last_attempt.response_status IS NULL AND mr.status='TIMED_OUT') AS http_timeout_count,
+			COUNT(*) FILTER (
+				WHERE last_attempt.response_status IS NULL
+				  AND mr.status IS DISTINCT FROM 'TIMED_OUT'
+				  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING','CANCELLED','SKIPPED','SKIPPED_CONDITION')
+			) AS no_response_count
+		FROM monitor_runs mr
+		LEFT JOIN last_attempt ON last_attempt.monitor_run_id = mr.id
+		WHERE mr.monitor_id=$1 AND mr.created_at>=$2
+		  AND mr.status NOT IN ('QUEUED','STARTING','RUNNING')
+		GROUP BY bucket`, monitorID, since, bucketSeconds)
+	if err != nil {
+		return nil, fmt.Errorf("load HTTP class buckets: %w", err)
+	}
+	defer rows.Close()
+	buckets := map[int64]runs.HistoryBucketCounts{}
+	for rows.Next() {
+		var bucket time.Time
+		var counts runs.HistoryBucketCounts
+		if err := rows.Scan(
+			&bucket, &counts.Class1xx, &counts.Class2xx, &counts.Class3xx,
+			&counts.Class4xx, &counts.Class5xx, &counts.HTTPTimeout, &counts.NoResponse,
+		); err != nil {
+			return nil, err
+		}
+		buckets[bucket.UTC().Unix()] = counts
+	}
+	return buckets, rows.Err()
 }
 
 func (r *RunRepository) MetricPointsBetween(ctx context.Context, monitorID, revisionID string, from, to time.Time, limit int) ([]runs.HistoryMetricPoint, error) {
@@ -1072,10 +1394,10 @@ func (r *RunRepository) MetricPointsBetween(ctx context.Context, monitorID, revi
 		}
 		var timing map[string]any
 		_ = json.Unmarshal(timingJSON, &timing)
-		if _, recorded := timing["apiResponseTimeMs"]; !recorded {
+		value, recorded := runs.RecordedAPIResponseMS(timing)
+		if !recorded {
 			continue
 		}
-		value := metricTimingMilliseconds(timing, "apiResponseTimeMs")
 		stepPoint := runs.HistoryStepMetricPoint{StepDefinitionID: stepID, StepName: stepName, StepType: stepType, Status: runs.Status(stepStatus), APIResponseTimeMS: &value}
 		points[index].Steps = append(points[index].Steps, stepPoint)
 		if points[index].APIResponseTimeMS == nil {
@@ -1317,14 +1639,16 @@ func (r *RunRepository) GetDiagnosticsSummary(ctx context.Context, runID string)
 		}
 		timing := map[string]any{}
 		decodeJSON(timingJSON, &timing)
-		apiResponseMS := metricTimingMilliseconds(timing, "apiResponseTimeMs")
-		if _, recorded := timing["apiResponseTimeMs"]; recorded {
+		apiResponseMS, recorded := runs.RecordedAPIResponseMS(timing)
+		if recorded {
 			hasAPIResponseTiming = true
 		}
 		analysis.StepTimeMS += durationMS
 		analysis.APIResponseTimeMS += apiResponseMS
 		analysis.NetworkTimeMS += metricTimingMilliseconds(timing, "networkTotalMs")
-		analysis.PreparationTimeMS += metricTimingMilliseconds(timing, "preparationMs")
+		if preparationMS, ok := runs.RecordedPreparationMS(timing); ok {
+			analysis.PreparationTimeMS += preparationMS
+		}
 		analysis.PostProcessingMS += metricTimingMilliseconds(timing, "postProcessingMs")
 		analysis.RetryTimeMS += metricTimingMilliseconds(timing, "retryBackoffMs")
 		analysis.RetryCount += max(0, attemptCount-1)
@@ -1521,7 +1845,7 @@ func scanRun(row rowScanner) (runs.Run, error) {
 }
 
 func (r *RunRepository) StepDurations(ctx context.Context, monitorID, revisionID, stepDefinitionID, excludeRunID string, limit int, _ bool) ([]int64, error) {
-	rows, err := r.pool.Query(ctx, `SELECT (sr.timing_json->>'apiResponseTimeMs')::bigint FROM monitor_step_runs sr JOIN monitor_runs mr ON mr.id=sr.monitor_run_id WHERE mr.monitor_id=$1 AND ($2='' OR mr.revision_id::text=$2) AND sr.step_definition_id=$3 AND mr.id::text<>$4 AND mr.status='SUCCESS' AND sr.status='SUCCESS' AND sr.timing_json ? 'apiResponseTimeMs' ORDER BY mr.created_at DESC LIMIT $5`, monitorID, revisionID, stepDefinitionID, excludeRunID, limit)
+	rows, err := r.pool.Query(ctx, `SELECT `+stepTimingAPIResponseExpr+` FROM monitor_step_runs sr JOIN monitor_runs mr ON mr.id=sr.monitor_run_id WHERE mr.monitor_id=$1 AND ($2='' OR mr.revision_id::text=$2) AND sr.step_definition_id=$3 AND mr.id::text<>$4 AND mr.status='SUCCESS' AND sr.status='SUCCESS' AND `+stepTimingAPIResponseExpr+` IS NOT NULL ORDER BY mr.created_at DESC LIMIT $5`, monitorID, revisionID, stepDefinitionID, excludeRunID, limit)
 	if err != nil {
 		return nil, err
 	}

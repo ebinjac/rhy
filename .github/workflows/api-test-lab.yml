@@ -1,0 +1,63 @@
+name: API Test Lab
+
+on:
+  pull_request:
+    paths:
+      - "test-lab/**"
+      - "services/api/internal/runs/**"
+      - ".github/workflows/api-test-lab.yml"
+  push:
+    branches: [main]
+    paths:
+      - "test-lab/**"
+      - "services/api/internal/runs/**"
+      - ".github/workflows/api-test-lab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          cache-dependency-path: |
+            test-lab/go.mod
+            services/api/go.sum
+      - name: Unit and race tests
+        working-directory: test-lab
+        run: |
+          go test ./...
+          go test -race ./...
+      - name: Build and start isolated Test Lab
+        working-directory: test-lab
+        run: docker compose up --build --wait
+      - name: Listener smoke tests
+        working-directory: test-lab
+        run: |
+          curl --fail --silent http://localhost:9080/health
+          curl --fail --silent http://localhost:9080/scenarios
+          ./scripts/export-test-certs.sh
+          curl --fail --silent --cacert certs/generated/ca.crt https://localhost:9443/tls
+          curl --fail --silent --cacert certs/generated/ca.crt --cert certs/generated/client.crt --key certs/generated/client.key https://localhost:9444/mtls
+          curl --fail --silent --proxy http://localhost:9081 --cacert certs/generated/ca.crt https://rhythm-test-lab:9443/tls
+          if curl --fail --silent --cacert certs/generated/ca.crt https://localhost:9444/mtls; then exit 1; fi
+          if curl --fail --silent --cacert certs/generated/ca.crt https://localhost:9446/tls; then exit 1; fi
+      - name: Rhythm HTTP executor integration
+        working-directory: services/api
+        env:
+          TEST_LAB_URL: http://localhost:9080
+        run: go test -tags=testlab_integration ./internal/runs
+      - name: Show service logs
+        if: failure()
+        working-directory: test-lab
+        run: docker compose logs --no-color
+      - name: Stop Test Lab
+        if: always()
+        working-directory: test-lab
+        run: docker compose down --volumes

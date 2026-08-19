@@ -18,7 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/rhythm-monitoring/rhythm/internal/id"
+	"github.com/rhythm-monitoring/rhythm/internal/investigation"
 	"github.com/rhythm-monitoring/rhythm/internal/notifications"
+	"github.com/rhythm-monitoring/rhythm/internal/sahara"
 )
 
 var ErrNotFound = errors.New("alert not found")
@@ -1088,9 +1090,18 @@ func (s *Service) applyEvent(ctx context.Context, receiver Receiver, event Exter
 func (s *Service) enqueueOpenSearchNotifications(ctx context.Context, alertID, previousState, state string, isNew bool, now time.Time) error {
 	switch {
 	case isNew && (state == "OPEN" || state == "ERROR"):
-		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now)
+		if err := notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now); err != nil {
+			return err
+		}
+		sahara.EnqueueWithPool(ctx, s.pool, alertID, now)
+		investigation.EnqueueWithPool(ctx, s.pool, alertID, "", "", now)
+		return nil
 	case !isNew && previousState != state && (state == "OPEN" || state == "ERROR") && previousState != "ACKNOWLEDGED":
-		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now)
+		if err := notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_OPENED", now); err != nil {
+			return err
+		}
+		sahara.EnqueueWithPool(ctx, s.pool, alertID, now)
+		return nil
 	case !isNew && previousState != state && state == "RESOLVED" && (previousState == "OPEN" || previousState == "ACKNOWLEDGED" || previousState == "ERROR"):
 		return notifications.EnqueueWithPool(ctx, s.pool, alertID, "ALERT_RECOVERED", now)
 	default:

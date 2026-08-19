@@ -4,7 +4,6 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
-  ChevronRight,
   Database,
   FileCheck2,
   Gauge,
@@ -16,9 +15,11 @@ import {
   TerminalSquare,
   XCircle,
 } from "lucide-react"
+import { useEffect, useId, useRef, useState } from "react"
 
 import { ThemeToggle } from "@/components/app-shell/theme-toggle"
 import marketingStylesheetUrl from "@/styles/rhythm-marketing.css?url"
+import newsreaderLatinUrl from "@fontsource-variable/newsreader/files/newsreader-latin-wght-normal.woff2?url"
 
 export const Route = createFileRoute("/rhythm")({
   head: () => ({
@@ -43,6 +44,13 @@ export const Route = createFileRoute("/rhythm")({
     ],
     links: [
       { rel: "canonical", href: "/rhythm" },
+      {
+        rel: "preload",
+        href: newsreaderLatinUrl,
+        as: "font",
+        type: "font/woff2",
+        crossOrigin: "anonymous",
+      },
       { rel: "stylesheet", href: marketingStylesheetUrl },
     ],
   }),
@@ -50,12 +58,19 @@ export const Route = createFileRoute("/rhythm")({
 })
 
 const journeyStages = [
-  { label: "Request", detail: "POST /v1/payments", duration: "87 ms" },
-  { label: "Extract", detail: "authorization.id", duration: "12 ms" },
-  { label: "Assert", detail: "status = Approved", duration: "4 ms" },
-  { label: "ELF", detail: "0 blocking hits", duration: "64 ms" },
-  { label: "Gate", detail: "release allowed", duration: "Passed" },
+  { label: "Request", detail: "POST /v1/payments", durationMs: 87 },
+  { label: "Extract", detail: "authorization.id", durationMs: 12 },
+  { label: "Assert", detail: "status = Approved", durationMs: 4 },
+  { label: "ELF", detail: "0 blocking hits", durationMs: 64 },
+  { label: "Gate", detail: "release allowed", durationMs: 0 },
 ] as const
+
+const JOURNEY_TOTAL_MS = journeyStages.reduce(
+  (sum, stage) => sum + stage.durationMs,
+  0
+)
+
+const SCORE_PLAY_MS = 2800
 
 const workflowSteps = [
   {
@@ -78,23 +93,23 @@ const workflowSteps = [
 
 const teams = [
   {
-    label: "Application engineering",
-    title: "Prove that the business outcome works.",
+    title: "Application engineering",
+    lede: "Prove that the business outcome works.",
     copy: "Test complete workflows with the same request controls, scripts, variables, and assertions your team needs during development.",
   },
   {
-    label: "SRE and operations",
-    title: "Move from alert to evidence faster.",
+    title: "SRE and operations",
+    lede: "Move from alert to evidence faster.",
     copy: "Trace failures to the exact step and phase, compare historical latency, and inspect masked execution evidence without hunting across tools.",
   },
   {
-    label: "Release engineering",
-    title: "Turn validation into a release gate.",
+    title: "Release engineering",
+    lede: "Turn validation into a release gate.",
     copy: "Capture a baseline, run post-deployment samples, add ELF checks, and share an auditable allow or block decision.",
   },
   {
-    label: "Platform and security",
-    title: "Standardize validation safely.",
+    title: "Platform and security",
+    lede: "Standardize validation safely.",
     copy: "Govern secrets, certificates, proxies, agents, revisions, retention, and audit evidence from a shared control plane.",
   },
 ] as const
@@ -161,15 +176,12 @@ function RhythmMarketingPage() {
 
       <main id="main-content">
         <section className="rhythm-hero" aria-labelledby="rhythm-hero-title">
-          <div className="rhythm-hero__atmosphere" aria-hidden="true" />
-          <div className="rhythm-marketing__container rhythm-hero__layout">
-            <div className="rhythm-hero__copy">
-              <h1 id="rhythm-hero-title">
-                Validate the journey.
-                <span className="rhythm-hero__headline-line">
-                  Release with evidence.
-                </span>
-              </h1>
+          <div className="rhythm-marketing__container rhythm-hero__mast">
+            <h1 id="rhythm-hero-title">
+              Validate the journey.
+              <em>Release with evidence.</em>
+            </h1>
+            <div className="rhythm-hero__mast-end">
               <p className="rhythm-hero__lede">
                 Synthetic monitoring for complete business API journeys—from the
                 first request to the final deployment gate.
@@ -187,77 +199,66 @@ function RhythmMarketingPage() {
                 </a>
               </div>
             </div>
+          </div>
 
-            <div className="rhythm-hero__visual">
-              <JourneyEvidence />
-            </div>
+          <div className="rhythm-marketing__container">
+            <JourneyScore />
           </div>
         </section>
 
         <section className="rhythm-proof" aria-labelledby="rhythm-proof-title">
-          <div className="rhythm-marketing__container rhythm-proof__layout">
-            <div className="rhythm-proof__copy">
-              <p className="rhythm-marketing__eyebrow">
-                Beyond endpoint checks
-              </p>
-              <h2 id="rhythm-proof-title">
-                An endpoint can be up while the journey is broken.
-              </h2>
-              <p>
-                A successful HTTP response does not prove that an identifier was
-                extracted, a downstream request used it, the business outcome
-                was recorded, or the release is safe.
-              </p>
-            </div>
+          <div className="rhythm-marketing__container">
+            <h2 id="rhythm-proof-title">
+              An endpoint can be up while the journey is broken.
+            </h2>
+            <p className="rhythm-proof__lede">
+              A successful HTTP response does not prove that an identifier was
+              extracted, a downstream request used it, the business outcome
+              was recorded, or the release is safe.
+            </p>
 
-            <div className="rhythm-proof__comparison">
-              <article aria-label="Endpoint-only validation example">
-                <div className="rhythm-proof__comparison-heading">
-                  <span>Endpoint check only</span>
-                  <XCircle aria-hidden="true" />
-                </div>
-                <div className="rhythm-proof__request-row">
-                  <span className="rhythm-proof__method">POST</span>
-                  <code>/v1/payments/authorize</code>
-                  <span>200 OK</span>
-                </div>
-                <div className="rhythm-proof__outcome rhythm-proof__outcome--failed">
-                  <XCircle aria-hidden="true" />
-                  <div>
-                    <strong>Business outcome unknown</strong>
-                    <span>Authorization was not verified downstream.</span>
+            <div className="rhythm-proof__instrument">
+              <div className="rhythm-proof__request-row">
+                <span className="rhythm-proof__method">POST</span>
+                <code>/v1/payments/authorize</code>
+                <span>200 OK</span>
+              </div>
+
+              <div className="rhythm-proof__readings">
+                <article aria-label="Endpoint-only validation example">
+                  <h3>Endpoint check</h3>
+                  <div className="rhythm-proof__outcome rhythm-proof__outcome--failed">
+                    <XCircle aria-hidden="true" />
+                    <div>
+                      <strong>Business outcome unknown</strong>
+                      <span>Authorization was not verified downstream.</span>
+                    </div>
                   </div>
-                </div>
-              </article>
+                </article>
 
-              <ChevronRight
-                aria-hidden="true"
-                className="rhythm-proof__arrow"
-              />
-
-              <article aria-label="Rhythm journey validation example">
-                <div className="rhythm-proof__comparison-heading">
-                  <span>Rhythm journey validation</span>
-                  <CheckCircle2 aria-hidden="true" />
-                </div>
-                <div className="rhythm-proof__mini-trace" aria-hidden="true">
-                  {["Request", "Extract", "Assert", "ELF", "Gate"].map(
-                    (label) => (
-                      <div key={label}>
-                        <Check />
-                        <span>{label}</span>
-                      </div>
-                    )
-                  )}
-                </div>
-                <div className="rhythm-proof__outcome rhythm-proof__outcome--verified">
-                  <CheckCircle2 aria-hidden="true" />
-                  <div>
-                    <strong>Business outcome verified</strong>
-                    <span>Authorization captured, asserted, and observed.</span>
+                <article aria-label="Rhythm journey validation example">
+                  <h3>Rhythm journey</h3>
+                  <div className="rhythm-proof__mini-trace" aria-hidden="true">
+                    {["Request", "Extract", "Assert", "ELF", "Gate"].map(
+                      (label) => (
+                        <div key={label}>
+                          <Check />
+                          <span>{label}</span>
+                        </div>
+                      )
+                    )}
                   </div>
-                </div>
-              </article>
+                  <div className="rhythm-proof__outcome rhythm-proof__outcome--verified">
+                    <CheckCircle2 aria-hidden="true" />
+                    <div>
+                      <strong>Business outcome verified</strong>
+                      <span>
+                        Authorization captured, asserted, and observed.
+                      </span>
+                    </div>
+                  </div>
+                </article>
+              </div>
             </div>
           </div>
         </section>
@@ -269,12 +270,9 @@ function RhythmMarketingPage() {
         >
           <div className="rhythm-marketing__container">
             <div className="rhythm-capabilities__intro">
-              <div>
-                <p className="rhythm-marketing__eyebrow">Complete validation</p>
-                <h2 id="rhythm-capabilities-title">
-                  Build the request. Prove the outcome.
-                </h2>
-              </div>
+              <h2 id="rhythm-capabilities-title">
+                Build the request. Prove the outcome.
+              </h2>
               <p>
                 Rhythm brings authoring, execution evidence, log checks, and
                 release validation into one coherent workflow.
@@ -293,18 +291,12 @@ function RhythmMarketingPage() {
           aria-labelledby="rhythm-workflow-title"
         >
           <div className="rhythm-marketing__container">
-            <div className="rhythm-workflow__heading">
-              <p className="rhythm-marketing__eyebrow">How it works</p>
-              <h2 id="rhythm-workflow-title">
-                One evidence chain from design to deployment.
-              </h2>
-            </div>
+            <h2 id="rhythm-workflow-title">
+              One evidence chain from design to deployment.
+            </h2>
             <ol className="rhythm-workflow__steps">
-              {workflowSteps.map((step, index) => (
+              {workflowSteps.map((step) => (
                 <li key={step.title}>
-                  <div className="rhythm-workflow__step-top">
-                    <span>{String(index + 1).padStart(2, "0")}</span>
-                  </div>
                   <h3>{step.title}</h3>
                   <p>{step.copy}</p>
                 </li>
@@ -320,7 +312,6 @@ function RhythmMarketingPage() {
         >
           <div className="rhythm-marketing__container rhythm-teams__layout">
             <div className="rhythm-teams__heading">
-              <p className="rhythm-marketing__eyebrow">Built across teams</p>
               <h2 id="rhythm-teams-title">
                 Shared evidence. Clear decisions. Fewer handoffs.
               </h2>
@@ -332,12 +323,10 @@ function RhythmMarketingPage() {
 
             <div className="rhythm-teams__list">
               {teams.map((team) => (
-                <article key={team.label}>
-                  <div>
-                    <p>{team.label}</p>
-                    <h3>{team.title}</h3>
-                    <p>{team.copy}</p>
-                  </div>
+                <article key={team.title}>
+                  <h3>{team.title}</h3>
+                  <p className="rhythm-teams__lede">{team.lede}</p>
+                  <p>{team.copy}</p>
                 </article>
               ))}
             </div>
@@ -351,10 +340,6 @@ function RhythmMarketingPage() {
         >
           <div className="rhythm-marketing__container rhythm-security__layout">
             <div className="rhythm-security__copy">
-              <div className="rhythm-security__icon">
-                <ShieldCheck aria-hidden="true" />
-              </div>
-              <p className="rhythm-marketing__eyebrow">Governed by design</p>
               <h2 id="rhythm-security-title">
                 Deep evidence without exposing sensitive data.
               </h2>
@@ -398,15 +383,8 @@ function RhythmMarketingPage() {
           className="rhythm-final-cta"
           aria-labelledby="rhythm-final-title"
         >
-          <div className="rhythm-final-cta__signal" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-            <span />
-            <span />
-          </div>
+          <JourneyWaveform className="rhythm-final-cta__wave" decorative />
           <div className="rhythm-marketing__container rhythm-final-cta__content">
-            <p>Ready when your journey is.</p>
             <h2 id="rhythm-final-title">
               Replace assumptions with execution evidence.
             </h2>
@@ -415,7 +393,10 @@ function RhythmMarketingPage() {
                 Open Rhythm
                 <ArrowRight aria-hidden="true" />
               </Link>
-              <a className="rhythm-button rhythm-button--ghost-on-deep" href="/docs">
+              <a
+                className="rhythm-button rhythm-button--ghost-on-deep"
+                href="/docs"
+              >
                 Read documentation
               </a>
             </div>
@@ -445,45 +426,224 @@ function RhythmMarketingPage() {
   )
 }
 
-function JourneyEvidence() {
+function JourneyScore() {
+  const [runId, setRunId] = useState(0)
+  const [elapsed, setElapsed] = useState(JOURNEY_TOTAL_MS)
+  const [complete, setComplete] = useState(true)
+  const rootRef = useRef<HTMLElement>(null)
+  const frameRef = useRef<number>(0)
+
+  useEffect(() => {
+    const root = rootRef.current
+    if (!root) {
+      return
+    }
+
+    const animations = () => root.getAnimations({ subtree: true })
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        for (const animation of animations()) {
+          if (entry?.isIntersecting) {
+            animation.play()
+          } else {
+            animation.pause()
+          }
+        }
+      },
+      { threshold: 0.2 }
+    )
+    observer.observe(root)
+    return () => observer.disconnect()
+  }, [runId])
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)")
+    if (media.matches) {
+      setElapsed(JOURNEY_TOTAL_MS)
+      setComplete(true)
+      return
+    }
+
+    if (runId === 0) {
+      setElapsed(0)
+      setComplete(false)
+    }
+
+    const started = performance.now()
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - started) / SCORE_PLAY_MS)
+      setElapsed(Math.round(progress * JOURNEY_TOTAL_MS))
+      if (progress < 1) {
+        frameRef.current = window.requestAnimationFrame(tick)
+        return
+      }
+      setElapsed(JOURNEY_TOTAL_MS)
+      setComplete(true)
+    }
+    frameRef.current = window.requestAnimationFrame(tick)
+    return () => window.cancelAnimationFrame(frameRef.current)
+  }, [runId])
+
   return (
-    <aside className="rhythm-evidence" aria-label="Example verified journey">
-      <div className="rhythm-evidence__rail" aria-hidden="true" />
-      <div className="rhythm-evidence__status">
+    <aside
+      ref={rootRef}
+      className="rhythm-score"
+      aria-label="Example verified journey"
+      data-complete={complete ? "true" : "false"}
+    >
+      <div className="rhythm-score__status">
         <div>
-          <p className="rhythm-evidence__kicker">Payment authorize</p>
-          <strong>Journey verified</strong>
+          <strong>Payment authorize</strong>
+          <p aria-live="polite">
+            {complete
+              ? "Journey verified"
+              : "Illustrative run in progress"}
+          </p>
         </div>
-        <span className="rhythm-evidence__badge">
-          <Check aria-hidden="true" />
-          Passed
-        </span>
+        <div className="rhythm-score__status-end">
+          <time dateTime={`PT${(elapsed / 1000).toFixed(3)}S`}>
+            {elapsed} ms
+          </time>
+          <span
+            className="rhythm-score__badge"
+            data-visible={complete ? "true" : "false"}
+          >
+            <Check aria-hidden="true" />
+            Passed
+          </span>
+        </div>
       </div>
 
-      <ol className="rhythm-evidence__timeline">
-        {journeyStages.map((stage, index) => (
-          <li className="rhythm-evidence__stage" key={stage.label}>
-            <span className="rhythm-evidence__index" aria-hidden="true">
-              {String(index + 1).padStart(2, "0")}
-            </span>
-            <div className="rhythm-evidence__stage-body">
-              <div>
+      <div className="rhythm-score__run" key={runId}>
+        <JourneyWaveform />
+
+        <ol className="rhythm-score__stages">
+          {journeyStages.map((stage, index) => {
+            const arrivedAt =
+              journeyStages
+                .slice(0, index)
+                .reduce((sum, item) => sum + item.durationMs, 0) /
+              JOURNEY_TOTAL_MS
+            return (
+              <li
+                className="rhythm-score__stage"
+                key={stage.label}
+                style={
+                  {
+                    "--stage-delay": `${arrivedAt * SCORE_PLAY_MS}ms`,
+                  } as React.CSSProperties
+                }
+              >
+                <span className="rhythm-score__dot" aria-hidden="true">
+                  <Check />
+                </span>
                 <strong>{stage.label}</strong>
                 <span>{stage.detail}</span>
-              </div>
-              <time>{stage.duration}</time>
-            </div>
-            <span className="rhythm-evidence__dot" aria-hidden="true">
-              <Check />
-            </span>
-          </li>
-        ))}
-      </ol>
+                <time>
+                  {stage.durationMs > 0 ? `${stage.durationMs} ms` : "Passed"}
+                </time>
+              </li>
+            )
+          })}
+        </ol>
+      </div>
 
-      <p className="rhythm-evidence__caption">
-        Illustrative execution evidence · 167 ms total
-      </p>
+      <div className="rhythm-score__caption">
+        <p>Illustrative execution evidence · {JOURNEY_TOTAL_MS} ms total</p>
+        <button
+          className="rhythm-score__replay"
+          onClick={() => {
+            setRunId((value) => value + 1)
+            setElapsed(0)
+            setComplete(false)
+          }}
+          type="button"
+        >
+          Replay run
+        </button>
+      </div>
     </aside>
+  )
+}
+
+function JourneyWaveform({
+  className,
+  decorative = false,
+}: {
+  className?: string
+  decorative?: boolean
+}) {
+  const clipId = useId().replace(/:/g, "")
+  const measured = journeyStages.map((stage) =>
+    Math.max(stage.durationMs, stage.label === "Gate" ? 18 : 0)
+  )
+  const max = Math.max(...measured)
+  const width = 1000
+  const height = 88
+  const padX = 8
+  const padY = 10
+  const usableH = height - padY * 2
+  const segment = (width - padX * 2) / measured.length
+
+  const commands: string[] = []
+  measured.forEach((duration, index) => {
+    const x0 = padX + index * segment
+    const x1 = x0 + segment
+    const y = padY + (1 - duration / max) * usableH
+    if (index === 0) {
+      commands.push(`M ${x0.toFixed(1)} ${y.toFixed(1)}`)
+    } else {
+      commands.push(`V ${y.toFixed(1)}`)
+    }
+    commands.push(`H ${x1.toFixed(1)}`)
+  })
+  const path = commands.join(" ")
+  const area = `${path} V ${height - padY} H ${padX} Z`
+
+  return (
+    <svg
+      aria-hidden={decorative || undefined}
+      className={className ?? "rhythm-score__wave"}
+      fill="none"
+      preserveAspectRatio="none"
+      role={decorative ? "presentation" : "img"}
+      viewBox={`0 0 ${width} ${height}`}
+    >
+      {!decorative ? (
+        <title>Latency profile for the illustrative payment authorize journey</title>
+      ) : null}
+      <defs>
+        <clipPath id={`${clipId}-draw`}>
+          <rect
+            className="rhythm-score__draw"
+            height={height}
+            width={width}
+            x="0"
+            y="0"
+          />
+        </clipPath>
+      </defs>
+      <path
+        className="rhythm-score__wave-ghost"
+        d={path}
+        vectorEffect="non-scaling-stroke"
+      />
+      <g clipPath={`url(#${clipId}-draw)`}>
+        <path className="rhythm-score__wave-fill" d={area} />
+        <path
+          className="rhythm-score__wave-line"
+          d={path}
+          vectorEffect="non-scaling-stroke"
+        />
+      </g>
+      <rect
+        className="rhythm-score__playhead"
+        height={height}
+        width="2"
+        x="0"
+        y="0"
+      />
+    </svg>
   )
 }
 
@@ -491,12 +651,11 @@ function CapabilityAuthoring() {
   return (
     <article className="rhythm-feature rhythm-feature--authoring">
       <div className="rhythm-feature__copy">
-        <span className="rhythm-feature__number">01</span>
-        <p className="rhythm-marketing__eyebrow">Postman-style authoring</p>
         <h3>Express the complete API workflow.</h3>
         <p>
           Build multi-step monitors with parameters, headers, cookies, auth,
-          bodies, proxies, TLS, scripts, variables, extractors, and assertions.
+          bodies, proxies, TLS, scripts, variables, extractors, and assertions
+          in a Postman-style workbench.
         </p>
         <ul>
           <li>
@@ -609,12 +768,11 @@ function CapabilityDiagnostics() {
       </div>
 
       <div className="rhythm-feature__copy">
-        <span className="rhythm-feature__number">02</span>
-        <p className="rhythm-marketing__eyebrow">Incident-grade diagnostics</p>
         <h3>Know what failed, where, and why.</h3>
         <p>
           Inspect every step, retry, timing phase, extractor, assertion, and
-          structured event without exposing secret values.
+          structured event without exposing secret values. Incident-grade
+          diagnostics stay on the API path, not the executor overhead.
         </p>
         <ul>
           <li>
@@ -639,8 +797,6 @@ function CapabilityDeployment() {
   return (
     <article className="rhythm-feature rhythm-feature--deployment">
       <div className="rhythm-feature__copy">
-        <span className="rhythm-feature__number">03</span>
-        <p className="rhythm-marketing__eyebrow">Deployment validation</p>
         <h3>Compare before and after. Gate with confidence.</h3>
         <p>
           Capture an immutable performance baseline, run post-deployment

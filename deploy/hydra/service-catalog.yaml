@@ -3,13 +3,40 @@ kind: HydraServiceCatalog
 metadata:
   name: rhythm
 spec:
+  deploymentProfiles:
+    presentation:
+      description: One routable 4-vCPU/8-GiB service for a presentation or small installation.
+      services:
+        - rhythm-standalone
+      mutuallyExclusiveWith:
+        - scale-out
+    scale-out:
+      description: Four independently scalable services for production load and failure isolation.
+      services:
+        - rhythm-frontdoor
+        - rhythm-control
+        - rhythm-api-executor
+        - rhythm-browser-executor
+      mutuallyExclusiveWith:
+        - presentation
   database:
     engine: liquibase
     changelog: dbscripts/main_changelog.xml
     workflow: .github/workflows/deploy-rhythm-database.yml
-    requiredChangeSet: 000030_hydra_capacity
+    requiredChangeSet: 000033_alert_investigation
     deployBeforeApplications: true
   services:
+    - name: rhythm-standalone
+      dockerfile: deploy/hydra/services/rhythm-standalone/Dockerfile
+      valuesPath: deploy/hydra/services/rhythm-standalone/helm
+      vaultInventory: deploy/hydra/services/rhythm-standalone/vault/secrets.example
+      workflow: .github/workflows/deploy-rhythm-standalone.yml
+      routability: routable
+      applicationUrlPrefix: rhythm
+      sso: false
+      automaticFailover: true
+      order: 5
+      public: true
     - name: rhythm-control
       dockerfile: deploy/hydra/services/rhythm-control/Dockerfile
       valuesPath: deploy/hydra/services/rhythm-control/helm

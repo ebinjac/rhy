@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["id", "name", "active", "count", "tags"],
+  "properties": {
+    "id": { "const": "schema-test-01" },
+    "name": { "type": "string" },
+    "active": { "type": "boolean" },
+    "count": { "type": "integer", "minimum": 0 },
+    "tags": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}
+

@@ -4,14 +4,184 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestRuntimeEnterpriseMACAuthenticationScenario(t *testing.T) {
+	const secret = "enterprise-mac-secret"
+	code := `
+const key = rhythm.secrets.get("mac_key");
+const secret = rhythm.secrets.get("mac_secret");
+const ts = rhythm.time.timestampMs();
+const nonce = rhythm.random.string(36);
+const method = rhythm.request.method;
+const requestUrl = rhythm.variables.replaceIn(rhythm.request.url);
+const payload = rhythm.variables.replaceIn(rhythm.request.body || "");
+const parsedUrl = new URL(requestUrl);
+const host = parsedUrl.hostname;
+const port = parsedUrl.port || "443";
+const resourceUri = parsedUrl.pathname + parsedUrl.search;
+const bodyHash = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(payload, secret));
+const canonical = ts + "\n" + nonce + "\n" + method + "\n" + resourceUri + "\n" + host + "\n" + port + "\n" + bodyHash + "\n";
+const mac = CryptoJS.enc.Base64.stringify(CryptoJS.HmacSHA256(canonical, secret));
+const signature = 'MAC id="' + key + '",ts="' + ts + '",nonce="' + nonce + '",bodyhash="' + bodyHash + '",mac="' + mac + '"';
+rhythm.environment.set("signature", signature);
+rhythm.request.headers.set("Authorization", signature);
+`
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script:      Script{Enabled: true, Code: code, RuntimeVersion: RuntimeVersion},
+		Environment: map[string]string{"host": "payments.example.com"},
+		Secrets:     map[string]string{"mac_key": "client-123", "mac_secret": secret},
+		Request:     &Request{Method: "POST", URL: "https://{{host}}/api/v1/events?id=123", Headers: []Entry{}, Query: []Entry{}, Body: map[string]any{"type": "json", "content": `{"amount":10}`}},
+		TimeoutMS:   1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalRequest == nil || len(result.InternalRequest.Headers) != 1 {
+		t.Fatalf("MAC pre-request failed: %#v", result)
+	}
+	header := result.InternalRequest.Headers[0].Value
+	parts := regexp.MustCompile(`MAC id="([^"]+)",ts="([^"]+)",nonce="([^"]+)",bodyhash="([^"]+)",mac="([^"]+)"`).FindStringSubmatch(header)
+	if len(parts) != 6 || parts[1] != "client-123" || len(parts[3]) != 36 {
+		t.Fatalf("unexpected MAC header: %q", header)
+	}
+	bodyMAC := hmac.New(sha256.New, []byte(secret))
+	_, _ = bodyMAC.Write([]byte(`{"amount":10}`))
+	expectedBodyHash := base64.StdEncoding.EncodeToString(bodyMAC.Sum(nil))
+	canonical := parts[2] + "\n" + parts[3] + "\nPOST\n/api/v1/events?id=123\npayments.example.com\n443\n" + expectedBodyHash + "\n"
+	canonicalMAC := hmac.New(sha256.New, []byte(secret))
+	_, _ = canonicalMAC.Write([]byte(canonical))
+	expectedMAC := base64.StdEncoding.EncodeToString(canonicalMAC.Sum(nil))
+	if parts[4] != expectedBodyHash || parts[5] != expectedMAC {
+		t.Fatalf("MAC signature mismatch: got body=%q mac=%q", parts[4], parts[5])
+	}
+	if result.Request.Headers[0].Value != "MASKED" || result.Environment["signature"] != "MASKED" {
+		t.Fatalf("MAC evidence was not masked: %#v %#v", result.Request, result.Environment)
+	}
+}
+
+func TestRhythmVariablePrecedenceAndExplicitScopes(t *testing.T) {
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script: Script{Enabled: true, RuntimeVersion: RuntimeVersion, Code: `
+rhythm.variables.set("winner", rhythm.variables.replaceIn("{{shared}}"));
+rhythm.variables.set("serviceValue", rhythm.variables.replaceIn("{{service.shared}}"));
+rhythm.variables.set("applicationValue", rhythm.variables.replaceIn("{{application.shared}}"));
+rhythm.service.set("createdByScript", "service-runtime");
+rhythm.application.set("createdByScript", "application-runtime");
+`},
+		Variables: map[string]string{"shared": "runtime"}, Service: map[string]string{"shared": "service"}, Application: map[string]string{"shared": "application"}, Environment: map[string]string{"shared": "environment"}, Globals: map[string]string{"shared": "global"}, TimeoutMS: 1000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || result.InternalVariables["winner"] != "runtime" || result.InternalVariables["serviceValue"] != "service" || result.InternalVariables["applicationValue"] != "application" {
+		t.Fatalf("Rhythm scope precedence is incorrect: %#v", result.InternalVariables)
+	}
+	if result.InternalService["createdByScript"] != "service-runtime" || result.InternalApplication["createdByScript"] != "application-runtime" {
+		t.Fatalf("Rhythm scoped mutations were not retained: %#v %#v", result.InternalService, result.InternalApplication)
+	}
+}
+
+func TestValidationWarnsForCredentialLiteralsWithoutRejectingScript(t *testing.T) {
+	validation := NewRuntime().Validate(`const clientSecret = "production-looking-secret"; rhythm.variables.set("ready", "yes");`)
+	if !validation.Valid || len(validation.Problems) != 1 || validation.Problems[0].Code != "POTENTIAL_SECRET_LITERAL" || validation.Problems[0].Severity != "warning" {
+		t.Fatalf("expected a non-blocking secret literal warning, got %#v", validation)
+	}
+}
+
+func TestRuntimeEnterpriseAuthenticationChainingScenario(t *testing.T) {
+	secretBytes := []byte{0xff, 0x00, 0x81, 0x42, 0x19, 0xaa, 0x10, 0x7e}
+	secret := base64.StdEncoding.EncodeToString(secretBytes)
+	var sawBody string
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		encoded, _ := json.Marshal(body)
+		sawBody = string(encoded)
+		clientID, version, timestamp := request.Header.Get("X-Auth-AppID"), request.Header.Get("X-Auth-Version"), request.Header.Get("X-Auth-Timestamp")
+		mac := hmac.New(sha256.New, secretBytes)
+		_, _ = mac.Write([]byte(clientID + "-" + version + "-" + timestamp))
+		expected := strings.TrimRight(base64.StdEncoding.EncodeToString(mac.Sum(nil)), "=")
+		expected = strings.NewReplacer("+", "-", "/", "_").Replace(expected)
+		if clientID != "client-456" || version != "2" || request.Header.Get("X-Auth-Signature") != expected {
+			t.Errorf("invalid authentication request headers: %#v", request.Header)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"authorization_token":"issued-enterprise-token"}`))
+	}))
+	defer target.Close()
+
+	code := `
+const clientId = rhythm.secrets.get("clientId");
+const secret = rhythm.secrets.get("secret");
+const version = "2";
+const timestamp = Date.now();
+const signingInput = clientId + "-" + version + "-" + timestamp;
+const secretBytes = CryptoJS.enc.Base64.parse(secret);
+const signatureBytes = CryptoJS.HmacSHA256(signingInput, secretBytes);
+let signature = CryptoJS.enc.Base64.stringify(signatureBytes).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+const response = await rhythm.sendRequest({
+  url: "{{AUTH_BASE_URL}}/security/digital/v1/application/token",
+  method: "POST",
+  timeout: 1500,
+  headers: {
+    "Content-Type": "application/json",
+    "X-Auth-AppID": clientId,
+    "X-Auth-Signature": signature,
+    "X-Auth-Timestamp": timestamp.toString(),
+    "X-Auth-Version": version
+  },
+  body: { scope: ["*"] }
+});
+if (response.statusCode !== 200) throw new Error("Authentication failed: " + response.statusCode);
+const token = response.json().authorization_token;
+rhythm.environment.set("auth_token_keyset", token);
+rhythm.request.headers.set("Authorization", "Bearer " + token);
+rhythm.variables.set("auth_response_time", String(response.responseTime));
+rhythm.variables.set("auth_response_size", String(response.size));
+`
+	result, err := NewRuntime().Execute(context.Background(), Input{
+		Script:              Script{Enabled: true, Code: code, RuntimeVersion: RuntimeVersion},
+		AllowPrivateTargets: true,
+		Environment:         map[string]string{"AUTH_BASE_URL": target.URL},
+		Secrets:             map[string]string{"clientId": "client-456", "secret": secret},
+		Request:             &Request{Method: "GET", URL: "https://api.example.com/protected", Headers: []Entry{}, Query: []Entry{}},
+		TimeoutMS:           2500,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "SUCCESS" || sawBody != `{"scope":["*"]}` || len(result.AuxiliaryRequests) != 1 {
+		t.Fatalf("authentication chaining failed: body=%q result=%#v", sawBody, result)
+	}
+	if result.AuxiliaryRequests[0].Source != "rhythm.sendRequest" || result.AuxiliaryRequests[0].Status != http.StatusOK {
+		t.Fatalf("dependency evidence missing: %#v", result.AuxiliaryRequests)
+	}
+	if result.InternalEnvironment["auth_token_keyset"] != "issued-enterprise-token" || result.InternalRequest.Headers[0].Value != "Bearer issued-enterprise-token" {
+		t.Fatalf("token was not propagated: %#v %#v", result.InternalEnvironment, result.InternalRequest)
+	}
+	encoded, _ := json.Marshal(struct {
+		Logs              []Log              `json:"logs"`
+		Variables         map[string]string  `json:"variables"`
+		Environment       map[string]string  `json:"environment"`
+		Request           *Request           `json:"request"`
+		VariableChanges   []Change           `json:"variableChanges"`
+		RequestChanges    []Change           `json:"requestChanges"`
+		AuxiliaryRequests []AuxiliaryRequest `json:"auxiliaryRequests"`
+	}{result.Logs, result.Variables, result.Environment, result.Request, result.VariableChanges, result.RequestChanges, result.AuxiliaryRequests})
+	if strings.Contains(string(encoded), "issued-enterprise-token") || strings.Contains(string(encoded), secret) {
+		t.Fatalf("safe result leaked credentials: %s", encoded)
+	}
+}
 
 func TestRuntimeMutatesVariablesAndRequest(t *testing.T) {
 	runtime := NewRuntime()

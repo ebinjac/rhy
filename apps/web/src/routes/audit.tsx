@@ -20,6 +20,7 @@ import {
   ScrollText,
 } from "lucide-react"
 
+import { HintedLabel } from "@/components/info-hint"
 import { listAuditEvents } from "@/lib/api-client/monitors"
 import { formatDateTime } from "@/lib/format-date"
 import { PageContainer } from "@/components/page-container"
@@ -160,8 +161,8 @@ function AuditPage() {
         </Button>
       </section>
       <p className="mt-3 text-xs text-muted-foreground">
-        Audit history records user, worker, and system mutations. Retention is
-        controlled by the workspace audit policy.
+        Audit history records operator, worker, and system mutations. Retention
+        is controlled by the workspace audit policy.
       </p>
       <div className="mt-4 overflow-hidden rounded-xl border">
         <div className="hidden grid-cols-[170px_150px_1fr_120px_150px] gap-4 border-b bg-muted/45 px-4 py-2.5 text-xs font-medium text-muted-foreground md:grid">
@@ -169,7 +170,12 @@ function AuditPage() {
           <span>Actor</span>
           <span>Action</span>
           <span>Outcome</span>
-          <span>Correlation</span>
+          <HintedLabel
+            body="Links this mutation to related API requests and worker activity. Secret values are never stored on the event."
+            title="Correlation ID"
+          >
+            Correlation
+          </HintedLabel>
         </div>
         {visible.length ? (
           visible.map((event) => (
@@ -225,9 +231,7 @@ function AuditPage() {
                   <div>
                     <dt className="text-muted-foreground">Event source</dt>
                     <dd className="mt-1">
-                      {event.actorId
-                        ? "Authenticated user or worker"
-                        : "System"}
+                      {event.actorId ? "API request or worker" : "System"}
                     </dd>
                   </div>
                 </dl>

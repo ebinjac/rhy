@@ -12,7 +12,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/redis/go-redis/v9"
 )
 
 type Metrics struct {
@@ -23,13 +22,10 @@ type Metrics struct {
 	activeRequests    prometheus.Gauge
 	webVitals         *prometheus.HistogramVec
 	pool              *pgxpool.Pool
-	redis             redis.UniversalClient
 	jobDepth          *prometheus.Desc
 	oldestJobAge      *prometheus.Desc
 	outboxDepth       *prometheus.Desc
 	scheduleLag       *prometheus.Desc
-	redisStreamLength *prometheus.Desc
-	redisPending      *prometheus.Desc
 	scheduledDue      *prometheus.Desc
 	requiredReplicas  *prometheus.Desc
 	activeSlots       *prometheus.Desc
@@ -49,7 +45,7 @@ type CapacityConfig struct {
 	TargetUtilizationPercent int
 }
 
-func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, capacityOptions ...CapacityConfig) *Metrics {
+func New(pool *pgxpool.Pool, capacityOptions ...CapacityConfig) *Metrics {
 	capacity := CapacityConfig{WorkerConcurrency: 256, MinReplicas: 3, MaxReplicas: 12, TargetUtilizationPercent: 70}
 	if len(capacityOptions) > 0 {
 		capacity = capacityOptions[0]
@@ -91,8 +87,7 @@ func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, capacityOptions 
 			Help:    "Privacy-safe browser Web Vital observations by metric and normalized route.",
 			Buckets: []float64{0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 50, 100, 200, 500, 1000, 2500, 5000, 10000},
 		}, []string{"metric", "route"}),
-		pool:  pool,
-		redis: redisClient,
+		pool: pool,
 		jobDepth: prometheus.NewDesc(
 			"rhythm_execution_jobs", "Execution jobs by queue class and state.",
 			[]string{"queue_class", "status"}, nil,
@@ -109,14 +104,6 @@ func New(pool *pgxpool.Pool, redisClient redis.UniversalClient, capacityOptions 
 		scheduleLag: prometheus.NewDesc(
 			"rhythm_scheduler_due_lag_seconds",
 			"Age of the oldest due enabled schedule.", nil, nil,
-		),
-		redisStreamLength: prometheus.NewDesc(
-			"rhythm_redis_stream_entries", "Redis execution stream length.",
-			[]string{"queue_class"}, nil,
-		),
-		redisPending: prometheus.NewDesc(
-			"rhythm_redis_stream_pending", "Redis execution entries pending acknowledgement.",
-			[]string{"queue_class"}, nil,
 		),
 		scheduledDue: prometheus.NewDesc(
 			"rhythm_scheduled_runs_due_lookahead", "Enabled schedules due within the forecast window.",
@@ -253,8 +240,6 @@ func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	ch <- m.oldestJobAge
 	ch <- m.outboxDepth
 	ch <- m.scheduleLag
-	ch <- m.redisStreamLength
-	ch <- m.redisPending
 	ch <- m.scheduledDue
 	ch <- m.requiredReplicas
 	ch <- m.activeSlots
@@ -355,27 +340,6 @@ func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(m.activeSlots, prometheus.GaugeValue, float64(active))
 		ch <- prometheus.MustNewConstMetric(m.availableSlots, prometheus.GaugeValue, float64(available))
 		ch <- prometheus.MustNewConstMetric(m.workerUtilization, prometheus.GaugeValue, utilization)
-	}
-	if m.redis != nil {
-		for queueClass, target := range map[string]struct {
-			stream string
-			group  string
-		}{
-			"scheduled": {stream: "rhythm:execution:scheduled", group: "rhythm-api-workers"},
-			"manual":    {stream: "rhythm:execution:manual", group: "rhythm-api-workers"},
-			"browser":   {stream: "rhythm:execution:browser", group: "rhythm-browser-dispatchers"},
-			"deployment": {
-				stream: "rhythm:execution:deployment",
-				group:  "rhythm-deployment-workers",
-			},
-		} {
-			if count, err := m.redis.XLen(ctx, target.stream).Result(); err == nil {
-				ch <- prometheus.MustNewConstMetric(m.redisStreamLength, prometheus.GaugeValue, float64(count), queueClass)
-			}
-			if pending, err := m.redis.XPending(ctx, target.stream, target.group).Result(); err == nil {
-				ch <- prometheus.MustNewConstMetric(m.redisPending, prometheus.GaugeValue, float64(pending.Count), queueClass)
-			}
-		}
 	}
 }
 

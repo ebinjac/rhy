@@ -3,6 +3,8 @@ export type ScriptDefinition = {
   language: "javascript"
   code: string
   runtimeVersion: "rhythm-js-1" | "rhythm-js-2"
+  apiMode?: "rhythm" | "postman"
+  continueOnFailure?: boolean
   packages?: Array<{ name: string; code: string }>
 }
 
@@ -16,6 +18,8 @@ export function normalizeScriptDefinition(
     language: "javascript",
     code,
     runtimeVersion: "rhythm-js-2",
+    apiMode: value?.apiMode ?? "rhythm",
+    continueOnFailure: Boolean(value?.continueOnFailure),
     packages: value?.packages ?? [],
   }
 }

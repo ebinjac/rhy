@@ -26,7 +26,7 @@ topology and 2,000-run capacity model.
 - The API owns definitions, revisions, evidence, and execution state.
 - Workers execute scheduled and manual runs with cancellation propagation.
 - The script runner uses a fresh sandbox for every JavaScript execution.
-- PostgreSQL stores durable state and is the default asynchronous job transport; Redis Streams are optional.
+- PostgreSQL stores durable state and provides the asynchronous job transport.
 - Execution agents can reach unrestricted HTTP(S) targets, including private networks.
 - Production ELF traffic passes through an approved proxy.
 

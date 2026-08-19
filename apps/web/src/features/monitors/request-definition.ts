@@ -1,6 +1,16 @@
 import { normalizeScriptDefinition } from "@/features/monitors/script-definition"
 import type { ScriptDefinition } from "@/features/monitors/script-definition"
 
+export type InvestigationCheck = {
+  id: string
+  kind: "ELF_QUERY" | "DYNATRACE"
+  label: string
+  queryId?: string
+  applicationId?: string
+  environmentBindingId?: string
+  serviceIds?: string[]
+}
+
 export type KeyValueRow = {
   id: string
   enabled: boolean
@@ -13,6 +23,7 @@ export type KeyValueRow = {
 export type RequestDefinition = {
   schemaVersion: number
   scripts: { preRequest: ScriptDefinition }
+  investigationChecks?: InvestigationCheck[]
   steps: Array<{
     id: string
     name: string
@@ -123,6 +134,7 @@ export const initialRequestDefinition: RequestDefinition = {
       runtimeVersion: "rhythm-js-2",
     },
   },
+  investigationChecks: [],
   steps: [
     {
       id: "step-request-1",
@@ -223,6 +235,9 @@ export function normalizeDefinitionScripts(
   }
   return {
     ...value,
+    investigationChecks: Array.isArray(value.investigationChecks)
+      ? value.investigationChecks.slice(0, 20)
+      : [],
     scripts: {
       ...value.scripts,
       preRequest: normalizeScriptDefinition(

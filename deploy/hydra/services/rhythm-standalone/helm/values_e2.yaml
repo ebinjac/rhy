@@ -1,0 +1,78 @@
+# Hydra values for the one-service Rhythm presentation profile in E2.
+# PostgreSQL, encryption, storage, and loopback runner tokens are injected by
+# Hydra Vault. The pod has no persistent volume and exposes only port 8080.
+automaticFailover: true
+
+configMap:
+  EPAAS_ENV: e2
+  ENV: e2
+  RHYTHM_SERVICE_ROLE: standalone
+  RHYTHM_ENVIRONMENT: production
+  RHYTHM_AUTH_MODE: anonymous
+  RHYTHM_ALLOWED_ORIGIN: "*"
+  RHYTHM_STORAGE_MODE: postgres
+  RHYTHM_QUEUE_BACKEND: postgres
+  RHYTHM_DATABASE_TRANSACTION_POOLING: "true"
+  RHYTHM_ARTIFACT_STORE_PROVIDER: s3
+  RHYTHM_ARTIFACT_STORE_PREFIX: e2/rhythm
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "false"
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "false"
+  RHYTHM_UNRESTRICTED_OUTBOUND: "true"
+  RHYTHM_REQUIRED_SCHEMA_VERSION: 000033_alert_investigation
+  RHYTHM_DATABASE_MAX_CONNS: "32"
+  RHYTHM_WORKER_CONCURRENCY: "96"
+  RHYTHM_SCRIPT_RUNNER_CONCURRENCY: "4"
+  RHYTHM_BROWSER_JOB_CONCURRENCY: "1"
+  RHYTHM_BROWSER_MAX_CONCURRENCY: "1"
+  RHYTHM_DEPLOYMENT_JOB_CONCURRENCY: "2"
+  RHYTHM_TARGET_HOST_CONCURRENCY: "12"
+  RHYTHM_WORKER_MEMORY_STOP_PERCENT: "75"
+  RHYTHM_EXECUTOR_SLOTS_PER_REPLICA: "96"
+  RHYTHM_EXECUTOR_MIN_REPLICAS: "1"
+  RHYTHM_EXECUTOR_MAX_REPLICAS: "1"
+  RHYTHM_SCHEDULER_BATCH_SIZE: "1000"
+  RHYTHM_SCHEDULER_POLL_MS: "500"
+  RHYTHM_CHROMIUM_EXECUTABLE_PATH: /usr/bin/chromium
+  RHYTHM_CHROMIUM_DISABLE_DEV_SHM_USAGE: "false"
+
+deployment:
+  lifecycle: {}
+  volumeMounts:
+    - name: browser-shm
+      mountPath: /dev/shm
+  volumes:
+    - name: browser-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 768Mi
+  livenessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /livez
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 20
+    periodSeconds: 30
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 3
+    httpGet:
+      path: /health
+      port: 8080
+      scheme: HTTP
+    initialDelaySeconds: 45
+    periodSeconds: 15
+    successThreshold: 1
+    timeoutSeconds: 10
+  resourcesLimitsCPU: 4000m
+  resourcesLimitsMemory: 8G
+  resourcesRequestsCPU: 3000m
+  resourcesRequestsMemory: 6G
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+hpa:
+  enabled: false
+  maxReplicas: 1
+  minReplicas: 1

@@ -3,8 +3,11 @@ import type { ErrorInfo, ReactNode } from "react"
 import { Button } from "@workspace/ui/components/button"
 import { CircleAlert, RefreshCw } from "lucide-react"
 
+import { reportClientError } from "@/lib/client-error-reporter"
+
 type Props = {
   children: ReactNode
+  resetKey: string
 }
 
 type State = {
@@ -20,6 +23,13 @@ export class AppErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("Rhythm render error", error, info.componentStack)
+    reportClientError(error, "application", this.props.resetKey)
+  }
+
+  componentDidUpdate(previous: Props) {
+    if (this.state.error && previous.resetKey !== this.props.resetKey) {
+      this.setState({ error: null })
+    }
   }
 
   private reset = () => {

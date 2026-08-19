@@ -20,9 +20,11 @@ func TestRolePermissions(t *testing.T) {
 		{"editor cannot manage secret references", RoleEditor, http.MethodPost, "/api/v1/config/secrets", false},
 		{"operator runs monitor", RoleOperator, http.MethodPost, "/api/v1/monitors/one/runs", true},
 		{"operator acknowledges alert", RoleOperator, http.MethodPost, "/api/v1/alerts/one/acknowledge", true},
+		{"operator reruns investigation", RoleOperator, http.MethodPost, "/api/v1/alerts/one/investigation/check-1/run", true},
 		{"operator queries dynatrace", RoleOperator, http.MethodPost, "/api/v1/applications/one/environments/two/dynatrace/query", true},
 		{"operator previews dynatrace resources", RoleOperator, http.MethodPost, "/api/v1/applications/one/environments/two/dynatrace/resources/preview", true},
 		{"operator discovers dynatrace resources", RoleOperator, http.MethodPost, "/api/v1/applications/one/environments/two/dynatrace/resources/discover", true},
+		{"operator sends test notifications", RoleOperator, http.MethodPost, "/api/v1/internal/test-notifications/email", true},
 		{"operator cannot edit", RoleOperator, http.MethodPut, "/api/v1/monitors/one/draft", false},
 		{"administrator controls agents", RoleAdministrator, http.MethodPost, "/api/v1/agents/one/revoke", true},
 	}

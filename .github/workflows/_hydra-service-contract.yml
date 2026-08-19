@@ -59,7 +59,10 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$HYDRA_PROJECT" =~ ^[a-z0-9][a-z0-9-]*$ ]]
-          [[ "$HYDRA_SERVICE" =~ ^rhythm-[a-z0-9-]+$ ]]
+          # The service may already exist under an organization-approved name
+          # such as `rhythm`, `rythm`, or `rhythmapi`; do not force a new
+          # service solely to satisfy a repository naming convention.
+          [[ "$HYDRA_SERVICE" =~ ^[a-z0-9][a-z0-9-]*$ ]]
           printf 'project=%s\n' "$HYDRA_PROJECT" >> "$GITHUB_OUTPUT"
           printf 'service=%s\n' "$HYDRA_SERVICE" >> "$GITHUB_OUTPUT"
           printf 'image_name=%s-image\n' "$HYDRA_SERVICE" >> "$GITHUB_OUTPUT"

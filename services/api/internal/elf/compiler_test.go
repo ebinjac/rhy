@@ -25,6 +25,9 @@ func TestValidateAndCompileInjectsGovernedExecution(t *testing.T) {
 	if len(query["filter"].([]any)) != 1 {
 		t.Fatalf("time filter missing: %#v", query)
 	}
+	if got := compiledRangeField(t, result.CompiledBody); got != "@timestamp" {
+		t.Fatalf("expected fallback @timestamp, got %s", got)
+	}
 }
 
 func TestValidateAndCompileRejectsExpensiveAndScriptedQueries(t *testing.T) {
@@ -170,4 +173,134 @@ func TestDeleteApplicationBlockedByQueries(t *testing.T) {
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "3 ELF queries") {
 		t.Fatalf("unexpected plural message: %v", err)
 	}
+}
+
+func TestDetectTimeFieldPrefersAtTimestampThenBareTimestamp(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		query    string
+		fallback string
+		want     string
+	}{
+		{name: "dsl at-timestamp range", query: `{"query":{"range":{"@timestamp":{"gte":"now-15m"}}}}`, want: "@timestamp"},
+		{name: "dsl timestamp range", query: `{"query":{"range":{"timestamp":{"gte":"now-15m"}}}}`, fallback: "@timestamp", want: "timestamp"},
+		{name: "dsl timestamp sort", query: `{"sort":[{"timestamp":{"order":"desc"}}]}`, want: "timestamp"},
+		{name: "quoted timestamp in query_string", query: `"timestamp" AND status:500`, want: "timestamp"},
+		{name: "exists field timestamp", query: `{"query":{"exists":{"field":"timestamp"}}}`, fallback: "@timestamp", want: "timestamp"},
+		{name: "lucene timestamp colon", query: `service:checkout AND timestamp:[now-15m TO now]`, want: "timestamp"},
+		{name: "kql timestamp comparison", query: `timestamp >= now-15m and status:500`, want: "timestamp"},
+		{name: "dotted fields.timestamp", query: `{"query":{"exists":{"field":"fields.timestamp"}}}`, want: "timestamp"},
+		{name: "at-timestamp wins when both present", query: `{"sort":[{"@timestamp":{"order":"desc"}}],"query":{"range":{"timestamp":{"gte":"now"}}}}`, want: "@timestamp"},
+		{name: "prose timestamp is ignored", query: `{"query":{"match":{"message":"missing timestamp in the payload"}}}`, fallback: "@timestamp", want: "@timestamp"},
+		{name: "neither uses fallback", query: `{"query":{"term":{"service":"api"}}}`, fallback: "event.ingested", want: "event.ingested"},
+		{name: "neither empty fallback uses default", query: `{"query":{"match_all":{}}}`, want: "@timestamp"},
+	} {
+		if got := DetectTimeField(test.query, test.fallback); got != test.want {
+			t.Fatalf("%s: got %q, want %q", test.name, got, test.want)
+		}
+	}
+}
+
+func TestValidateAndCompileFallsBackWhenQueryOmitsTimeField(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	result := ValidateAndCompile(json.RawMessage(`{"query":{"match":{"message":"missing timestamp in the payload"}}}`), "timestamp", now.Add(-time.Minute), now, 10)
+	if !result.Valid {
+		t.Fatalf("expected valid: %#v", result.Problems)
+	}
+	if got := compiledRangeField(t, result.CompiledBody); got != "timestamp" {
+		t.Fatalf("expected fallback timestamp, got %s", got)
+	}
+	emptyFallback := ValidateAndCompile(json.RawMessage(`{"query":{"match_all":{}}}`), "", now.Add(-time.Minute), now, 10)
+	if got := compiledRangeField(t, emptyFallback.CompiledBody); got != "@timestamp" {
+		t.Fatalf("expected default @timestamp, got %s", got)
+	}
+}
+
+func TestValidateAndCompileUsesDetectedTimestampField(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	from := now.Add(-15 * time.Minute)
+	for _, test := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "at-timestamp",
+			body: `{"query":{"bool":{"filter":[{"range":{"@timestamp":{"gte":"now-15m"}}}]}},"sort":[{"@timestamp":{"order":"desc"}}]}`,
+			want: "@timestamp",
+		},
+		{
+			name: "bare timestamp",
+			body: `{"query":{"bool":{"filter":[{"range":{"timestamp":{"gte":"now-15m"}}}]}},"sort":[{"timestamp":{"order":"desc"}}]}`,
+			want: "timestamp",
+		},
+	} {
+		result := ValidateAndCompile(json.RawMessage(test.body), "@timestamp", from, now, 20)
+		if !result.Valid {
+			t.Fatalf("%s: expected valid: %#v", test.name, result.Problems)
+		}
+		if got := compiledRangeField(t, result.CompiledBody); got != test.want {
+			t.Fatalf("%s: range field %q, want %q", test.name, got, test.want)
+		}
+		if got := compiledSortField(t, result.CompiledBody); got != test.want {
+			t.Fatalf("%s: sort field %q, want %q", test.name, got, test.want)
+		}
+		if !strings.Contains(strings.Join(result.PolicyNotes, " "), test.want) {
+			t.Fatalf("%s: policy notes should mention %s: %#v", test.name, test.want, result.PolicyNotes)
+		}
+	}
+}
+
+func TestValidateAndCompileRewritesDateHistogramToDetectedTimeField(t *testing.T) {
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	body := json.RawMessage(`{
+		"query": {"match_all": {}},
+		"sort": [{"@timestamp": {"order": "desc"}}],
+		"aggs": {"events": {"date_histogram": {"field": "timestamp", "calendar_interval": "1h"}}}
+	}`)
+	result := ValidateAndCompile(body, "timestamp", now.Add(-time.Hour), now, 0)
+	if !result.Valid {
+		t.Fatalf("expected valid: %#v", result.Problems)
+	}
+	if got := compiledRangeField(t, result.CompiledBody); got != "@timestamp" {
+		t.Fatalf("range field %q, want @timestamp", got)
+	}
+	var compiled map[string]any
+	if err := json.Unmarshal(result.CompiledBody, &compiled); err != nil {
+		t.Fatal(err)
+	}
+	histogram := compiled["aggs"].(map[string]any)["events"].(map[string]any)["date_histogram"].(map[string]any)
+	if histogram["field"] != "@timestamp" {
+		t.Fatalf("date_histogram field %v, want @timestamp", histogram["field"])
+	}
+}
+
+func compiledRangeField(t *testing.T, body json.RawMessage) string {
+	t.Helper()
+	var compiled map[string]any
+	if err := json.Unmarshal(body, &compiled); err != nil {
+		t.Fatal(err)
+	}
+	filter := compiled["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+	rangeQuery := filter[0].(map[string]any)["range"].(map[string]any)
+	if len(rangeQuery) != 1 {
+		t.Fatalf("expected one range field, got %#v", rangeQuery)
+	}
+	for key := range rangeQuery {
+		return key
+	}
+	return ""
+}
+
+func compiledSortField(t *testing.T, body json.RawMessage) string {
+	t.Helper()
+	var compiled map[string]any
+	if err := json.Unmarshal(body, &compiled); err != nil {
+		t.Fatal(err)
+	}
+	first := compiled["sort"].([]any)[0].(map[string]any)
+	for key := range first {
+		return key
+	}
+	return ""
 }

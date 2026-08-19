@@ -196,11 +196,7 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 	}
 	started := time.Now().UTC()
 	result := StepRun{StepDefinitionID: definition.ID, StepName: definition.Name, StepType: definition.Type, Status: StatusRunning, StartedAt: &started, Extractors: []ExtractorResult{}, Assertions: []AssertionResult{}, Outputs: map[string]any{}, PrivateOutputs: map[string]string{}}
-	preparedActions, err := e.prepareActions(ctx, definition.Request.PreRequest, workflowValues)
-	if err != nil {
-		return finishStep(result, StatusFailed, "PRE_REQUEST_ACTION_FAILURE", err.Error(), started)
-	}
-	outputs, err := executeActions(preparedActions, workflowValues)
+	outputs, err := e.executeStepActions(ctx, definition.Request.PreRequest, workflowValues)
 	if err != nil {
 		return finishStep(result, StatusFailed, "PRE_REQUEST_ACTION_FAILURE", err.Error(), started)
 	}
@@ -231,19 +227,29 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		if secretErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_POLICY_VIOLATION", secretErr.Error(), started)
 		}
-		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: scopeValues(workflowValues, "variables."), Environment: scopeValues(workflowValues, "environment."), Collection: scopeValues(workflowValues, "collection."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
+		dependencyTransport, transportErr := e.scriptTransport(ctx, requestConfig)
+		if transportErr != nil {
+			return finishStep(result, StatusFailed, "CONFIGURATION_ERROR", transportErr.Error(), started)
+		}
+		scriptResult, scriptErr := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(requestConfig.PreRequestScript), Scope: "request", Variables: scopeValues(workflowValues, "variables."), Service: scopeValues(workflowValues, "service."), Application: scopeValues(workflowValues, "application."), Environment: scopeValues(workflowValues, "environment."), Collection: scopeValues(workflowValues, "collection."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, Cookies: scriptCookies(requestConfig, jar), Request: scriptRequest(requestConfig), AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, Transport: dependencyTransport, TimeoutMS: scriptTimeoutMS(requestConfig.Settings.TimeoutMS, definition.TimeoutMS), Info: scripts.Info{MonitorID: scriptContext.MonitorID, RunID: scriptContext.RunID, RevisionID: scriptContext.RevisionID, StepID: definition.ID, RequestName: definition.Name, EventName: "prerequest", RuntimeVersion: scripts.RuntimeVersion}})
 		if scriptErr != nil {
 			return finishStep(result, StatusFailed, "SCRIPT_RUNTIME_LOST", "JavaScript runner could not complete the script.", started)
 		}
 		if scriptResult.Status != "SUCCESS" {
-			scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalCookies, scriptResult.InternalRequest = nil, nil, nil, nil, nil
+			scriptResult.InternalVariables, scriptResult.InternalService, scriptResult.InternalApplication, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalGlobals, scriptResult.InternalCookies, scriptResult.InternalRequest = nil, nil, nil, nil, nil, nil, nil, nil
 			result.PreRequestScript = &scriptResult
 			result.Timing = map[string]any{
 				"preparationMs":         time.Since(started).Milliseconds(),
 				"auxiliaryRequestMs":    scripts.AuxiliaryRequestDurationMS(scriptResult),
 				"auxiliaryRequestCount": len(scriptResult.AuxiliaryRequests),
 			}
-			return finishStep(result, StatusFailed, scriptResult.ErrorCategory, scriptResult.ErrorMessage, started)
+			if !requestConfig.PreRequestScript.ContinueOnFailure {
+				return finishStep(result, StatusFailed, scriptResult.ErrorCategory, scriptResult.ErrorMessage, started)
+			}
+			result.Outputs["preRequestWarning"] = map[string]any{
+				"category": scriptResult.ErrorCategory,
+				"message":  scriptResult.ErrorMessage,
+			}
 		}
 		for key, value := range firstScriptValues(scriptResult.InternalVariables, scriptResult.Variables) {
 			outputs[key] = value
@@ -258,6 +264,12 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 			workflowValues[key] = value
 			workflowValues["environment."+key] = value
 		}
+		for key, value := range firstScriptValues(scriptResult.InternalService, scriptResult.Service) {
+			workflowValues["service."+key] = value
+		}
+		for key, value := range firstScriptValues(scriptResult.InternalApplication, scriptResult.Application) {
+			workflowValues["application."+key] = value
+		}
 		for key, value := range firstScriptValues(scriptResult.InternalCollection, scriptResult.Collection) {
 			workflowValues[key] = value
 			workflowValues["collection."+key] = value
@@ -265,7 +277,7 @@ func (e *HTTPExecutor) ExecuteWithScriptState(ctx context.Context, definition St
 		for key, value := range firstScriptValues(scriptResult.InternalGlobals, scriptResult.Globals) {
 			workflowValues["globals."+key] = value
 		}
-		scriptResult.InternalVariables, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalGlobals = nil, nil, nil, nil
+		scriptResult.InternalVariables, scriptResult.InternalService, scriptResult.InternalApplication, scriptResult.InternalEnvironment, scriptResult.InternalCollection, scriptResult.InternalGlobals = nil, nil, nil, nil, nil, nil
 		if scriptRequestResult := firstScriptRequest(scriptResult.InternalRequest, scriptResult.Request); scriptRequestResult != nil {
 			requestConfig = applyScriptRequest(requestConfig, scriptRequestResult)
 		}
@@ -506,7 +518,7 @@ func (e *HTTPExecutor) acquireTarget(ctx context.Context, target *url.URL) (func
 	}
 }
 
-var vaultCallPattern = regexp.MustCompile(`pm\.vault\.get\(\s*["']([^"']+)["']\s*\)`)
+var vaultCallPattern = regexp.MustCompile(`(?:pm\.vault|rhythm\.secrets)\.get\(\s*["']([^"']+)["']\s*\)`)
 var templateSecretPattern = regexp.MustCompile(`\{\{\s*secrets\.([^\s{}]+)\s*\}\}`)
 
 func (e *HTTPExecutor) ResolveDefinitionSecrets(ctx context.Context, definition Definition, values map[string]string) error {
@@ -559,7 +571,7 @@ func (e *HTTPExecutor) ExecuteSetupScript(ctx context.Context, script scripts.Sc
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_POLICY_VIOLATION", ErrorMessage: err.Error()}, workflowValues
 	}
-	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: scopeValues(workflowValues, "variables."), Collection: scopeValues(workflowValues, "collection."), Environment: scopeValues(workflowValues, "environment."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, TimeoutMS: timeoutMS, Info: info})
+	result, err := e.scripts.Execute(ctx, scripts.Input{Script: normalizeScript(script), Scope: "monitor", Variables: scopeValues(workflowValues, "variables."), Service: scopeValues(workflowValues, "service."), Application: scopeValues(workflowValues, "application."), Collection: scopeValues(workflowValues, "collection."), Environment: scopeValues(workflowValues, "environment."), Globals: scopeValues(workflowValues, "globals."), Secrets: secrets, AllowPrivateTargets: e.allowPrivate, AllowedPrivateHosts: e.privateHosts, AllowedPrivateCIDRs: e.privateCIDRs, TimeoutMS: timeoutMS, Info: info})
 	if err != nil {
 		return scripts.Result{Status: "FAILED", RuntimeVersion: scripts.RuntimeVersion, ErrorCategory: "SCRIPT_RUNTIME_LOST", ErrorMessage: "JavaScript runner could not complete the setup script."}, workflowValues
 	}
@@ -576,11 +588,17 @@ func (e *HTTPExecutor) ExecuteSetupScript(ctx context.Context, script scripts.Sc
 			workflowValues[key] = value
 			workflowValues["environment."+key] = value
 		}
+		for key, value := range firstScriptValues(result.InternalService, result.Service) {
+			workflowValues["service."+key] = value
+		}
+		for key, value := range firstScriptValues(result.InternalApplication, result.Application) {
+			workflowValues["application."+key] = value
+		}
 		for key, value := range firstScriptValues(result.InternalGlobals, result.Globals) {
 			workflowValues["globals."+key] = value
 		}
 	}
-	result.InternalVariables, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies, result.InternalRequest = nil, nil, nil, nil, nil, nil
+	result.InternalVariables, result.InternalService, result.InternalApplication, result.InternalEnvironment, result.InternalCollection, result.InternalGlobals, result.InternalCookies, result.InternalRequest = nil, nil, nil, nil, nil, nil, nil, nil
 	return result, workflowValues
 }
 
@@ -1470,6 +1488,64 @@ func (e *HTTPExecutor) transport(ctx context.Context, config RequestConfig) (*ht
 	return transport, nil
 }
 
+// scriptTransport resolves the same governed TLS and proxy profiles used by
+// the main request. The material is sent only to the authenticated internal
+// script runner and is deliberately omitted from script evidence.
+func (e *HTTPExecutor) scriptTransport(ctx context.Context, config RequestConfig) (*scripts.TransportConfig, error) {
+	verifyHostname := true
+	if config.TLS.VerifyHostname != nil {
+		verifyHostname = *config.TLS.VerifyHostname
+	}
+	output := &scripts.TransportConfig{
+		MinimumTLSVersion: config.TLS.MinimumVersion,
+		VerifyHostname:    verifyHostname,
+		ProxyMode:         config.Proxy.Mode,
+		ProxyURL:          config.Proxy.URL,
+		ProxyNoProxy:      config.Proxy.NoProxy,
+	}
+	if config.TLS.CertificateProfileID != "" || config.TLS.CAProfileID != "" {
+		if e.resolver == nil {
+			return nil, errors.New("certificate and CA profiles require a runtime resolver")
+		}
+		material, err := e.resolver.ResolveTLSProfile(ctx, config.TLS.CertificateProfileID, config.TLS.CAProfileID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve dependency-request TLS profile: %w", err)
+		}
+		output.CABundlePEM = material.CABundlePEM
+		output.ClientCertificate = material.ClientCertificatePEM
+		output.ClientKey = material.ClientKeyPEM
+	}
+	if config.Proxy.Mode == "profile" {
+		if e.resolver == nil {
+			return nil, errors.New("proxy profiles require a runtime resolver")
+		}
+		material, err := e.resolver.ResolveProxyProfile(ctx, config.Proxy.ProfileID)
+		if err != nil {
+			return nil, fmt.Errorf("resolve dependency-request proxy profile: %w", err)
+		}
+		parsed, err := url.Parse(material.URL)
+		if err != nil || parsed.Host == "" {
+			return nil, errors.New("dependency-request proxy profile URL is invalid")
+		}
+		output.ProxyMode = strings.ToLower(parsed.Scheme)
+		output.ProxyURL = material.URL
+		output.ProxyNoProxy = material.NoProxy
+		output.ProxyUsername = material.Username
+		output.ProxyPassword = material.Password
+	} else if config.Proxy.Mode == "http" || config.Proxy.Mode == "https" {
+		username, err := e.resolveCredential(ctx, config.Proxy.UsernameSecretRef, nil)
+		if err != nil {
+			return nil, fmt.Errorf("resolve dependency-request proxy username: %w", err)
+		}
+		password, err := e.resolveCredential(ctx, config.Proxy.PasswordSecretRef, nil)
+		if err != nil {
+			return nil, fmt.Errorf("resolve dependency-request proxy password: %w", err)
+		}
+		output.ProxyUsername, output.ProxyPassword = username, password
+	}
+	return output, nil
+}
+
 func proxyWithBypass(proxyURL *url.URL, noProxy string) func(*http.Request) (*url.URL, error) {
 	rules := strings.Split(noProxy, ",")
 	return func(request *http.Request) (*url.URL, error) {
@@ -2269,7 +2345,7 @@ func resolveTemplateValue(key string, variables map[string]string) (string, bool
 	if value, ok := variables[key]; ok {
 		return value, true
 	}
-	for _, scope := range []string{"environment.", "collection.", "globals."} {
+	for _, scope := range []string{"service.", "application.", "environment.", "collection.", "globals."} {
 		if value, ok := variables[scope+key]; ok {
 			return value, true
 		}

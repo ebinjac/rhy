@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
 import { EditorLoading } from "@/components/editor-loading"
@@ -47,7 +47,9 @@ import {
   saveELFQuery,
   validateELFQuery,
 } from "@/lib/api-client/elf"
+import { InfoHint } from "@/components/info-hint"
 import { PageContainer } from "@/components/page-container"
+import { DEFAULT_ELF_TIME_FIELD, inspectTimeField } from "@/lib/elf-time-field"
 import { formatDateTime } from "@/lib/format-date"
 
 const MonacoEditor = lazy(async () => ({
@@ -92,6 +94,20 @@ function ELFWorkbench() {
   >([])
   const [desktop, setDesktop] = useState(false)
   const [darkEditor, setDarkEditor] = useState(false)
+  const [timeFieldOverride, setTimeFieldOverride] = useState<string | null>(
+    null
+  )
+  const detectedTimeField = inspectTimeField(code)
+  const previousDetectedTimeField = useRef(detectedTimeField)
+  useEffect(() => {
+    if (
+      detectedTimeField &&
+      detectedTimeField !== previousDetectedTimeField.current
+    ) {
+      setTimeFieldOverride(null)
+    }
+    previousDetectedTimeField.current = detectedTimeField
+  }, [detectedTimeField])
   useEffect(() => {
     const media = window.matchMedia("(min-width: 768px)")
     const sync = () => setDesktop(media.matches)
@@ -199,7 +215,13 @@ function ELFWorkbench() {
     setPending(kind)
     try {
       const result = await runELFQuery({
-        data: { queryId: loaded.id, mode: kind, windowSeconds, size: 100 },
+        data: {
+          queryId: loaded.id,
+          mode: kind,
+          windowSeconds,
+          size: 100,
+          timeField: resolvedTimeField,
+        },
       })
       if (!result.ok) {
         setOutcome({ tone: "error", text: result.message })
@@ -229,10 +251,22 @@ function ELFWorkbench() {
     selectedApplication?.defaultIndexPattern ||
     run?.resolvedIndex ||
     "ELF platform default"
-  const resolvedTimeField =
+  const configuredTimeField =
     selectedService?.timeField ||
     selectedApplication?.defaultTimeField ||
-    "@timestamp"
+    DEFAULT_ELF_TIME_FIELD
+  const resolvedTimeField =
+    timeFieldOverride || detectedTimeField || configuredTimeField
+  const timeFieldOptions = [
+    ...new Set(
+      [
+        DEFAULT_ELF_TIME_FIELD,
+        "timestamp",
+        configuredTimeField,
+        resolvedTimeField,
+      ].filter(Boolean)
+    ),
+  ]
   return (
     <div className="min-h-[calc(100svh-7rem)]">
       <header className="border-b py-4">
@@ -308,11 +342,10 @@ function ELFWorkbench() {
         <PageContainer
           padding="none"
           className="flex flex-wrap items-end gap-x-6 gap-y-3"
-        >          <div>
-            <label
-              htmlFor="elf-application"
-              className="text-xs font-medium"
-            >
+        >
+          {" "}
+          <div>
+            <label htmlFor="elf-application" className="text-xs font-medium">
               Application
             </label>
             <Select
@@ -375,7 +408,47 @@ function ELFWorkbench() {
             </Select>
           </div>
           <Context label="Resolved index" value={resolvedIndex} mono />
-          <Context label="Time field" value={resolvedTimeField} mono />
+          <div>
+            <div className="flex items-center gap-1">
+              <label htmlFor="elf-time-field" className="text-xs font-medium">
+                Time field
+              </label>
+              <InfoHint title="Time field">
+                OpenSearch field used to bound the search window. ELF prefers
+                the application default, then a detected mapping, then
+                @timestamp.
+              </InfoHint>
+            </div>
+            <Select
+              value={resolvedTimeField}
+              onValueChange={(value) => {
+                if (value == null) return
+                setTimeFieldOverride(value)
+              }}
+              items={timeFieldOptions.map((field) => ({
+                value: field,
+                label: field,
+              }))}
+            >
+              <SelectTrigger
+                id="elf-time-field"
+                className="mt-1 min-w-40 font-mono text-xs max-md:min-h-11"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {timeFieldOptions.map((field) => (
+                  <SelectItem
+                    key={field}
+                    className="font-mono text-xs"
+                    value={field}
+                  >
+                    {field}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="ml-auto">
             <label htmlFor="elf-range" className="text-xs font-medium">
               Range
@@ -393,10 +466,7 @@ function ELFWorkbench() {
                 "86400": "Last 24 hours",
               }}
             >
-              <SelectTrigger
-                id="elf-range"
-                className="mt-1 max-md:min-h-11"
-              >
+              <SelectTrigger id="elf-range" className="mt-1 max-md:min-h-11">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -534,7 +604,7 @@ function ELFWorkbench() {
             </div>
           ) : null}
         </section>
-        <Results run={run} mode={mode} />
+        <Results run={run} mode={mode} timeField={resolvedTimeField} />
       </PageContainer>
     </div>
   )
@@ -543,9 +613,11 @@ function ELFWorkbench() {
 function Results({
   run,
   mode,
+  timeField,
 }: {
   run: ELFRunContract | null
   mode: "explore" | "check"
+  timeField: string
 }) {
   const [filter, setFilter] = useState("")
   const indexedSamples = useMemo(
@@ -649,7 +721,11 @@ function Results({
           </div>
           <div className="max-h-[560px] divide-y overflow-auto">
             {samples.map(({ sample, index }) => (
-              <LogRow key={String(sample._id ?? index)} sample={sample} />
+              <LogRow
+                key={String(sample._id ?? index)}
+                sample={sample}
+                timeField={timeField}
+              />
             ))}
             {!samples.length ? (
               <p className="p-10 text-center text-sm text-muted-foreground">
@@ -708,9 +784,17 @@ function Results({
     </section>
   )
 }
-function LogRow({ sample }: { sample: Record<string, JsonValue> }) {
+function LogRow({
+  sample,
+  timeField,
+}: {
+  sample: Record<string, JsonValue>
+  timeField: string
+}) {
   const [open, setOpen] = useState(false)
-  const time = String(sample["@timestamp"] ?? "")
+  const time = String(
+    sample[timeField] ?? sample["@timestamp"] ?? sample.timestamp ?? ""
+  )
   const level = String(
     sample["log.level"] ??
       (sample.log as Record<string, JsonValue> | undefined)?.level ??
@@ -823,7 +907,7 @@ function DeploymentCheckPanel({
         />
       </div>
       <details className="group border-t">
-        <summary className="cursor-pointer px-5 py-3 text-xs font-medium text-muted-foreground hover:bg-muted/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset max-md:min-h-11 max-md:flex max-md:items-center">
+        <summary className="cursor-pointer px-5 py-3 text-xs font-medium text-muted-foreground hover:bg-muted/25 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-inset max-md:flex max-md:min-h-11 max-md:items-center">
           View query JSON
         </summary>
         <pre className="max-h-80 overflow-auto border-t bg-muted/20 p-4 text-xs leading-5">
@@ -895,10 +979,7 @@ function RuleBuilder({
           </span>
         </div>
         <div>
-          <label
-            htmlFor="elf-pass-comparison"
-            className="text-xs font-medium"
-          >
+          <label htmlFor="elf-pass-comparison" className="text-xs font-medium">
             Comparison
           </label>
           <Select
@@ -952,8 +1033,16 @@ function RuleBuilder({
         number of sample documents are displayed.
       </p>
       <div className="mt-4 border-t pt-3">
-        <p id="elf-gate-impact-label" className="text-xs font-medium">
+        <p
+          id="elf-gate-impact-label"
+          className="flex items-center gap-1 text-xs font-medium"
+        >
           Gate impact
+          <InfoHint title="Gate impact">
+            A blocking failure prevents a deployment from being allowed. An
+            advisory failure produces a warning while preserving the release
+            decision.
+          </InfoHint>
         </p>
         <div
           className="mt-2 flex flex-wrap gap-2"
@@ -1048,10 +1137,14 @@ function WorkbenchModeNavigator({
             Deployment check
           </button>
         </div>
-        <p className="text-xs text-muted-foreground">
+        <p className="flex items-center gap-1 text-xs text-muted-foreground">
           {mode === "explore"
             ? "Inspect matching logs, then configure a deployment check."
             : "Set the hit-count pass condition and whether failure blocks release."}
+          <InfoHint title="ELF workbench">
+            Probe explores OpenSearch logs. Test check evaluates the saved pass
+            condition used as a deployment gate.
+          </InfoHint>
         </p>
       </PageContainer>
     </nav>
@@ -1065,7 +1158,8 @@ function ExploreHints({ onConfigureCheck }: { onConfigureCheck: () => void }) {
         <Clock3 className="mt-0.5 size-4 shrink-0" />
         <p>
           Run this query to inspect what matched. Rhythm applies the selected
-          time range, exact hit counting, deterministic sorting, and execution
+          time range on the detected or chosen time field (`@timestamp` or
+          `timestamp`), exact hit counting, deterministic sorting, and execution
           limits.
         </p>
       </div>

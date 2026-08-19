@@ -315,9 +315,6 @@ func (s *server) validateELFCheck(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, 400, "INVALID_REQUEST", "ELF check draft is invalid.", nil)
 		return
 	}
-	if input.TimeField == "" {
-		input.TimeField = "@timestamp"
-	}
 	now := time.Now().UTC()
 	result := elf.ValidateAndCompile(input.SearchBody, input.TimeField, now.Add(-15*time.Minute), now, 100)
 	s.writeJSON(w, r, 200, successResponse{Data: result, Meta: s.meta(r)})

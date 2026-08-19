@@ -12,6 +12,7 @@ const host = process.env.HOST ?? "0.0.0.0"
 const port = Number.parseInt(process.env.PORT ?? "3000", 10)
 const clientRoot = join(process.cwd(), "apps/web/dist/client")
 const etags = new Map()
+const clientErrorWindow = { count: 0, startedAt: Date.now() }
 
 const apiBaseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
 const nativeFetch = globalThis.fetch.bind(globalThis)
@@ -42,6 +43,10 @@ const server = createServer(async (incoming, outgoing) => {
     }
     if (incoming.url === "/internal/web-vitals" && incoming.method === "POST") {
       await forwardWebVital(incoming, outgoing)
+      return
+    }
+    if (incoming.url === "/internal/client-errors" && incoming.method === "POST") {
+      await recordClientError(incoming, outgoing)
       return
     }
     if (
@@ -295,6 +300,72 @@ async function forwardWebVital(incoming, outgoing) {
     outgoing.writeHead(204, { "Cache-Control": "no-store" })
   }
   outgoing.end()
+}
+
+async function recordClientError(incoming, outgoing) {
+  const body = await readBoundedJSON(incoming, 8_192)
+  if (!body || !acceptClientError()) {
+    outgoing.writeHead(204, { "Cache-Control": "no-store" })
+    outgoing.end()
+    return
+  }
+  const allowedSources = new Set(["application", "route"])
+  const source = allowedSources.has(body.source) ? body.source : "unknown"
+  console.error(
+    JSON.stringify({
+      level: "error",
+      message: "rhythm client render error",
+      source,
+      errorName: safeTelemetryText(body.name, 80),
+      errorMessage: safeTelemetryText(body.message, 500),
+      route: safeTelemetryText(body.route, 300),
+      stack: safeTelemetryText(body.stack, 2_500),
+    })
+  )
+  outgoing.writeHead(204, { "Cache-Control": "no-store" })
+  outgoing.end()
+}
+
+async function readBoundedJSON(incoming, maximum) {
+  const chunks = []
+  let size = 0
+  try {
+    for await (const chunk of incoming) {
+      size += chunk.length
+      if (size > maximum) return null
+      chunks.push(chunk)
+    }
+    const value = JSON.parse(Buffer.concat(chunks).toString("utf8"))
+    return value && typeof value === "object" ? value : null
+  } catch {
+    return null
+  }
+}
+
+function acceptClientError() {
+  const now = Date.now()
+  if (now - clientErrorWindow.startedAt >= 60_000) {
+    clientErrorWindow.count = 0
+    clientErrorWindow.startedAt = now
+  }
+  clientErrorWindow.count += 1
+  return clientErrorWindow.count <= 60
+}
+
+function safeTelemetryText(value, maximum) {
+  if (typeof value !== "string") return ""
+  return value
+    .replace(/https?:\/\/[^/\s]+/gi, "<origin>")
+    .replace(/\b(Bearer|Api-Token)\s+[^\s,;]+/gi, "$1 <MASKED>")
+    .replace(
+      /([?&](?:token|key|secret|password|authorization)=)[^&\s)]+/gi,
+      "$1<MASKED>"
+    )
+    .replace(
+      /(["']?(?:token|secret|password|authorization)["']?\s*[:=]\s*["'])[^"'\s]+/gi,
+      "$1<MASKED>"
+    )
+    .slice(0, maximum)
 }
 
 async function dependencyHealth(outgoing) {

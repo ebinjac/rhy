@@ -3,6 +3,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import { Button } from "@workspace/ui/components/button"
 import { AlertCircle, LoaderCircle, RefreshCw } from "lucide-react"
 
+import { InfoHint } from "@/components/info-hint"
 import { MetricsSkeleton } from "@/components/metrics-skeleton"
 import { PageContainer } from "@/components/page-container"
 import type { BrowserMetrics } from "@/lib/api-client/browser-monitoring"
@@ -128,22 +129,29 @@ function BrowserMetricsPage() {
               "Browser and viewport-specific history"
             )}
           </div>
-          <div
-            aria-label="Metrics time range"
-            className="inline-flex rounded-lg border bg-muted/30 p-1"
-          >
-            {windows.map((item) => (
-              <Button
-                aria-pressed={window === item}
-                className="h-8 px-3 text-xs"
-                key={item}
-                onClick={() => void navigate({ search: { window: item } })}
-                size="sm"
-                variant={window === item ? "secondary" : "ghost"}
-              >
-                {item}
-              </Button>
-            ))}
+          <div className="flex items-center gap-1">
+            <div
+              aria-label="Metrics time range"
+              className="inline-flex rounded-lg border bg-muted/30 p-1"
+            >
+              {windows.map((item) => (
+                <Button
+                  aria-pressed={window === item}
+                  className="h-8 px-3 text-xs"
+                  key={item}
+                  onClick={() => void navigate({ search: { window: item } })}
+                  size="sm"
+                  variant={window === item ? "secondary" : "ghost"}
+                >
+                  {item}
+                </Button>
+              ))}
+            </div>
+            <InfoHint title="Metrics window">
+              Journey percentiles and page milestones use completed browser
+              runs in this lookback. Shorter windows react faster; longer
+              windows stabilize tails.
+            </InfoHint>
           </div>
         </div>
       </div>

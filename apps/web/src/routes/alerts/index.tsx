@@ -44,6 +44,7 @@ import {
   listAlertEvents,
   listUnifiedAlertsPage,
 } from "@/lib/api-client/opensearch-alerts"
+import { InfoHint } from "@/components/info-hint"
 import { formatDateTime } from "@/lib/format-date"
 import { PageContainer } from "@/components/page-container"
 
@@ -152,17 +153,20 @@ function AlertsPage() {
 
       <div className="mt-7 grid overflow-hidden rounded-xl border sm:grid-cols-4">
         <Metric
+          help="Open and acknowledged alerts that still need a decision."
           label="Active"
           value={String(summary.activeCount)}
           icon={CircleAlert}
           danger={summary.activeCount > 0}
         />
         <Metric
+          help="Active alerts with critical or high severity."
           label="Critical / high"
           value={String(summary.criticalHighCount)}
           icon={ShieldCheck}
         />
         <Metric
+          help="Active alerts ingested from OpenSearch Alerting receivers, not Rhythm monitor failures."
           label="OpenSearch"
           value={String(summary.openSearchActiveCount)}
           icon={Webhook}
@@ -755,16 +759,25 @@ function Metric({
   value,
   icon: Icon,
   danger = false,
+  help,
 }: {
   label: string
   value: string
   icon: LucideIcon
   danger?: boolean
+  help?: string
 }) {
   return (
     <div className="flex items-center justify-between border-b p-4 last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0">
       <div>
-        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="flex items-center gap-1 text-xs text-muted-foreground">
+          {label}
+          {help ? (
+            <InfoHint className="size-5" title={label}>
+              {help}
+            </InfoHint>
+          ) : null}
+        </p>
         <p
           className={`mt-1 text-xl font-semibold ${danger ? "text-destructive" : ""}`}
         >

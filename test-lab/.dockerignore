@@ -1,0 +1,6 @@
+.git
+certs/generated
+coverage.out
+*.log
+README.md
+TEST_MATRIX.md

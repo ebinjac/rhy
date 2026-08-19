@@ -24,10 +24,10 @@ import { PageContainer } from "@/components/page-container"
 
 export const Route = createFileRoute("/monitors/$monitorId/")({
   loader: async ({ params }) => {
-    const [draft, schedule, runs, alerts] = await Promise.all([
+    const [draft, schedule, runPage, alerts] = await Promise.all([
       getMonitorDraft({ data: { monitorId: params.monitorId } }),
       getMonitorSchedule({ data: { monitorId: params.monitorId } }),
-      listMonitorRuns({ data: { monitorId: params.monitorId } }),
+      listMonitorRuns({ data: { monitorId: params.monitorId, limit: 50 } }),
       listUnifiedAlerts({
         data: {
           state: "",
@@ -41,7 +41,7 @@ export const Route = createFileRoute("/monitors/$monitorId/")({
     return {
       draft,
       schedule,
-      runs,
+      runs: runPage.runs,
       alerts: alerts.filter((alert) => alert.monitorId === params.monitorId),
     }
   },

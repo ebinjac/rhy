@@ -126,6 +126,66 @@ func TestListRecentRunsValidatesLimit(t *testing.T) {
 	}
 }
 
+func TestListMonitorRunsPaginatesBeyondFifty(t *testing.T) {
+	runRepository := runs.NewMemoryRepository()
+	handler := testServerWith(runRepository, nil)
+	created := performRequest(handler, http.MethodPost, "/api/v1/monitors", `{"name":"Run history","slug":"run-history","definition":{"schemaVersion":2,"steps":[]}}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create monitor: %d %s", created.Code, created.Body.String())
+	}
+	var envelope struct {
+		Data monitors.Monitor `json:"data"`
+	}
+	if err := json.NewDecoder(created.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 19, 12, 0, 0, 0, time.UTC)
+	for index := 0; index < 60; index++ {
+		if err := runRepository.Save(context.Background(), runs.Run{
+			ID:          fmt.Sprintf("run-%02d", index),
+			MonitorID:   envelope.Data.ID,
+			Status:      runs.StatusSuccess,
+			TriggerType: "SCHEDULE",
+			CreatedAt:   now.Add(-time.Duration(index) * time.Minute),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	first := performRequest(handler, http.MethodGet, "/api/v1/monitors/"+envelope.Data.ID+"/runs", "")
+	if first.Code != http.StatusOK {
+		t.Fatalf("list runs: %d %s", first.Code, first.Body.String())
+	}
+	var firstPage struct {
+		Data []runs.Run   `json:"data"`
+		Meta responseMeta `json:"meta"`
+	}
+	if err := json.NewDecoder(first.Body).Decode(&firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Data) != 50 || firstPage.Meta.Page == nil || firstPage.Meta.Page.Total != 60 || firstPage.Meta.Page.NextCursor == "" {
+		t.Fatalf("expected a 50-run page of 60 with a next cursor, got count=%d page=%+v", len(firstPage.Data), firstPage.Meta.Page)
+	}
+
+	second := performRequest(handler, http.MethodGet, "/api/v1/monitors/"+envelope.Data.ID+"/runs?cursor="+firstPage.Meta.Page.NextCursor, "")
+	if second.Code != http.StatusOK {
+		t.Fatalf("list runs page 2: %d %s", second.Code, second.Body.String())
+	}
+	var secondPage struct {
+		Data []runs.Run   `json:"data"`
+		Meta responseMeta `json:"meta"`
+	}
+	if err := json.NewDecoder(second.Body).Decode(&secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Data) != 10 || secondPage.Meta.Page == nil || secondPage.Meta.Page.Total != 60 || secondPage.Meta.Page.NextCursor != "" {
+		t.Fatalf("expected remaining 10 runs of 60 without a next cursor, got count=%d page=%+v", len(secondPage.Data), secondPage.Meta.Page)
+	}
+	if secondPage.Data[0].ID != "run-50" {
+		t.Fatalf("expected older runs after the cursor, got %s", secondPage.Data[0].ID)
+	}
+}
+
 func TestCreateMonitorRejectsInvalidFields(t *testing.T) {
 	handler := testServer()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/monitors", bytes.NewBufferString(`{"name":"","slug":"Invalid Slug"}`))
@@ -751,9 +811,13 @@ func testServer() http.Handler {
 }
 
 func testServerWithScripts(scriptClient *scripts.Client) http.Handler {
+	return testServerWith(runs.NewMemoryRepository(), scriptClient)
+}
+
+func testServerWith(runRepository runs.Repository, scriptClient *scripts.Client) http.Handler {
 	repository := monitors.NewMemoryRepository(monitors.DevelopmentSeed())
 	monitorService := monitors.NewService(repository)
-	runService := runs.NewService(monitorService, runs.NewMemoryRepository(), runs.NewHTTPExecutor(true))
+	runService := runs.NewService(monitorService, runRepository, runs.NewHTTPExecutor(true))
 	agentService := agents.New(agents.NewMemoryRepository())
 	runService.SetAgentRouter(agentService)
 	return NewServer(Dependencies{

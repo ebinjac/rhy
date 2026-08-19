@@ -1,0 +1,105 @@
+{
+  "info": {
+    "name": "Rhythm API Test Lab",
+    "description": "Safe local fixtures for importing into Rhythm or exercising Postman-compatible scripts.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:9080" },
+    { "key": "username", "value": "rhythm" },
+    { "key": "password", "value": "rhythm-test", "type": "secret" },
+    { "key": "bearerToken", "value": "rhythm-test-token", "type": "secret" },
+    { "key": "apiKey", "value": "rhythm-api-key", "type": "secret" }
+  ],
+  "item": [
+    {
+      "name": "Discovery",
+      "item": [
+        { "name": "Health", "request": { "method": "GET", "url": "{{baseUrl}}/health" } },
+        { "name": "Scenarios", "request": { "method": "GET", "url": "{{baseUrl}}/scenarios" } }
+      ]
+    },
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Basic",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "basic", "basic": [{ "key": "username", "value": "{{username}}", "type": "string" }, { "key": "password", "value": "{{password}}", "type": "string" }] },
+            "url": "{{baseUrl}}/auth/basic"
+          }
+        },
+        {
+          "name": "Bearer",
+          "request": {
+            "method": "GET",
+            "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{bearerToken}}", "type": "string" }] },
+            "url": "{{baseUrl}}/auth/bearer"
+          }
+        },
+        {
+          "name": "API key",
+          "request": { "method": "GET", "header": [{ "key": "X-API-Key", "value": "{{apiKey}}" }], "url": "{{baseUrl}}/auth/api-key" }
+        },
+        {
+          "name": "HMAC SHA-256",
+          "event": [{
+            "listen": "prerequest",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "const ts = Date.now().toString();",
+                "const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('rhythm-hmac-secret'), {name:'HMAC', hash:'SHA-256'}, false, ['sign']);",
+                "const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('rhythm-client-' + ts));",
+                "const encoded = btoa(String.fromCharCode(...new Uint8Array(sig)));",
+                "pm.request.headers.upsert({key:'X-Client-Id', value:'rhythm-client'});",
+                "pm.request.headers.upsert({key:'X-Timestamp', value:ts});",
+                "pm.request.headers.upsert({key:'X-Signature', value:encoded});"
+              ]
+            }
+          }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"purpose\":\"hmac-fixture\"}" }, "url": "{{baseUrl}}/auth/hmac" }
+        },
+        {
+          "name": "Application token",
+          "event": [{
+            "listen": "test",
+            "script": { "type": "text/javascript", "exec": ["pm.environment.set('applicationToken', pm.response.json().authorization_token);"] }
+          }],
+          "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"clientId\":\"rhythm-app-client\",\"clientSecret\":\"cmh5dGhtLWFwcC1zZWNyZXQ=\"}" }, "url": "{{baseUrl}}/auth/application-token" }
+        },
+        {
+          "name": "Protected keysets",
+          "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{applicationToken}}" }], "url": "{{baseUrl}}/protected/keysets" }
+        }
+      ]
+    },
+    {
+      "name": "Stateful",
+      "item": [
+        { "name": "Cookie login", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\"username\":\"rhythm\",\"password\":\"rhythm-test\"}" }, "url": "{{baseUrl}}/cookies/login" } },
+        { "name": "Cookie profile", "request": { "method": "GET", "url": "{{baseUrl}}/cookies/profile" } },
+        { "name": "Retry succeeds on third attempt", "request": { "method": "GET", "url": "{{baseUrl}}/unstable/3?key=postman" } }
+      ]
+    },
+    {
+      "name": "Responses and extraction",
+      "item": [
+        { "name": "Deep JSON", "request": { "method": "GET", "url": "{{baseUrl}}/response/json/deep" } },
+        { "name": "Malformed JSON", "request": { "method": "GET", "url": "{{baseUrl}}/response/malformed-json" } },
+        { "name": "JSON extractor", "request": { "method": "GET", "url": "{{baseUrl}}/extract/json" } },
+        { "name": "XML extractor", "request": { "method": "GET", "url": "{{baseUrl}}/extract/xml" } },
+        { "name": "Gzip", "request": { "method": "GET", "url": "{{baseUrl}}/compression/gzip" } }
+      ]
+    },
+    {
+      "name": "Transport",
+      "item": [
+        { "name": "Delay 250ms", "request": { "method": "GET", "url": "{{baseUrl}}/delay-ms/250" } },
+        { "name": "Three redirects", "request": { "method": "GET", "url": "{{baseUrl}}/redirect/3" } },
+        { "name": "Rate limit", "request": { "method": "GET", "url": "{{baseUrl}}/rate-limit?key=postman&limit=2&window=5s" } }
+      ]
+    }
+  ]
+}

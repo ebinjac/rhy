@@ -6,6 +6,11 @@
 
     <property name="migrationRoot" value="services/api/db/migrations"/>
 
+    <changeSet id="000000_rhythm_schema" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000000_rhythm_schema.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000000_rhythm_schema.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+
     <changeSet id="000001_monitor_foundation" author="rhythm" runInTransaction="true">
         <sqlFile path="${migrationRoot}/000001_monitor_foundation.up.sql" relativeToChangelogFile="false"/>
         <rollback><sqlFile path="${migrationRoot}/000001_monitor_foundation.down.sql" relativeToChangelogFile="false"/></rollback>
@@ -125,5 +130,17 @@
     <changeSet id="000030_hydra_capacity" author="rhythm" runInTransaction="true">
         <sqlFile path="${migrationRoot}/000030_hydra_capacity.up.sql" relativeToChangelogFile="false"/>
         <rollback><sqlFile path="${migrationRoot}/000030_hydra_capacity.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000031_sahara_dispatch" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000031_sahara_dispatch.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000031_sahara_dispatch.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000032_rhythm_schema" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000032_rhythm_schema.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000032_rhythm_schema.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000033_alert_investigation" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000033_alert_investigation.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000033_alert_investigation.down.sql" relativeToChangelogFile="false"/></rollback>
     </changeSet>
 </databaseChangeLog>

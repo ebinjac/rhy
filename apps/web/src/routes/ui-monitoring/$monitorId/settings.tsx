@@ -22,6 +22,7 @@ import {
 import { toast } from "@workspace/ui/components/sonner"
 
 import { PageContainer } from "@/components/page-container"
+import { InfoHint } from "@/components/info-hint"
 import {
   deleteBrowserMonitor,
   getBrowserMonitor,
@@ -335,7 +336,11 @@ function BrowserMonitorSettings() {
               value={definition.startUrl}
             />
           </Field>
-          <Field label="Reusable authentication session" id="settings-auth">
+          <Field
+            info="A captured login session reused by this journey so the monitor does not re-authenticate on every run."
+            label="Reusable authentication session"
+            id="settings-auth"
+          >
             <Select
               onValueChange={(value) =>
                 setDefinition((current) => ({
@@ -364,9 +369,10 @@ function BrowserMonitorSettings() {
             </Select>
           </Field>
           <Field
+            hint="Sensitive inputs are always masked. Add selectors for user data and dynamic content."
+            info="CSS selectors whose screenshot regions are redacted. Dynamic content should be masked so visual baselines stay stable."
             label="Screenshot mask selectors"
             id="settings-masks"
-            hint="Sensitive inputs are always masked. Add selectors for user data and dynamic content."
           >
             <Textarea
               id="settings-masks"
@@ -447,6 +453,7 @@ function BrowserMonitorSettings() {
         </div>
         <div className="mt-4 grid gap-5 rounded-xl border p-4 md:grid-cols-2 md:p-5">
           <Field
+            info="How long successful-run screenshots are kept. Failed runs retain richer sanitized evidence for investigation."
             label="Successful screenshot retention"
             id="settings-success-retention"
           >
@@ -561,16 +568,21 @@ function Field({
   label,
   id,
   hint,
+  info,
   children,
 }: {
   label: string
   id: string
   hint?: string
+  info?: string
   children: React.ReactNode
 }) {
   return (
     <div className="min-w-0">
-      <Label htmlFor={id}>{label}</Label>
+      <div className="flex items-center gap-1">
+        <Label htmlFor={id}>{label}</Label>
+        {info ? <InfoHint title={label}>{info}</InfoHint> : null}
+      </div>
       {hint ? (
         <p className="mt-1 text-xs/5 text-muted-foreground">{hint}</p>
       ) : null}

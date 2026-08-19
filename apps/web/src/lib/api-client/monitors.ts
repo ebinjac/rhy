@@ -335,6 +335,23 @@ export const createMonitor = createServerFn({ method: "POST" })
       const envelope = (await response.json()) as ApiSuccess<MonitorContract>
       let monitor = envelope.data
 
+      // Persist the schedule before publish/enable. Enable can only activate an
+      // existing monitor_schedules row; doing enable first left INTERVAL
+      // monitors published but with no next_run_at until a later re-save.
+      const savedSchedule = await putMonitorSchedule(
+        baseURL,
+        monitor.id,
+        schedule
+      )
+      if (!savedSchedule.ok) {
+        return {
+          ok: false,
+          monitorId: monitor.id,
+          message: savedSchedule.message,
+        }
+      }
+      let configured = savedSchedule.schedule
+
       if (enabled) {
         const publishResponse = await fetch(
           `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/publish`,
@@ -360,54 +377,39 @@ export const createMonitor = createServerFn({ method: "POST" })
               "The monitor was saved as a draft, but could not be published.",
           }
         }
-        const enableResponse = await fetch(
-          `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/enable`,
-          {
-            method: "POST",
-            headers: { Accept: "application/json" },
-            signal: AbortSignal.timeout(8000),
+        const enableResult = await enableCreatedMonitor(baseURL, monitor.id)
+        if (!enableResult.ok) {
+          return {
+            ok: false,
+            monitorId: monitor.id,
+            message: enableResult.message,
           }
-        )
-        if (!enableResponse.ok) {
-          const failure = (await enableResponse.json()) as ApiErrorResponse
+        }
+        monitor = enableResult.monitor
+        configured = enableResult.schedule ?? configured
+        if (!monitor.enabled) {
           return {
             ok: false,
             monitorId: monitor.id,
             message:
-              failure.error.message ||
               "The monitor was published, but could not be enabled.",
           }
         }
-        const enabledEnvelope =
-          (await enableResponse.json()) as ApiSuccess<MonitorContract>
-        monitor = enabledEnvelope.data
+        if (
+          schedule.type !== "MANUAL" &&
+          enableResult.schedule &&
+          !scheduleIsRunning(enableResult.schedule)
+        ) {
+          return {
+            ok: false,
+            monitorId: monitor.id,
+            message:
+              "The monitor was published, but the schedule did not start. Open it and save the schedule again.",
+          }
+        }
       }
 
-      const scheduleResponse = await fetch(
-        `${baseURL}/api/v1/monitors/${encodeURIComponent(monitor.id)}/schedule`,
-        {
-          method: "PUT",
-          headers: {
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(schedule),
-          signal: AbortSignal.timeout(8000),
-        }
-      )
-      if (!scheduleResponse.ok) {
-        const failure = (await scheduleResponse.json()) as ApiErrorResponse
-        return {
-          ok: false,
-          monitorId: monitor.id,
-          message:
-            failure.error.message ||
-            "The monitor was created, but its schedule could not be saved.",
-        }
-      }
-      const scheduleEnvelope =
-        (await scheduleResponse.json()) as ApiSuccess<ScheduleContract>
-      return { ok: true, monitor, schedule: scheduleEnvelope.data }
+      return { ok: true, monitor, schedule: configured }
     } catch {
       return {
         ok: false,
@@ -416,6 +418,154 @@ export const createMonitor = createServerFn({ method: "POST" })
       }
     }
   })
+
+function scheduleWriteBody(schedule: CreateMonitorInput["schedule"]) {
+  return {
+    type: schedule.type,
+    ...(schedule.expression ? { expression: schedule.expression } : {}),
+    ...(schedule.type === "INTERVAL"
+      ? { intervalSeconds: schedule.intervalSeconds }
+      : {}),
+    timezone: schedule.timezone.trim() || "UTC",
+    jitterSeconds: schedule.jitterSeconds,
+    concurrencyPolicy: schedule.concurrencyPolicy,
+    missedRunPolicy: schedule.missedRunPolicy,
+  }
+}
+
+async function putMonitorSchedule(
+  baseURL: string,
+  monitorId: string,
+  schedule: CreateMonitorInput["schedule"]
+): Promise<
+  | { ok: true; schedule: ScheduleContract }
+  | { ok: false; message: string }
+> {
+  const scheduleResponse = await fetch(
+    `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}/schedule`,
+    {
+      method: "PUT",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(scheduleWriteBody(schedule)),
+      signal: AbortSignal.timeout(8000),
+    }
+  )
+  if (!scheduleResponse.ok) {
+    const failure = (await scheduleResponse.json()) as ApiErrorResponse
+    return {
+      ok: false,
+      message:
+        failure.error.message ||
+        "The monitor was created, but its schedule could not be saved.",
+    }
+  }
+  return {
+    ok: true,
+    schedule: ((await scheduleResponse.json()) as ApiSuccess<ScheduleContract>)
+      .data,
+  }
+}
+
+async function enableCreatedMonitor(
+  baseURL: string,
+  monitorId: string
+): Promise<
+  | { ok: true; monitor: MonitorContract; schedule: ScheduleContract | null }
+  | { ok: false; message: string }
+> {
+  const enableResponse = await fetch(
+    `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}/enable`,
+    {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(8000),
+    }
+  )
+  if (!enableResponse.ok) {
+    const failure = (await enableResponse.json()) as ApiErrorResponse
+    return {
+      ok: false,
+      message:
+        failure.error.message ||
+        "The monitor was published, but could not be enabled.",
+    }
+  }
+  let monitor = ((await enableResponse.json()) as ApiSuccess<MonitorContract>)
+    .data
+  const refreshed = await getCreatedMonitor(baseURL, monitorId)
+  if (refreshed) monitor = refreshed
+  const schedule = await getCreatedMonitorSchedule(baseURL, monitorId)
+  if (monitor.enabled && schedule && !scheduleIsRunning(schedule)) {
+    const retried = await putMonitorSchedule(baseURL, monitorId, {
+      type: schedule.type,
+      expression: schedule.expression,
+      intervalSeconds: schedule.intervalSeconds,
+      timezone: schedule.timezone,
+      jitterSeconds: schedule.jitterSeconds,
+      concurrencyPolicy: schedule.concurrencyPolicy,
+      missedRunPolicy: schedule.missedRunPolicy,
+    })
+    if (retried.ok && scheduleIsRunning(retried.schedule)) {
+      return { ok: true, monitor, schedule: retried.schedule }
+    }
+    const enableAgain = await fetch(
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}/enable`,
+      {
+        method: "POST",
+        headers: { Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      }
+    )
+    if (enableAgain.ok) {
+      monitor = ((await enableAgain.json()) as ApiSuccess<MonitorContract>).data
+      const refreshedAgain = await getCreatedMonitor(baseURL, monitorId)
+      if (refreshedAgain) monitor = refreshedAgain
+    }
+  }
+  const verified = await getCreatedMonitorSchedule(baseURL, monitorId)
+  return { ok: true, monitor, schedule: verified }
+}
+
+async function getCreatedMonitor(
+  baseURL: string,
+  monitorId: string
+): Promise<MonitorContract | null> {
+  const response = await fetch(
+    `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    }
+  )
+  if (!response.ok) return null
+  return ((await response.json()) as ApiSuccess<MonitorContract>).data
+}
+
+async function getCreatedMonitorSchedule(
+  baseURL: string,
+  monitorId: string
+): Promise<ScheduleContract | null> {
+  const response = await fetch(
+    `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}/schedule`,
+    {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(5000),
+    }
+  )
+  if (response.status === 404) return null
+  if (!response.ok) return null
+  return ((await response.json()) as ApiSuccess<ScheduleContract>).data
+}
+
+function scheduleIsRunning(schedule: ScheduleContract) {
+  if (schedule.type === "MANUAL") return true
+  if (!schedule.active || !schedule.nextRunAt) return false
+  const nextRunAt = Date.parse(schedule.nextRunAt)
+  return Number.isFinite(nextRunAt)
+}
 
 export const permanentlyDeleteMonitors = createServerFn({ method: "POST" })
   .validator(
@@ -562,12 +712,34 @@ export const mutateMonitor = createServerFn({ method: "POST" })
     }
   )
 
+export type MonitorRunPage = {
+  runs: RunContract[]
+  total: number
+  nextCursor?: string
+}
+
 export const listMonitorRuns = createServerFn({ method: "GET" })
-  .validator(z.object({ monitorId: z.string().min(1) }))
-  .handler(async ({ data }): Promise<RunContract[]> => {
+  .validator(
+    z.object({
+      monitorId: z.string().min(1),
+      limit: z.number().int().min(1).max(200).default(50),
+      cursor: z.string().min(1).optional(),
+      since: z.string().min(1).optional(),
+      status: z.string().min(1).optional(),
+      triggerType: z.string().min(1).optional(),
+      query: z.string().min(1).optional(),
+    })
+  )
+  .handler(async ({ data }): Promise<MonitorRunPage> => {
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
+    const parameters = new URLSearchParams({ limit: String(data.limit) })
+    if (data.cursor) parameters.set("cursor", data.cursor)
+    if (data.since) parameters.set("since", data.since)
+    if (data.status) parameters.set("status", data.status)
+    if (data.triggerType) parameters.set("triggerType", data.triggerType)
+    if (data.query) parameters.set("query", data.query)
     const response = await fetch(
-      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/runs`,
+      `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/runs?${parameters}`,
       {
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(5000),
@@ -576,7 +748,11 @@ export const listMonitorRuns = createServerFn({ method: "GET" })
     if (!response.ok)
       throw new Error(`Unable to load run history (${response.status})`)
     const envelope = (await response.json()) as ApiSuccess<RunContract[]>
-    return envelope.data
+    return {
+      runs: envelope.data,
+      total: envelope.meta.page?.total ?? envelope.data.length,
+      nextCursor: envelope.meta.page?.nextCursor,
+    }
   })
 
 export const getMonitorMetrics = createServerFn({ method: "GET" })
@@ -619,8 +795,24 @@ export const getMonitorMetricsSummary = createServerFn({ method: "GET" })
     )
     if (!response.ok)
       throw new Error(`Unable to load run metric summary (${response.status})`)
-    return ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>)
+    const metrics = ((await response.json()) as ApiSuccess<RunHistoryMetricsContract>)
       .data
+    return {
+      ...metrics,
+      points: metrics?.points ?? [],
+      percentiles: metrics?.percentiles ?? {},
+      statusDistribution: metrics?.statusDistribution ?? {},
+      failureCategories: metrics?.failureCategories ?? {},
+      summary: metrics?.summary ?? {
+        runCount: 0,
+        measuredRunCount: 0,
+        successRate: 0,
+        errorRate: 0,
+        timeoutRate: 0,
+        spikeCount: 0,
+        runsPerHour: 0,
+      },
+    }
   })
 
 export const getMonitorMetricSeries = createServerFn({ method: "GET" })
@@ -645,7 +837,7 @@ export const getMonitorMetricSeries = createServerFn({ method: "GET" })
     const envelope = (await response.json()) as ApiSuccess<{
       points: RunHistoryMetricsContract["points"]
     }>
-    return envelope.data.points
+    return envelope.data?.points ?? []
   })
 
 export const getRun = createServerFn({ method: "GET" })

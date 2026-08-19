@@ -11,7 +11,7 @@ npm run dev:api
 The API listens on `:8080` by default and exposes:
 
 - `GET /health`, `GET /healthz`, and `GET /livez` — dependency-free process liveness
-- `GET /readyz` — PostgreSQL, Redis, S3, runner, and schema diagnostics
+- `GET /readyz` — PostgreSQL, S3, runner, and schema diagnostics
 - `GET /api/v1/monitors`
 - `POST /api/v1/monitors`
 - `GET /api/v1/monitors/{monitorId}`
@@ -31,17 +31,16 @@ RHYTHM_AUTH_MODE=anonymous
 RHYTHM_DEVELOPMENT_ACTOR_ID=anonymous
 RHYTHM_STORAGE_MODE=memory
 RHYTHM_DATABASE_URL=postgres://rhythm:rhythm@localhost:5432/rhythm?sslmode=disable
-RHYTHM_QUEUE_BACKEND=memory
 RHYTHM_UNRESTRICTED_OUTBOUND=true
 ```
 
 Outbound execution accepts any HTTP(S) hostname by default, including private, loopback, link-local, multicast, and reserved targets. TLS verification and evidence masking remain active.
 
-To use PostgreSQL, set `RHYTHM_STORAGE_MODE=postgres`, `RHYTHM_QUEUE_BACKEND=postgres`, provide `RHYTHM_DATABASE_URL`, and run `npm run migrate:api` before starting the API. The default `memory` mode remains available for zero-setup development and automated tests. Redis can later be selected with `RHYTHM_QUEUE_BACKEND=redis` and `RHYTHM_REDIS_URL`.
+To use PostgreSQL, set `RHYTHM_STORAGE_MODE=postgres`, provide `RHYTHM_DATABASE_URL`, and run `npm run migrate:api` before starting the API. PostgreSQL then provides both persistence and asynchronous job coordination. The default `memory` mode remains available only for zero-setup development and automated tests.
 
 Anonymous mode assigns every request the shared Administrator principal and requires no login or identity headers.
 
-Long-running services create PostgreSQL, Redis, and artifact clients without an
+Long-running services create PostgreSQL and artifact clients without an
 initial network probe. This allows a configured pod to start during an outage;
 operations retry through their normal loops and `/readyz` reports unavailable
 components. Migration commands remain fail-fast because applying schema changes

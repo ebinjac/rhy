@@ -6,6 +6,8 @@ import type { ConfigurationProfileContract } from "@/lib/api-client/contracts"
 export type VariableScope =
   | "variables"
   | "environment"
+  | "service"
+  | "application"
   | "collection"
   | "globals"
   | "step"
@@ -33,7 +35,12 @@ type ScriptVariable = {
   name: string
   scope: Extract<
     VariableScope,
-    "variables" | "environment" | "collection" | "globals"
+    | "variables"
+    | "environment"
+    | "service"
+    | "application"
+    | "collection"
+    | "globals"
   >
   operation: "set" | "unset" | "clear"
 }
@@ -47,10 +54,12 @@ const dynamicVariables = [
 ] as const
 
 const scopeAccessor = {
-  variables: "pm.variables",
-  environment: "pm.environment",
+  variables: "rhythm.variables",
+  environment: "rhythm.environment",
+  service: "rhythm.service",
+  application: "rhythm.application",
   collection: "pm.collectionVariables",
-  globals: "pm.globals",
+  globals: "rhythm.globals",
 } as const
 
 function walk(node: unknown, visit: (value: Record<string, unknown>) => void) {
@@ -84,19 +93,21 @@ export function discoverScriptVariables(code: string): ScriptVariable[] {
         property?.type !== "Identifier"
       )
         return
-      const pm = object.object as Record<string, unknown> | undefined
+      const root = object.object as Record<string, unknown> | undefined
       const store = object.property as Record<string, unknown> | undefined
       if (
-        pm?.type !== "Identifier" ||
-        pm.name !== "pm" ||
+        root?.type !== "Identifier" ||
+        (root.name !== "pm" && root.name !== "rhythm") ||
         store?.type !== "Identifier"
       )
         return
       const scope =
-        store.name === "collectionVariables"
+        root.name === "pm" && store.name === "collectionVariables"
           ? "collection"
           : store.name === "variables" ||
               store.name === "environment" ||
+              (root.name === "rhythm" && store.name === "service") ||
+              (root.name === "rhythm" && store.name === "application") ||
               store.name === "globals"
             ? store.name
             : null
@@ -128,7 +139,12 @@ export function discoverScriptVariables(code: string): ScriptVariable[] {
 function scopedEntry(
   scope: Extract<
     VariableScope,
-    "variables" | "environment" | "collection" | "globals"
+    | "variables"
+    | "environment"
+    | "service"
+    | "application"
+    | "collection"
+    | "globals"
   >,
   name: string,
   origin: string,
@@ -202,7 +218,7 @@ export function buildVariableCatalog({
       scope: "secret",
       template: `{{secrets.${secret.name}}}`,
       explicitTemplate: `{{secrets.${secret.name}}}`,
-      javascript: `await pm.vault.get(${JSON.stringify(secret.name)})`,
+      javascript: `rhythm.secrets.get(${JSON.stringify(secret.name)})`,
       origin: "Secrets",
       availability: "now",
       sensitive: true,

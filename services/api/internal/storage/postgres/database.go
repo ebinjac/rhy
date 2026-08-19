@@ -23,8 +23,8 @@ func CheckRequiredSchema(ctx context.Context, pool *pgxpool.Pool, required strin
 	}
 	var migrationTable, liquibaseTable *string
 	if err := pool.QueryRow(ctx, `
-		SELECT to_regclass('public.schema_migrations')::text,
-		       to_regclass('public.databasechangelog')::text
+		SELECT to_regclass('rhythm.schema_migrations')::text,
+		       COALESCE(to_regclass('rhythm.databasechangelog'), to_regclass('public.databasechangelog'))::text
 	`).Scan(&migrationTable, &liquibaseTable); err != nil {
 		return fmt.Errorf("inspect schema migration metadata: %w", err)
 	}
@@ -90,6 +90,7 @@ func OpenWithOptions(ctx context.Context, databaseURL string, options PoolOption
 	config.ConnConfig.RuntimeParams["lock_timeout"] = strconv.Itoa(int((5 * time.Second).Milliseconds()))
 	config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = strconv.Itoa(int((30 * time.Second).Milliseconds()))
 	config.ConnConfig.RuntimeParams["application_name"] = "rhythm"
+	config.ConnConfig.RuntimeParams["search_path"] = "rhythm,public"
 	if options.TransactionPool {
 		// PgBouncer transaction pooling cannot retain session-scoped prepared
 		// statements. Simple protocol keeps every query transaction-local.

@@ -1,5 +1,6 @@
 import {
   Children,
+  Fragment,
   lazy,
   Suspense,
   useEffect,
@@ -11,8 +12,15 @@ import {
 import type { ReactNode } from "react"
 import { Badge } from "@workspace/ui/components/badge"
 import { EditorLoading } from "@/components/editor-loading"
+import { InfoHint } from "@/components/info-hint"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@workspace/ui/components/input-group"
+import { cn } from "@workspace/ui/lib/utils"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,13 +32,11 @@ import {
   AlertDialogTitle,
 } from "@workspace/ui/components/alert-dialog"
 import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@workspace/ui/components/native-select"
-import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@workspace/ui/components/select"
@@ -42,6 +48,7 @@ import {
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
 import { Textarea } from "@workspace/ui/components/textarea"
+import type { LucideIcon } from "lucide-react"
 import {
   ArrowDown,
   ArrowUp,
@@ -51,15 +58,21 @@ import {
   Cookie,
   Download,
   EyeOff,
+  FileJson,
   KeyRound,
+  ListFilter,
   Network,
   Plus,
   Send,
   Settings2,
+  Shield,
   ShieldCheck,
   SlidersHorizontal,
+  Terminal,
   Trash2,
+  Variable,
   Wand2,
+  Waypoints,
 } from "lucide-react"
 
 import {
@@ -291,20 +304,22 @@ export function RequestWorkbench({
           }}
           className="min-w-0 flex-1 gap-0"
         >
-          <div className="overflow-x-auto">
+          <div className="min-w-0 overflow-x-auto">
             <TabsList
               aria-label="Workflow steps"
               variant="line"
-              className="h-auto min-w-max justify-start gap-2 py-1"
+              className="h-auto w-max max-w-none justify-start gap-2 py-1"
             >
               {value.steps.map((candidate, index) => (
                 <TabsTrigger
                   value={candidate.id}
-                  className="h-auto min-w-40 justify-start rounded-lg border bg-background px-3 py-2 text-left data-active:border-primary data-active:bg-primary/5"
+                  className="h-auto w-40 max-w-[12rem] min-w-0 flex-none shrink-0 justify-start overflow-hidden rounded-lg border bg-background px-3 py-2 text-left whitespace-normal data-active:border-primary data-active:bg-primary/5"
+                  aria-label={`Step ${index + 1}: ${candidate.name}`}
+                  title={candidate.name}
                   key={candidate.id}
                 >
-                  <span className="min-w-0">
-                    <span className="block text-xs font-medium text-muted-foreground">
+                  <span className="flex w-full min-w-0 flex-col items-stretch">
+                    <span className="text-xs font-medium text-muted-foreground">
                       Step {index + 1}
                     </span>
                     <span className="mt-0.5 block truncate text-sm font-medium text-foreground">
@@ -403,14 +418,17 @@ export function RequestWorkbench({
       ) : (
         <div>
           <div className="p-3">
-            <div className="grid gap-2 sm:grid-cols-[7rem_minmax(0,1fr)_auto]">
-              <div>
-                <label
-                  className="sr-only"
-                  htmlFor={`request-method-${step.id}`}
-                >
-                  HTTP method
-                </label>
+            <InputGroup className="h-11 w-full min-w-0 items-stretch overflow-hidden rounded-lg border-border">
+              <label
+                className="sr-only"
+                htmlFor={`request-method-${step.id}`}
+              >
+                HTTP method
+              </label>
+              <InputGroupAddon
+                align="inline-start"
+                className="h-full shrink-0 p-0 has-[>button]:ml-0"
+              >
                 <Select
                   value={request.method}
                   onValueChange={(method) => {
@@ -423,8 +441,10 @@ export function RequestWorkbench({
                 >
                   <SelectTrigger
                     id={`request-method-${step.id}`}
-                    size="sm"
-                    className={`h-10 w-full font-medium ${httpMethodClassName(request.method)}`}
+                    className={cn(
+                      "h-full w-[7rem] shrink-0 rounded-none border-0 border-r border-border bg-transparent font-medium shadow-none data-[size=default]:h-full",
+                      httpMethodClassName(request.method)
+                    )}
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -440,36 +460,40 @@ export function RequestWorkbench({
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
-              <div>
-                <label className="sr-only" htmlFor={`request-url-${step.id}`}>
-                  Request URL
-                </label>
-                <TemplateValueInput
-                  id={`request-url-${step.id}`}
-                  className="h-10 min-w-0 font-mono text-sm"
-                  value={request.url}
-                  onChange={(url) => updateRequest({ url })}
-                  placeholder="https://api.example.com/v1/health"
-                  entries={variableCatalog}
-                />
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-10 sm:w-auto"
-                aria-expanded={previewOpen}
-                aria-controls={`request-summary-${step.id}`}
-                onClick={() => setPreviewOpen((open) => !open)}
+              </InputGroupAddon>
+              <label className="sr-only" htmlFor={`request-url-${step.id}`}>
+                Request URL
+              </label>
+              <TemplateValueInput
+                id={`request-url-${step.id}`}
+                grouped
+                className="h-full min-w-0 font-mono text-sm"
+                value={request.url}
+                onChange={(url) => updateRequest({ url })}
+                placeholder="https://api.example.com/v1/health"
+                entries={variableCatalog}
+              />
+              <InputGroupAddon
+                align="inline-end"
+                className="h-full shrink-0 border-l border-border p-0 has-[>button]:mr-0"
               >
-                {previewOpen ? (
-                  <EyeOff data-icon="inline-start" />
-                ) : (
-                  <Send data-icon="inline-start" />
-                )}
-                {previewOpen ? "Hide summary" : "Request summary"}
-              </Button>
-            </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="h-full rounded-none border-0 px-3 shadow-none"
+                  aria-expanded={previewOpen}
+                  aria-controls={`request-summary-${step.id}`}
+                  onClick={() => setPreviewOpen((open) => !open)}
+                >
+                  {previewOpen ? (
+                    <EyeOff data-icon="inline-start" />
+                  ) : (
+                    <Send data-icon="inline-start" />
+                  )}
+                  {previewOpen ? "Hide summary" : "Request summary"}
+                </Button>
+              </InputGroupAddon>
+            </InputGroup>
           </div>
 
           {previewOpen ? (
@@ -499,93 +523,67 @@ export function RequestWorkbench({
               >
                 Request configuration
               </label>
-              <NativeSelect
-                id={`request-section-${step.id}`}
-                className="mt-2 w-full"
+              <Select
                 value={activeSection}
-                onChange={(event) =>
-                  setActiveSection(
-                    event.target.value as RequestWorkbenchSection
-                  )
-                }
-              >
-                {REQUEST_SECTION_GROUPS.flatMap((group) =>
-                  group.items.map((item) => (
-                    <NativeSelectOption key={item.value} value={item.value}>
-                      {group.label} · {item.label}
-                    </NativeSelectOption>
-                  ))
+                onValueChange={(section) => {
+                  if (section == null) return
+                  setActiveSection(section as RequestWorkbenchSection)
+                }}
+                items={REQUEST_SECTION_GROUPS.flatMap((group) =>
+                  group.items.map((item) => ({
+                    value: item.value,
+                    label: item.label,
+                  }))
                 )}
-              </NativeSelect>
+              >
+                <SelectTrigger
+                  id={`request-section-${step.id}`}
+                  className="mt-2 h-9 w-full"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {REQUEST_SECTION_GROUPS.map((group) => (
+                    <SelectGroup key={group.label}>
+                      <SelectLabel>{group.label}</SelectLabel>
+                      {group.items.map((item) => {
+                        const Icon = item.icon
+                        return (
+                          <SelectItem key={item.value} value={item.value}>
+                            <Icon />
+                            {item.label}
+                          </SelectItem>
+                        )
+                      })}
+                    </SelectGroup>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="hidden w-52 shrink-0 border-r bg-muted/15 p-3 lg:block">
               <TabsList
                 aria-label="Request configuration sections"
                 variant="line"
-                className="h-auto w-full items-stretch gap-1"
+                className="h-auto w-full items-stretch gap-0.5"
               >
-                <WorkbenchGroupLabel>Request</WorkbenchGroupLabel>
-                <WorkbenchTab
-                  value="params"
-                  label="Params"
-                  count={configuredRows(request.params)}
-                />
-                <WorkbenchTab
-                  value="auth"
-                  label="Auth"
-                  active={request.auth.type !== "none"}
-                />
-                <WorkbenchTab
-                  value="headers"
-                  label="Headers"
-                  count={configuredRows(request.headers)}
-                />
-                <WorkbenchTab
-                  value="body"
-                  label="Body"
-                  active={request.body.type !== "none"}
-                />
-                <WorkbenchTab
-                  value="cookies"
-                  label="Cookies"
-                  count={configuredRows(request.cookies)}
-                />
-                <WorkbenchGroupLabel>Automation</WorkbenchGroupLabel>
-                <WorkbenchTab
-                  value="pre-request"
-                  label="Pre-request"
-                  count={Number(Boolean(request.preRequestScript.code.trim()))}
-                />
-                <WorkbenchTab
-                  value="extractors"
-                  label="Extractors"
-                  count={
-                    request.extractors.filter((item) => item.enabled).length
-                  }
-                />
-                <WorkbenchGroupLabel>Checks</WorkbenchGroupLabel>
-                <WorkbenchTab
-                  value="assertions"
-                  label="Tests"
-                  count={
-                    request.assertions.filter((item) => item.enabled).length +
-                    Number(Boolean(request.testScript.code.trim()))
-                  }
-                />
-                <WorkbenchGroupLabel>Connection</WorkbenchGroupLabel>
-                <WorkbenchTab
-                  value="tls"
-                  label="TLS"
-                  active={Boolean(
-                    request.tls.certificateProfileId || request.tls.caProfileId
-                  )}
-                />
-                <WorkbenchTab
-                  value="proxy"
-                  label="Proxy"
-                  active={request.proxy.mode !== "environment"}
-                />
-                <WorkbenchTab value="settings" label="Settings" />
+                {REQUEST_SECTION_GROUPS.map((group) => (
+                  <Fragment key={group.label}>
+                    <WorkbenchGroupLabel>{group.label}</WorkbenchGroupLabel>
+                    {group.items.map((item) => {
+                      const badge = sectionNavBadge(item.value, request)
+                      return (
+                        <WorkbenchTab
+                          key={item.value}
+                          value={item.value}
+                          label={item.label}
+                          icon={item.icon}
+                          count={badge.count}
+                          active={badge.active}
+                        />
+                      )
+                    })}
+                  </Fragment>
+                ))}
               </TabsList>
             </div>
 
@@ -798,7 +796,7 @@ function WorkbenchGroupLabel({ children }: { children: React.ReactNode }) {
   return (
     <span
       role="presentation"
-      className="mt-3 px-3 pb-1 text-xs font-semibold text-muted-foreground first:mt-0"
+      className="mt-4 px-3 pt-1 pb-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase first:mt-0"
     >
       {children}
     </span>
@@ -810,15 +808,24 @@ function WorkbenchTab({
   label,
   count,
   active,
+  icon: Icon,
 }: {
   value: string
   label: string
   count?: number
   active?: boolean
+  icon: LucideIcon
 }) {
   return (
-    <TabsTrigger value={value} className="min-h-9 justify-start px-3">
-      {label}
+    <TabsTrigger
+      value={value}
+      className="h-8 min-h-8 w-full flex-none justify-start gap-2 rounded-lg px-3 text-foreground/80 hover:bg-muted/60 hover:text-foreground group-data-[variant=line]/tabs-list:data-active:bg-primary/5 group-data-[variant=line]/tabs-list:data-active:text-foreground data-active:bg-primary/5 data-active:text-foreground"
+    >
+      <Icon
+        className="size-4 shrink-0 text-muted-foreground"
+        aria-hidden="true"
+      />
+      <span className="min-w-0 flex-1 truncate text-left">{label}</span>
       {count ? (
         <Badge
           variant="secondary"
@@ -911,7 +918,15 @@ function KeyValueEditor({
             <span>Key</span>
             <span>Value</span>
             <span>Description</span>
-            {allowSensitive ? <span>Sensitive</span> : null}
+            {allowSensitive ? (
+              <span className="inline-flex items-center gap-0.5">
+                Sensitive
+                <InfoHint className="size-5" title="Sensitive values">
+                  Marks the field as sensitive. Rhythm masks it in diagnostics,
+                  logs, and request previews.
+                </InfoHint>
+              </span>
+            ) : null}
             <span />
           </div>
           {rows.map((item) => (
@@ -1020,20 +1035,28 @@ function AuthEditor({
           <label className="text-xs font-medium" htmlFor="auth-type">
             Auth type
           </label>
-          <NativeSelect
-            id="auth-type"
-            className="mt-2 w-full"
+          <Select
             value={value.type}
-            onChange={(event) =>
-              onChange({ type: event.target.value, fields: {} })
-            }
+            onValueChange={(type) => {
+              if (type == null) return
+              onChange({ type, fields: {} })
+            }}
+            items={Object.entries(AUTH_LABELS).map(([key, label]) => ({
+              value: key,
+              label,
+            }))}
           >
-            {Object.entries(AUTH_LABELS).map(([key, label]) => (
-              <NativeSelectOption key={key} value={key}>
-                {label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+            <SelectTrigger id="auth-type" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(AUTH_LABELS).map(([key, label]) => (
+                <SelectItem key={key} value={key}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <p className="mt-3 text-xs leading-5 text-muted-foreground">
             For reusable production credentials, pick a Secrets alias or use
             authentication profile references.
@@ -1479,20 +1502,28 @@ function PreRequestEditor({
               checked={item.enabled}
               onCheckedChange={(enabled) => update(item.id, { enabled })}
             />
-            <NativeSelect
-              aria-label={`Type for pre-request action ${index + 1}`}
-              className="w-full"
+            <Select
               value={item.type}
-              onChange={(event) =>
-                update(item.id, { type: event.target.value })
-              }
+              onValueChange={(type) => {
+                if (type == null) return
+                update(item.id, { type })
+              }}
+              items={ACTION_TYPES}
             >
-              {ACTION_TYPES.map((type) => (
-                <NativeSelectOption key={type.value} value={type.value}>
-                  {type.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                aria-label={`Type for pre-request action ${index + 1}`}
+                className="h-9 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ACTION_TYPES.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
+                    {type.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
               aria-label={`Output variable for pre-request action ${index + 1}`}
               value={item.output}
@@ -1605,20 +1636,31 @@ function ExtractorEditor({
               checked={item.enabled}
               onCheckedChange={(enabled) => update(item.id, { enabled })}
             />
-            <NativeSelect
-              aria-label={`Source for extractor ${index + 1}`}
-              className="w-full"
+            <Select
               value={item.source}
-              onChange={(event) =>
-                update(item.id, { source: event.target.value })
-              }
+              onValueChange={(source) => {
+                if (source == null) return
+                update(item.id, { source })
+              }}
+              items={EXTRACTOR_TYPES.map((type) => ({
+                value: type,
+                label: labelize(type),
+              }))}
             >
-              {EXTRACTOR_TYPES.map((type) => (
-                <NativeSelectOption key={type} value={type}>
-                  {labelize(type)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                aria-label={`Source for extractor ${index + 1}`}
+                className="h-9 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EXTRACTOR_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {labelize(type)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
               aria-label={`Variable for extractor ${index + 1}`}
               value={item.variable}
@@ -1717,20 +1759,31 @@ function AssertionEditor({
               checked={item.enabled}
               onCheckedChange={(enabled) => update(item.id, { enabled })}
             />
-            <NativeSelect
-              aria-label={`Type for assertion ${index + 1}`}
-              className="w-full"
+            <Select
               value={item.type}
-              onChange={(event) =>
-                update(item.id, { type: event.target.value })
-              }
+              onValueChange={(type) => {
+                if (type == null) return
+                update(item.id, { type })
+              }}
+              items={ASSERTION_TYPES.map((type) => ({
+                value: type,
+                label: labelize(type),
+              }))}
             >
-              {ASSERTION_TYPES.map((type) => (
-                <NativeSelectOption key={type} value={type}>
-                  {labelize(type)}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                aria-label={`Type for assertion ${index + 1}`}
+                className="h-9 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ASSERTION_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {labelize(type)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
               aria-label={`Expression for assertion ${index + 1}`}
               className="font-mono"
@@ -1744,19 +1797,28 @@ function AssertionEditor({
                   : "Selector / source"
               }
             />
-            <NativeSelect
-              aria-label={`Operator for assertion ${index + 1}`}
+            <Select
               value={item.operator ?? "equals"}
-              onChange={(event) =>
-                update(item.id, { operator: event.target.value })
-              }
+              onValueChange={(operator) => {
+                if (operator == null) return
+                update(item.id, { operator })
+              }}
+              items={ASSERTION_OPERATORS}
             >
-              {ASSERTION_OPERATORS.map((operator) => (
-                <NativeSelectOption key={operator.value} value={operator.value}>
-                  {operator.label}
-                </NativeSelectOption>
-              ))}
-            </NativeSelect>
+              <SelectTrigger
+                aria-label={`Operator for assertion ${index + 1}`}
+                className="h-9 w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {ASSERTION_OPERATORS.map((operator) => (
+                  <SelectItem key={operator.value} value={operator.value}>
+                    {operator.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <Input
               aria-label={`Expected value for assertion ${index + 1}`}
               className="font-mono"
@@ -1818,17 +1880,25 @@ function TLSEditor({
           <label className="text-xs font-medium" htmlFor="tls-version">
             Minimum TLS version
           </label>
-          <NativeSelect
-            id="tls-version"
-            className="mt-2 w-full"
+          <Select
             value={value.minimumVersion}
-            onChange={(event) =>
-              onChange({ ...value, minimumVersion: event.target.value })
-            }
+            onValueChange={(minimumVersion) => {
+              if (minimumVersion == null) return
+              onChange({ ...value, minimumVersion })
+            }}
+            items={[
+              { value: "TLS 1.2", label: "TLS 1.2" },
+              { value: "TLS 1.3", label: "TLS 1.3" },
+            ]}
           >
-            <NativeSelectOption>TLS 1.2</NativeSelectOption>
-            <NativeSelectOption>TLS 1.3</NativeSelectOption>
-          </NativeSelect>
+            <SelectTrigger id="tls-version" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="TLS 1.2">TLS 1.2</SelectItem>
+              <SelectItem value="TLS 1.3">TLS 1.3</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <ToggleLine
           label="Verify hostname"
@@ -1862,20 +1932,25 @@ function ProxyEditor({
           <label className="text-xs font-medium" htmlFor="proxy-mode">
             Proxy mode
           </label>
-          <NativeSelect
-            id="proxy-mode"
-            className="mt-2 w-full"
+          <Select
             value={value.mode}
-            onChange={(event) =>
-              onChange({ ...value, mode: event.target.value })
-            }
+            onValueChange={(mode) => {
+              if (mode == null) return
+              onChange({ ...value, mode })
+            }}
+            items={PROXY_MODES}
           >
-            {PROXY_MODES.map((mode) => (
-              <NativeSelectOption key={mode.value} value={mode.value}>
-                {mode.label}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+            <SelectTrigger id="proxy-mode" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PROXY_MODES.map((mode) => (
+                <SelectItem key={mode.value} value={mode.value}>
+                  {mode.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <LabeledInput
           label="Proxy profile ID"
@@ -1973,23 +2048,38 @@ function SettingsEditor({
           onChange={(retries) => onChange({ ...value, retries })}
         />
         <div>
-          <label className="text-xs font-medium" htmlFor="retry-backoff">
-            Retry backoff
-          </label>
-          <NativeSelect
-            id="retry-backoff"
-            className="mt-2 w-full"
+          <div className="flex items-center gap-1">
+            <label className="text-xs font-medium" htmlFor="retry-backoff">
+              Retry backoff
+            </label>
+            <InfoHint title="Retry backoff">
+              How wait time grows between retries. Exponential with jitter
+              reduces thundering-herd load on the target.
+            </InfoHint>
+          </div>
+          <Select
             value={value.retryBackoff}
-            onChange={(event) =>
-              onChange({ ...value, retryBackoff: event.target.value })
-            }
+            onValueChange={(retryBackoff) => {
+              if (retryBackoff == null) return
+              onChange({ ...value, retryBackoff })
+            }}
+            items={[
+              { value: "fixed", label: "Fixed" },
+              { value: "linear", label: "Linear" },
+              { value: "exponential", label: "Exponential with jitter" },
+            ]}
           >
-            <NativeSelectOption value="fixed">Fixed</NativeSelectOption>
-            <NativeSelectOption value="linear">Linear</NativeSelectOption>
-            <NativeSelectOption value="exponential">
-              Exponential with jitter
-            </NativeSelectOption>
-          </NativeSelect>
+            <SelectTrigger id="retry-backoff" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="fixed">Fixed</SelectItem>
+              <SelectItem value="linear">Linear</SelectItem>
+              <SelectItem value="exponential">
+                Exponential with jitter
+              </SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <ToggleLine
           label="Capture response body"
@@ -2089,20 +2179,28 @@ function MetricEditor({
           <label className="text-xs font-medium" htmlFor="metric-aggregation">
             Aggregation
           </label>
-          <NativeSelect
-            id="metric-aggregation"
-            className="mt-2 w-full"
+          <Select
             value={value.aggregation}
-            onChange={(event) =>
-              onChange({ ...value, aggregation: event.target.value })
-            }
+            onValueChange={(aggregation) => {
+              if (aggregation == null) return
+              onChange({ ...value, aggregation })
+            }}
+            items={["AVG", "MAX", "MIN", "SUM", "LAST"].map((item) => ({
+              value: item,
+              label: item,
+            }))}
           >
-            {["AVG", "MAX", "MIN", "SUM", "LAST"].map((item) => (
-              <NativeSelectOption value={item} key={item}>
-                {item}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
+            <SelectTrigger id="metric-aggregation" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {["AVG", "MAX", "MIN", "SUM", "LAST"].map((item) => (
+                <SelectItem value={item} key={item}>
+                  {item}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <LabeledInput
           label="Time window"
@@ -2126,26 +2224,31 @@ function MetricEditor({
           <label className="text-xs font-medium" htmlFor="metric-comparison">
             Comparison
           </label>
-          <NativeSelect
-            id="metric-comparison"
-            className="mt-2 w-full"
+          <Select
             value={value.operator}
-            onChange={(event) =>
-              onChange({ ...value, operator: event.target.value })
-            }
+            onValueChange={(operator) => {
+              if (operator == null) return
+              onChange({ ...value, operator })
+            }}
+            items={[
+              { value: "LESS_THAN", label: "Less than" },
+              { value: "LESS_THAN_OR_EQUAL", label: "At most" },
+              { value: "GREATER_THAN", label: "Greater than" },
+              { value: "GREATER_THAN_OR_EQUAL", label: "At least" },
+              { value: "EQUAL", label: "Equals" },
+            ]}
           >
-            <NativeSelectOption value="LESS_THAN">Less than</NativeSelectOption>
-            <NativeSelectOption value="LESS_THAN_OR_EQUAL">
-              At most
-            </NativeSelectOption>
-            <NativeSelectOption value="GREATER_THAN">
-              Greater than
-            </NativeSelectOption>
-            <NativeSelectOption value="GREATER_THAN_OR_EQUAL">
-              At least
-            </NativeSelectOption>
-            <NativeSelectOption value="EQUAL">Equals</NativeSelectOption>
-          </NativeSelect>
+            <SelectTrigger id="metric-comparison" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="LESS_THAN">Less than</SelectItem>
+              <SelectItem value="LESS_THAN_OR_EQUAL">At most</SelectItem>
+              <SelectItem value="GREATER_THAN">Greater than</SelectItem>
+              <SelectItem value="GREATER_THAN_OR_EQUAL">At least</SelectItem>
+              <SelectItem value="EQUAL">Equals</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
         <LabeledNumber
           label="Threshold"
@@ -2156,21 +2259,25 @@ function MetricEditor({
           <label className="text-xs font-medium" htmlFor="metric-missing-data">
             Missing data
           </label>
-          <NativeSelect
-            id="metric-missing-data"
-            className="mt-2 w-full"
+          <Select
             value={value.missingDataPolicy}
-            onChange={(event) =>
-              onChange({ ...value, missingDataPolicy: event.target.value })
-            }
+            onValueChange={(missingDataPolicy) => {
+              if (missingDataPolicy == null) return
+              onChange({ ...value, missingDataPolicy })
+            }}
+            items={[
+              { value: "FAIL", label: "Fail validation" },
+              { value: "PASS", label: "Allow missing data" },
+            ]}
           >
-            <NativeSelectOption value="FAIL">
-              Fail validation
-            </NativeSelectOption>
-            <NativeSelectOption value="PASS">
-              Allow missing data
-            </NativeSelectOption>
-          </NativeSelect>
+            <SelectTrigger id="metric-missing-data" className="mt-2 h-9 w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="FAIL">Fail validation</SelectItem>
+              <SelectItem value="PASS">Allow missing data</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </div>
       <div className="mt-6 rounded-lg border bg-muted/30 p-4 text-xs text-muted-foreground">
@@ -2262,6 +2369,7 @@ function TemplateValueInput({
   className,
   entries,
   multiline = false,
+  grouped = false,
 }: {
   id: string
   label?: string
@@ -2272,6 +2380,7 @@ function TemplateValueInput({
   className?: string
   entries: VariableCatalogEntry[]
   multiline?: boolean
+  grouped?: boolean
 }) {
   const fieldRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -2328,6 +2437,41 @@ function TemplateValueInput({
       }
     },
   }
+
+  const picker = (
+    <VariablePicker
+      entries={entries}
+      open={pickerOpen}
+      onOpenChange={setPickerOpen}
+      onInsert={insert}
+      label=""
+      triggerClassName={
+        grouped
+          ? "h-full min-h-0 w-10 rounded-none border-0 bg-transparent shadow-none md:min-h-0"
+          : undefined
+      }
+    />
+  )
+
+  if (grouped) {
+    return (
+      <>
+        <InputGroupInput
+          id={id}
+          aria-label={label || "Request field"}
+          {...common}
+          type={type}
+        />
+        <InputGroupAddon
+          align="inline-end"
+          className="h-full shrink-0 border-l border-border p-0 has-[>button]:mr-0"
+        >
+          {picker}
+        </InputGroupAddon>
+      </>
+    )
+  }
+
   return (
     <div className="min-w-0">
       {label ? (
@@ -2354,13 +2498,7 @@ function TemplateValueInput({
             type={type}
           />
         )}
-        <VariablePicker
-          entries={entries}
-          open={pickerOpen}
-          onOpenChange={setPickerOpen}
-          onInsert={insert}
-          label=""
-        />
+        {picker}
       </div>
     </div>
   )
@@ -2490,38 +2628,84 @@ const HTTP_METHODS = [
 
 const REQUEST_SECTION_GROUPS: Array<{
   label: string
-  items: Array<{ value: RequestWorkbenchSection; label: string }>
+  items: Array<{
+    value: RequestWorkbenchSection
+    label: string
+    icon: LucideIcon
+  }>
 }> = [
   {
     label: "Request",
     items: [
-      { value: "params", label: "Params" },
-      { value: "auth", label: "Auth" },
-      { value: "headers", label: "Headers" },
-      { value: "body", label: "Body" },
-      { value: "cookies", label: "Cookies" },
+      { value: "params", label: "Params", icon: ListFilter },
+      { value: "auth", label: "Auth", icon: KeyRound },
+      { value: "headers", label: "Headers", icon: Braces },
+      { value: "body", label: "Body", icon: FileJson },
+      { value: "cookies", label: "Cookies", icon: Cookie },
     ],
   },
   {
     label: "Automation",
     items: [
-      { value: "pre-request", label: "Pre-request" },
-      { value: "extractors", label: "Extractors" },
+      { value: "pre-request", label: "Pre-request", icon: Terminal },
+      { value: "extractors", label: "Extractors", icon: Variable },
     ],
   },
   {
     label: "Checks",
-    items: [{ value: "assertions", label: "Tests" }],
+    items: [{ value: "assertions", label: "Tests", icon: CheckCircle2 }],
   },
   {
     label: "Connection",
     items: [
-      { value: "tls", label: "TLS" },
-      { value: "proxy", label: "Proxy" },
-      { value: "settings", label: "Settings" },
+      { value: "tls", label: "TLS", icon: Shield },
+      { value: "proxy", label: "Proxy", icon: Waypoints },
+      { value: "settings", label: "Settings", icon: SlidersHorizontal },
     ],
   },
 ]
+
+function sectionNavBadge(
+  section: RequestWorkbenchSection,
+  request: RequestDefinition["steps"][number]["request"]
+): { count?: number; active?: boolean } {
+  switch (section) {
+    case "params":
+      return { count: configuredRows(request.params) }
+    case "auth":
+      return { active: request.auth.type !== "none" }
+    case "headers":
+      return { count: configuredRows(request.headers) }
+    case "body":
+      return { active: request.body.type !== "none" }
+    case "cookies":
+      return { count: configuredRows(request.cookies) }
+    case "pre-request":
+      return {
+        count: Number(Boolean(request.preRequestScript.code.trim())),
+      }
+    case "extractors":
+      return {
+        count: request.extractors.filter((item) => item.enabled).length,
+      }
+    case "assertions":
+      return {
+        count:
+          request.assertions.filter((item) => item.enabled).length +
+          Number(Boolean(request.testScript.code.trim())),
+      }
+    case "tls":
+      return {
+        active: Boolean(
+          request.tls.certificateProfileId || request.tls.caProfileId
+        ),
+      }
+    case "proxy":
+      return { active: request.proxy.mode !== "environment" }
+    default:
+      return {}
+  }
+}
 
 function httpMethodClassName(method: string) {
   switch (method) {
@@ -2678,6 +2862,8 @@ const EXTRACTOR_TYPES = [
   "regex",
   "status",
   "timing",
+  "response-size",
+  "body-text",
 ]
 const ASSERTION_TYPES = [
   "status",

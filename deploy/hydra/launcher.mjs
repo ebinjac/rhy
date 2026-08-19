@@ -11,15 +11,24 @@ const role = String(process.env.RHYTHM_SERVICE_ROLE || "")
 const children = new Set()
 let shuttingDown = false
 
-if (role === "frontdoor") {
+if (role === "standalone") {
+  initializeChromiumTrust()
+  start(
+    "rhythm-browser-agent",
+    "node",
+    ["services/browser-agent/server.mjs"],
+    browserEnvironment()
+  )
+  process.env.RHYTHM_BROWSER_RUNNER_URL = "http://127.0.0.1:8091"
+  startScriptRunner(
+    Number(process.env.RHYTHM_SCRIPT_RUNNER_CONCURRENCY || 4)
+  )
+  startAPI("all", "127.0.0.1:18080")
+  startWeb()
+} else if (role === "frontdoor") {
   startScriptRunner(2)
   startAPI("api", "127.0.0.1:18080")
-  start("rhythm-web", "node", ["apps/web/server.mjs"], {
-    ...process.env,
-    HOST: "0.0.0.0",
-    PORT: "8080",
-    RHYTHM_API_URL: "http://127.0.0.1:18080",
-  })
+  startWeb()
 } else if (role === "control") {
   startAPI("control", "0.0.0.0:8080")
 } else if (role === "api-executor") {
@@ -38,7 +47,7 @@ if (role === "frontdoor") {
   startBrowserGateway()
 } else {
   throw new Error(
-    "RHYTHM_SERVICE_ROLE must be frontdoor, control, api-executor, or browser-executor"
+    "RHYTHM_SERVICE_ROLE must be standalone, frontdoor, control, api-executor, or browser-executor"
   )
 }
 
@@ -51,6 +60,15 @@ function startAPI(runtimeRole, address) {
     ...process.env,
     RHYTHM_ROLE: runtimeRole,
     RHYTHM_HTTP_ADDR: address,
+  })
+}
+
+function startWeb() {
+  start("rhythm-web", "node", ["apps/web/server.mjs"], {
+    ...process.env,
+    HOST: "0.0.0.0",
+    PORT: "8080",
+    RHYTHM_API_URL: "http://127.0.0.1:18080",
   })
 }
 
@@ -163,6 +181,7 @@ function browserEnvironment() {
     "NODE_USE_SYSTEM_CA",
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
+    "PLAYWRIGHT_BROWSERS_PATH",
     "RHYTHM_UNRESTRICTED_OUTBOUND",
   ]
   const environment = Object.fromEntries(

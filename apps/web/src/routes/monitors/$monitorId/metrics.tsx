@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router"
 import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { Button } from "@workspace/ui/components/button"
 import { ArrowLeft, History, LoaderCircle, RefreshCw } from "lucide-react"
-import { lazy, Suspense } from "react"
+import { lazy, Suspense, useEffect, useState } from "react"
 
 import type {
   RunContract,
@@ -15,11 +15,13 @@ import {
 } from "@/lib/api-client/monitors"
 
 import type { MetricsWindow } from "@/features/monitors/monitor-metrics-dashboard"
+import { InfoHint } from "@/components/info-hint"
 import { MetricsSkeleton } from "@/components/metrics-skeleton"
 import { PageContainer } from "@/components/page-container"
 import { ProductQueryProvider } from "@/components/product-query-provider"
 
 const windows = ["24h", "7d", "30d", "90d"] as const
+const RUNS_PAGE_SIZE = 50
 const MonitorMetricsDashboard = lazy(
   () => import("@/features/monitors/monitor-metrics-dashboard")
 )
@@ -27,6 +29,8 @@ const MonitorMetricsDashboard = lazy(
 type MetricsData = {
   metrics: RunHistoryMetricsContract
   runs: RunContract[]
+  runsTotal: number
+  runsNextCursor?: string
   window: MetricsWindow
   complete: boolean
 }
@@ -38,7 +42,7 @@ async function loadMetricsSummary(
   const metrics = await getMonitorMetricsSummary({
     data: { monitorId, window },
   })
-  return { runs: [], metrics, window, complete: false }
+  return { runs: [], runsTotal: 0, metrics, window, complete: false }
 }
 
 async function loadMetricsDetails(
@@ -46,14 +50,22 @@ async function loadMetricsDetails(
   window: MetricsWindow,
   summary?: RunHistoryMetricsContract
 ): Promise<MetricsData> {
-  const [runs, points] = await Promise.all([
-    listMonitorRuns({ data: { monitorId } }),
+  const metrics =
+    summary ?? (await getMonitorMetricsSummary({ data: { monitorId, window } }))
+  const [runPage, points] = await Promise.all([
+    listMonitorRuns({
+      data: { monitorId, limit: RUNS_PAGE_SIZE, since: metrics.windowStart },
+    }),
     getMonitorMetricSeries({ data: { monitorId, window, maxPoints: 400 } }),
   ])
-  const metrics =
-    summary ??
-    (await getMonitorMetricsSummary({ data: { monitorId, window } }))
-  return { runs, metrics: { ...metrics, points }, window, complete: true }
+  return {
+    runs: runPage.runs,
+    runsTotal: runPage.total,
+    runsNextCursor: runPage.nextCursor,
+    metrics: { ...metrics, points },
+    window,
+    complete: true,
+  }
 }
 
 export const Route = createFileRoute("/monitors/$monitorId/metrics")({
@@ -113,6 +125,36 @@ function MonitorMetricsContent() {
       : query.error
         ? "Run analytics could not be loaded."
         : ""
+  const [extraRuns, setExtraRuns] = useState<RunContract[]>([])
+  const [runsCursor, setRunsCursor] = useState<string | undefined>()
+  const [loadingMoreRuns, setLoadingMoreRuns] = useState(false)
+
+  useEffect(() => {
+    setExtraRuns([])
+    setRunsCursor(data.runsNextCursor)
+  }, [monitorId, window, data.complete, data.runsNextCursor])
+
+  const runs = data.complete ? [...data.runs, ...extraRuns] : data.runs
+  const runsHasMore = Boolean(runsCursor)
+
+  async function loadMoreRuns() {
+    if (!runsCursor || loadingMoreRuns) return
+    setLoadingMoreRuns(true)
+    try {
+      const next = await listMonitorRuns({
+        data: {
+          monitorId,
+          limit: RUNS_PAGE_SIZE,
+          cursor: runsCursor,
+            since: data.metrics?.windowStart,
+        },
+      })
+      setExtraRuns((current) => [...current, ...next.runs])
+      setRunsCursor(next.nextCursor)
+    } finally {
+      setLoadingMoreRuns(false)
+    }
+  }
 
   function retry() {
     void query.refetch()
@@ -144,8 +186,9 @@ function MonitorMetricsContent() {
             Run analytics
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Target response time, tail latency, reliability, spikes, and Rhythm
-            execution overhead across this monitor&apos;s history.
+            Target response time, HTTP status, tail latency, reliability,
+            spikes, and Rhythm execution overhead across this monitor&apos;s
+            history.
           </p>
         </div>
         <div className="flex flex-col items-start gap-2 sm:items-end">
@@ -168,22 +211,29 @@ function MonitorMetricsContent() {
               </span>
             )}
           </div>
-          <div
-            aria-label="Metrics time range"
-            className="inline-flex rounded-lg border bg-muted/30 p-1"
-          >
-            {windows.map((item) => (
-              <Button
-                key={item}
-                aria-pressed={window === item}
-                className="h-7 px-3 text-xs"
-                onClick={() => void navigate({ search: { window: item } })}
-                size="sm"
-                variant={window === item ? "secondary" : "ghost"}
-              >
-                {item}
-              </Button>
-            ))}
+          <div className="flex items-center gap-1">
+            <div
+              aria-label="Metrics time range"
+              className="inline-flex rounded-lg border bg-muted/30 p-1"
+            >
+              {windows.map((item) => (
+                <Button
+                  key={item}
+                  aria-pressed={window === item}
+                  className="h-7 px-3 text-xs"
+                  onClick={() => void navigate({ search: { window: item } })}
+                  size="sm"
+                  variant={window === item ? "secondary" : "ghost"}
+                >
+                  {item}
+                </Button>
+              ))}
+            </div>
+            <InfoHint title="Metrics window">
+              Percentiles, availability, and charts use completed runs in this
+              lookback. Shorter windows react faster; longer windows stabilize
+              tails.
+            </InfoHint>
           </div>
         </div>
       </div>
@@ -223,7 +273,11 @@ function MonitorMetricsContent() {
           <MonitorMetricsDashboard
             metrics={data.metrics}
             monitorId={monitorId}
-            runs={data.runs}
+            onLoadMoreRuns={() => void loadMoreRuns()}
+            runs={runs}
+            runsHasMore={runsHasMore}
+            runsLoadingMore={loadingMoreRuns}
+            runsTotal={data.runsTotal || data.metrics?.summary?.runCount || 0}
             window={data.window}
           />
         </Suspense>

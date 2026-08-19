@@ -155,3 +155,55 @@ func TestMergeRecipientsPrefersApplicationThenFallback(t *testing.T) {
 		t.Fatalf("unexpected merge order: %#v", got)
 	}
 }
+
+func TestSendDirectEmailUsesConfiguredSMTPAndCC(t *testing.T) {
+	var gotAddr, gotFrom string
+	var gotTo []string
+	var gotMsg []byte
+	service := New(nil, nil, slog.Default())
+	service.ConfigureSMTP(SMTPConfig{Host: "usphx-smtp-qa.axp.com", Port: 25, From: "no-reply@rythm.test.com", FromName: "rythm_support"})
+	service.UseMailSender(func(addr string, a smtp.Auth, from string, to []string, msg []byte) error {
+		gotAddr, gotFrom, gotTo, gotMsg = addr, from, append([]string{}, to...), append([]byte{}, msg...)
+		if a != nil {
+			t.Fatalf("expected no SMTP auth")
+		}
+		return nil
+	})
+	err := service.SendDirectEmail(context.Background(), DirectEmailInput{
+		To:      "ops@example.com",
+		CC:      "copy@example.com",
+		Subject: "SMTP test",
+		Body:    "hello",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAddr != "usphx-smtp-qa.axp.com:25" || gotFrom != "no-reply@rythm.test.com" {
+		t.Fatalf("unexpected envelope: addr=%q from=%q", gotAddr, gotFrom)
+	}
+	if len(gotTo) != 2 || gotTo[0] != "ops@example.com" || gotTo[1] != "copy@example.com" {
+		t.Fatalf("unexpected recipients: %#v", gotTo)
+	}
+	body := string(gotMsg)
+	if !strings.Contains(body, "Subject: SMTP test") || !strings.Contains(body, "Cc: copy@example.com") || !strings.Contains(body, "rythm_support <no-reply@rythm.test.com>") {
+		t.Fatalf("unexpected message: %s", body)
+	}
+}
+
+func TestSendDirectEmailRequiresTo(t *testing.T) {
+	service := New(nil, nil, slog.Default())
+	service.ConfigureSMTP(SMTPConfig{Host: "usphx-smtp-qa.axp.com", From: "no-reply@rythm.test.com"})
+	err := service.SendDirectEmail(context.Background(), DirectEmailInput{Subject: "x"})
+	if err == nil || !strings.Contains(err.Error(), "destination email is required") {
+		t.Fatalf("expected To validation, got %v", err)
+	}
+}
+
+func TestSendDirectEmailRejectsInvalidAddress(t *testing.T) {
+	service := New(nil, nil, slog.Default())
+	service.ConfigureSMTP(SMTPConfig{Host: "usphx-smtp-qa.axp.com", From: "no-reply@rythm.test.com"})
+	err := service.SendDirectEmail(context.Background(), DirectEmailInput{To: "not-an-email"})
+	if err == nil || !strings.Contains(err.Error(), "invalid email") {
+		t.Fatalf("expected invalid email, got %v", err)
+	}
+}

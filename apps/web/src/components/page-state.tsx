@@ -5,6 +5,7 @@ import { ArrowLeft, CircleAlert, RefreshCw } from "lucide-react"
 import { useEffect } from "react"
 
 import { PageContainer } from "@/components/page-container"
+import { reportClientError } from "@/lib/client-error-reporter"
 
 export function RoutePendingState() {
   return (
@@ -29,13 +30,18 @@ export function RouteErrorState({
   reset: () => void
 }) {
   const chunkLoadError = isChunkLoadError(error)
+  const staleRenderError = isRecoverableStaleRenderError(error)
 
   useEffect(() => {
     console.error("Rhythm route error", error)
-    if (chunkLoadError && markChunkRecoveryAttempt()) {
+    reportClientError(error, "route")
+    if (
+      (chunkLoadError || staleRenderError) &&
+      markRecoveryAttempt(chunkLoadError ? "chunk" : "render", error)
+    ) {
       window.location.reload()
     }
-  }, [chunkLoadError, error])
+  }, [chunkLoadError, error, staleRenderError])
 
   return (
     <main className="mx-auto max-w-2xl px-4 py-16 md:px-6">
@@ -46,7 +52,11 @@ export function RouteErrorState({
       </p>
       <div className="mt-6 flex flex-wrap gap-2">
         <Button
-          onClick={chunkLoadError ? () => window.location.reload() : reset}
+          onClick={
+            chunkLoadError || staleRenderError
+              ? () => window.location.reload()
+              : reset
+          }
         >
           <RefreshCw data-icon="inline-start" />
           Retry
@@ -89,7 +99,7 @@ function safeErrorMessage(error: Error) {
     return "Rhythm was updated while this page was open. Reload the page to use the latest application files."
   }
   if (/permission|forbidden|unauthor/i.test(error.message)) {
-    return "You do not have permission to view this resource. Ask an administrator for access."
+    return "Rhythm could not load this resource. Retry once, or go back and open it again."
   }
   if (/not found|404/i.test(error.message)) {
     return "The requested resource was not found. It may have been removed."
@@ -111,7 +121,7 @@ function safeErrorMessage(error: Error) {
   return "Rhythm could not complete this page request. Your data was not changed. Try again."
 }
 
-const chunkRecoveryKey = "rhythm:chunk-recovery"
+const recoveryKeyPrefix = "rhythm:route-recovery"
 
 function isChunkLoadError(error: Error) {
   return /chunkloaderror|loading chunk|dynamically imported module|importing a module script|module script failed|preload.*failed/i.test(
@@ -119,21 +129,41 @@ function isChunkLoadError(error: Error) {
   )
 }
 
-function markChunkRecoveryAttempt() {
+function isRecoverableStaleRenderError(error: Error) {
+  return (
+    error.name === "TypeError" &&
+    /cannot read propert(?:y|ies) of (?:null|undefined)|is not a function|undefined is not an object/i.test(
+      error.message
+    )
+  )
+}
+
+function markRecoveryAttempt(kind: "chunk" | "render", error: Error) {
   try {
     const now = Date.now()
+    const signature = `${kind}:${window.location.pathname}:${error.name}:${error.message}`
+    const key = `${recoveryKeyPrefix}:${hash(signature)}`
     const stored = JSON.parse(
-      window.sessionStorage.getItem(chunkRecoveryKey) ?? "null"
+      window.sessionStorage.getItem(key) ?? "null"
     ) as { count?: number; at?: number } | null
-    const recent = stored?.at && now - stored.at < 60_000
+    const recent = stored?.at && now - stored.at < 5 * 60_000
     const count = recent ? Number(stored?.count ?? 0) : 0
-    if (count >= 2) return false
+    if (count >= 1) return false
     window.sessionStorage.setItem(
-      chunkRecoveryKey,
+      key,
       JSON.stringify({ count: count + 1, at: now })
     )
     return true
   } catch {
     return false
   }
+}
+
+function hash(value: string) {
+  let result = 2166136261
+  for (let index = 0; index < value.length; index += 1) {
+    result ^= value.charCodeAt(index)
+    result = Math.imul(result, 16777619)
+  }
+  return (result >>> 0).toString(36)
 }

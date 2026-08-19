@@ -1,14 +1,41 @@
 name: rhythm
 
+x-rhythm-build: &rhythm-build
+  context: .
+  dockerfile: deploy/local/Dockerfile
+
+x-rhythm-environment: &rhythm-environment
+  RHYTHM_ENVIRONMENT: development
+  RHYTHM_AUTH_MODE: anonymous
+  RHYTHM_ALLOWED_ORIGIN: "*"
+  RHYTHM_UNRESTRICTED_OUTBOUND: "true"
+  RHYTHM_STORAGE_MODE: postgres
+  RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
+  RHYTHM_ARTIFACT_STORE_PROVIDER: minio
+  RHYTHM_ARTIFACT_STORE_URL: http://minio:9000
+  RHYTHM_ARTIFACT_STORE_ACCESS_KEY: rhythm
+  RHYTHM_ARTIFACT_STORE_SECRET_KEY: rhythm-local-artifacts
+  RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "true"
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "true"
+  RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
+  RHYTHM_BROWSER_RUNNER_URL: http://rhythm-browser-executor:8080
+  RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
+  RHYTHM_SECRETS_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
+  RHYTHM_ELF_BOOTSTRAP_URL: ${RHYTHM_ELF_BOOTSTRAP_URL:-}
+  # Sahara incident ingest. Empty skips dispatch. Example: https://saharaingest-dev.aexp.com/api/v1/events
+  RHYTHM_SAHARA_INGEST_URL: ${RHYTHM_SAHARA_INGEST_URL:-}
+  RHYTHM_SAHARA_TIMEOUT_MS: ${RHYTHM_SAHARA_TIMEOUT_MS:-}
+  SMTP_HOST: ${SMTP_HOST:-usphx-smtp-qa.axp.com}
+  SMTP_PORT: ${SMTP_PORT:-25}
+  SMTP_FROM: ${SMTP_FROM:-no-reply@rythm.test.com}
+  SMTP_FROM_NAME: ${SMTP_FROM_NAME:-rythm_support}
+
 services:
+  # Local infrastructure. In Hydra these are managed PostgreSQL and AWS S3.
   postgres:
     image: postgres:17-alpine
-    command:
-      - postgres
-      - -c
-      - shared_preload_libraries=pg_stat_statements
-      - -c
-      - pg_stat_statements.track=all
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
     environment:
       POSTGRES_DB: rhythm
       POSTGRES_USER: rhythm
@@ -24,21 +51,6 @@ services:
       retries: 12
     restart: unless-stopped
 
-  redis:
-    profiles: ["redis"]
-    image: redis:8.4-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "${RHYTHM_REDIS_PORT:-56379}:6379"
-    volumes:
-      - rhythm_redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    restart: unless-stopped
-
   minio:
     image: minio/minio:RELEASE.2025-04-22T22-12-26Z
     command: ["server", "/data", "--console-address", ":9001"]
@@ -50,278 +62,122 @@ services:
       - "${RHYTHM_MINIO_CONSOLE_PORT:-19001}:9001"
     volumes:
       - rhythm_minio_data:/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/minio/health/live >/dev/null"]
-      interval: 5s
-      timeout: 3s
-      retries: 18
     restart: unless-stopped
 
-  migrate:
-    image: rhythm-api:local
+  rhythm-frontdoor:
+    image: rhythm-frontdoor:local
     build:
-      context: ./services/api
-    entrypoint: ["/usr/local/bin/rhythm-migrate"]
+      <<: *rhythm-build
+      target: frontdoor
     environment:
-      RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
+      <<: *rhythm-environment
+      RHYTHM_SERVICE_ROLE: frontdoor
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_FRONTDOOR_DATABASE_MAX_CONNS:-16}
+    ports:
+      - "${RHYTHM_WEB_PORT:-3100}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+    init: true
+    restart: unless-stopped
 
-  api:
-    image: rhythm-api:local
+  rhythm-control:
+    image: rhythm-control:local
     build:
-      context: ./services/api
-    environment: &rhythm-api-environment
-      RHYTHM_HTTP_ADDR: :8080
-      RHYTHM_ROLE: ${RHYTHM_API_ROLE:-all}
-      RHYTHM_WORKER_CONCURRENCY: ${RHYTHM_WORKER_CONCURRENCY:-32}
+      <<: *rhythm-build
+      target: control
+    environment:
+      <<: *rhythm-environment
+      RHYTHM_SERVICE_ROLE: control
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_CONTROL_DATABASE_MAX_CONNS:-20}
       RHYTHM_SCHEDULER_BATCH_SIZE: ${RHYTHM_SCHEDULER_BATCH_SIZE:-1000}
       RHYTHM_SCHEDULER_POLL_MS: ${RHYTHM_SCHEDULER_POLL_MS:-500}
-      RHYTHM_TARGET_HOST_CONCURRENCY: ${RHYTHM_TARGET_HOST_CONCURRENCY:-16}
-      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_DATABASE_MAX_CONNS:-20}
-      RHYTHM_DATABASE_MIN_CONNS: ${RHYTHM_DATABASE_MIN_CONNS:-2}
-      RHYTHM_ALLOWED_ORIGIN: "*"
-      RHYTHM_AUTH_MODE: anonymous
-      RHYTHM_DEVELOPMENT_ACTOR_ID: anonymous
-      RHYTHM_STORAGE_MODE: postgres
-      RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
-      RHYTHM_QUEUE_BACKEND: ${RHYTHM_QUEUE_BACKEND:-postgres}
-      RHYTHM_REDIS_URL: ${RHYTHM_REDIS_URL:-}
-      RHYTHM_SCRIPT_RUNNER_URL: http://script-runner:8090
-      RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
-      RHYTHM_BROWSER_RUNNER_URL: http://browser-agent:8091
-      RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
-      RHYTHM_ARTIFACT_STORE_URL: http://minio:9000
-      RHYTHM_ARTIFACT_STORE_ACCESS_KEY: rhythm
-      RHYTHM_ARTIFACT_STORE_SECRET_KEY: rhythm-local-artifacts
-      RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
-
-      RHYTHM_UNRESTRICTED_OUTBOUND: "true"
-      # Optional: point at an external OpenSearch for ELF bootstrap seed. Leave unset when
-      # configuring ELF against a production/shared cluster via the UI.
-      RHYTHM_ELF_BOOTSTRAP_URL: ${RHYTHM_ELF_BOOTSTRAP_URL:-}
-      # 32-byte AES key (base64). Local-only default — replace in any shared environment.
-      RHYTHM_SECRETS_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
-      # External SMTP relay (no auth). Override with SMTP_* / RHYTHM_SMTP_* as needed.
-      SMTP_HOST: ${SMTP_HOST:-usazphx-mrlye2-vip.qa.test.com}
-      SMTP_PORT: ${SMTP_PORT:-25}
-      SMTP_FROM: ${SMTP_FROM:-${SMTP_FROM_EMAIL:-no-reply@rythm.test.com}}
-      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-rythm_support}
-      SMTP_USERNAME: ${SMTP_USERNAME:-}
-      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_TO: ${SMTP_TO:-}
-    ports:
-      - "${RHYTHM_API_PORT:-18080}:8080"
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      script-runner:
-        condition: service_healthy
-      browser-agent:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    init: true
-    restart: unless-stopped
-
-  # Opt-in single-host scale profile. Start with:
-  # RHYTHM_API_ROLE=api docker compose --profile scale up --scale api-worker=4
-  api-worker:
-    profiles: ["scale"]
-    image: rhythm-api:local
-    build:
-      context: ./services/api
-    environment:
-      <<: *rhythm-api-environment
-      RHYTHM_ROLE: worker
-      RHYTHM_HTTP_ADDR: :8080
-      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_WORKER_DATABASE_MAX_CONNS:-12}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      script-runner:
-        condition: service_healthy
-      browser-agent:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    init: true
-    restart: unless-stopped
-
-  scheduler:
-    profiles: ["scale"]
-    image: rhythm-api:local
-    build:
-      context: ./services/api
-    environment:
-      <<: *rhythm-api-environment
-      RHYTHM_ROLE: scheduler
-      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_SCHEDULER_DATABASE_MAX_CONNS:-8}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      script-runner:
-        condition: service_healthy
-      browser-agent:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    init: true
-    restart: unless-stopped
-
-  background-worker:
-    profiles: ["scale"]
-    image: rhythm-api:local
-    build:
-      context: ./services/api
-    environment:
-      <<: *rhythm-api-environment
-      RHYTHM_ROLE: background
-      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_BACKGROUND_DATABASE_MAX_CONNS:-8}
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      script-runner:
-        condition: service_healthy
-      browser-agent:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
-    init: true
-    restart: unless-stopped
-
-  browser-agent:
-    image: rhythm-browser-agent:local
-    build:
-      context: ./services/browser-agent
-    environment:
-      RHYTHM_BROWSER_AGENT_ADDR: 0.0.0.0
-      RHYTHM_BROWSER_AGENT_PORT: "8091"
-      RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
-      RHYTHM_BROWSER_UNRESTRICTED_OUTBOUND: "true"
-      RHYTHM_BROWSER_MAX_CONCURRENCY: "2"
-      # Docker Desktop does not expose the user namespace required by
-      # Chromium's inner sandbox. The surrounding container remains locked
-      # down (non-root, read-only, cap-drop, no-new-privileges, PID/memory).
-      RHYTHM_CHROMIUM_SANDBOX: "false"
-    expose:
-      - "8091"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://localhost:8091/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
-        ]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 5s
       timeout: 3s
       retries: 24
-    read_only: true
-    tmpfs:
-      - /tmp:size=512m,nosuid
-    shm_size: "1gb"
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 256
-    mem_limit: 1536m
     init: true
     restart: unless-stopped
 
-  script-runner:
-    image: rhythm-api:local
+  rhythm-api-executor:
+    image: rhythm-api-executor:local
     build:
-      context: ./services/api
-    entrypoint: ["/usr/local/bin/rhythm-script-runner"]
+      <<: *rhythm-build
+      target: api-executor
     environment:
-      RHYTHM_SCRIPT_RUNNER_ADDR: :8090
-      RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
-      RHYTHM_SCRIPT_RUNNER_CONCURRENCY: ${RHYTHM_SCRIPT_RUNNER_CONCURRENCY:-8}
-    expose:
-      - "8090"
+      <<: *rhythm-environment
+      RHYTHM_SERVICE_ROLE: api-executor
+      RHYTHM_WORKER_CONCURRENCY: ${RHYTHM_WORKER_CONCURRENCY:-256}
+      RHYTHM_SCRIPT_RUNNER_CONCURRENCY: ${RHYTHM_SCRIPT_RUNNER_CONCURRENCY:-16}
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_EXECUTOR_DATABASE_MAX_CONNS:-12}
+      RHYTHM_TARGET_HOST_CONCURRENCY: ${RHYTHM_TARGET_HOST_CONCURRENCY:-16}
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8090/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
       interval: 5s
       timeout: 3s
-      retries: 12
-    read_only: true
-    tmpfs:
-      - /tmp:size=16m,noexec,nosuid
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 64
-    mem_limit: 256m
+      retries: 24
     init: true
     restart: unless-stopped
 
-  web:
-    image: rhythm-web:local
+  rhythm-browser-executor:
+    image: rhythm-browser-executor:local
     build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+      <<: *rhythm-build
+      target: browser-executor
     environment:
-      RHYTHM_API_URL: http://api:8080
-    ports:
-      - "${RHYTHM_WEB_PORT:-3100}:3000"
-    depends_on:
-      api:
-        condition: service_healthy
+      <<: *rhythm-environment
+      RHYTHM_SERVICE_ROLE: browser-executor
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_BROWSER_DATABASE_MAX_CONNS:-8}
+      RHYTHM_BROWSER_MAX_CONCURRENCY: ${RHYTHM_BROWSER_MAX_CONCURRENCY:-2}
+      RHYTHM_CHROMIUM_SANDBOX: "false"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 36
+    shm_size: "1gb"
+    init: true
+    restart: unless-stopped
+
+  # Optional one-container parity profile for presentation and small installs.
+  # It does not replace the default four-service topology. Start it explicitly:
+  # docker compose --profile standalone up -d --build rhythm-standalone
+  rhythm-standalone:
+    profiles: ["standalone"]
+    image: rhythm-standalone:local
+    build:
+      <<: *rhythm-build
+      target: standalone
+    environment:
+      <<: *rhythm-environment
+      RHYTHM_SERVICE_ROLE: standalone
+      RHYTHM_QUEUE_BACKEND: postgres
+      RHYTHM_DATABASE_MAX_CONNS: ${RHYTHM_STANDALONE_DATABASE_MAX_CONNS:-32}
+      RHYTHM_WORKER_CONCURRENCY: ${RHYTHM_STANDALONE_WORKER_CONCURRENCY:-96}
+      RHYTHM_SCRIPT_RUNNER_CONCURRENCY: ${RHYTHM_STANDALONE_SCRIPT_CONCURRENCY:-4}
+      RHYTHM_BROWSER_JOB_CONCURRENCY: ${RHYTHM_STANDALONE_BROWSER_JOB_CONCURRENCY:-1}
+      RHYTHM_BROWSER_MAX_CONCURRENCY: ${RHYTHM_STANDALONE_BROWSER_MAX_CONCURRENCY:-1}
+      RHYTHM_DEPLOYMENT_JOB_CONCURRENCY: ${RHYTHM_STANDALONE_DEPLOYMENT_CONCURRENCY:-2}
+      RHYTHM_TARGET_HOST_CONCURRENCY: ${RHYTHM_STANDALONE_TARGET_HOST_CONCURRENCY:-12}
+      RHYTHM_WORKER_MEMORY_STOP_PERCENT: "75"
+      RHYTHM_EXECUTOR_SLOTS_PER_REPLICA: "96"
+      RHYTHM_EXECUTOR_MIN_REPLICAS: "1"
+      RHYTHM_EXECUTOR_MAX_REPLICAS: "1"
+      RHYTHM_CHROMIUM_SANDBOX: "false"
+    ports:
+      - "${RHYTHM_STANDALONE_WEB_PORT:-3200}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 5s
       timeout: 5s
-      retries: 18
+      retries: 36
+    shm_size: "768mb"
     init: true
-    restart: unless-stopped
-
-  # Opt-in mock HTTP(S) target for API scenarios:
-  #   docker compose --profile test up -d --build test-target
-  # Host scenarios: RHYTHM_TEST_TARGET_URL=http://host.docker.internal:18090
-  # Compose-network runners: RHYTHM_SCENARIO_NETWORK=compose → http://test-target:8080
-  test-target:
-    profiles: ["test"]
-    build: ./services/test-target
-    ports:
-      - "${RHYTHM_TEST_TARGET_PORT:-18090}:8080"
-      - "${RHYTHM_TEST_TARGET_HTTPS_PORT:-18443}:8443"
-    environment:
-      PORT: "8080"
-      HTTPS_PORT: "8443"
-      REQUIRE_CLIENT_CERT: "${RHYTHM_TEST_TARGET_REQUIRE_CLIENT_CERT:-false}"
-    healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null"]
-      interval: 5s
-      timeout: 3s
-      retries: 12
     restart: unless-stopped
 
 volumes:
   rhythm_postgres_data:
-  rhythm_redis_data:
   rhythm_minio_data:
