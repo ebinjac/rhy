@@ -11,18 +11,23 @@ x-rhythm-environment: &rhythm-environment
   RHYTHM_UNRESTRICTED_OUTBOUND: "true"
   RHYTHM_STORAGE_MODE: postgres
   RHYTHM_DATABASE_URL: postgres://rhythm:rhythm-local@postgres:5432/rhythm?sslmode=disable
-  RHYTHM_ARTIFACT_STORE_PROVIDER: minio
-  RHYTHM_ARTIFACT_STORE_URL: http://minio:9000
-  RHYTHM_ARTIFACT_STORE_ACCESS_KEY: rhythm
-  RHYTHM_ARTIFACT_STORE_SECRET_KEY: rhythm-local-artifacts
-  RHYTHM_ARTIFACT_STORE_BUCKET: rhythm-browser-artifacts
-  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: "true"
-  RHYTHM_ARTIFACT_STORE_PATH_STYLE: "true"
+  # Artifact store comes from the gitignored .env (Compose interpolation). MinIO remains in this file as optional local S3.
+  RHYTHM_ARTIFACT_STORE_PROVIDER: ${RHYTHM_ARTIFACT_STORE_PROVIDER:-s3}
+  RHYTHM_ARTIFACT_STORE_URL: ${RHYTHM_ARTIFACT_STORE_URL}
+  RHYTHM_ARTIFACT_STORE_ACCESS_KEY: ${RHYTHM_ARTIFACT_STORE_ACCESS_KEY}
+  RHYTHM_ARTIFACT_STORE_SECRET_KEY: "${RHYTHM_ARTIFACT_STORE_SECRET_KEY}"
+  RHYTHM_ARTIFACT_STORE_BUCKET: ${RHYTHM_ARTIFACT_STORE_BUCKET}
+  RHYTHM_ARTIFACT_STORE_REGION: ${RHYTHM_ARTIFACT_STORE_REGION:-phx}
+  RHYTHM_ARTIFACT_STORE_AUTO_CREATE: ${RHYTHM_ARTIFACT_STORE_AUTO_CREATE:-false}
+  RHYTHM_ARTIFACT_STORE_PATH_STYLE: ${RHYTHM_ARTIFACT_STORE_PATH_STYLE:-true}
   RHYTHM_SCRIPT_RUNNER_TOKEN: rhythm-local-script-token
   RHYTHM_BROWSER_RUNNER_URL: http://rhythm-browser-executor:8080
   RHYTHM_BROWSER_RUNNER_TOKEN: rhythm-local-browser-token
   RHYTHM_SECRETS_ENCRYPTION_KEY: MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=
   RHYTHM_ELF_BOOTSTRAP_URL: ${RHYTHM_ELF_BOOTSTRAP_URL:-}
+  # Optional local Ask Rhythm provider. Encrypted into PostgreSQL on first API start when no AI credential exists.
+  RHYTHM_AI_OPENROUTER_API_KEY: ${RHYTHM_AI_OPENROUTER_API_KEY:-}
+  RHYTHM_AI_OPENROUTER_MODEL: ${RHYTHM_AI_OPENROUTER_MODEL:-dots-studio/dots-3-note-preview:free}
   # Sahara incident ingest. Empty skips dispatch. Example: https://saharaingest-dev.aexp.com/api/v1/events
   RHYTHM_SAHARA_INGEST_URL: ${RHYTHM_SAHARA_INGEST_URL:-}
   RHYTHM_SAHARA_TIMEOUT_MS: ${RHYTHM_SAHARA_TIMEOUT_MS:-}
@@ -32,7 +37,7 @@ x-rhythm-environment: &rhythm-environment
   SMTP_FROM_NAME: ${SMTP_FROM_NAME:-rythm_support}
 
 services:
-  # Local infrastructure. In Hydra these are managed PostgreSQL and AWS S3.
+  # Local infrastructure. PostgreSQL is required. MinIO is optional if you point the artifact store back at it.
   postgres:
     image: postgres:17-alpine
     command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements", "-c", "pg_stat_statements.track=all"]
@@ -144,7 +149,8 @@ services:
 
   # Optional one-container parity profile for presentation and small installs.
   # It does not replace the default four-service topology. Start it explicitly:
-  # docker compose --profile standalone up -d --build rhythm-standalone
+  # docker compose --profile standalone up -d rhythm-standalone
+  # Packaged UI+API is :3200. Frontend HMR is `npm run dev:web` on :3000 (no image rebuild).
   rhythm-standalone:
     profiles: ["standalone"]
     image: rhythm-standalone:local

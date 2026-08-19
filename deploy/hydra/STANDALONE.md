@@ -61,16 +61,20 @@ RHYTHM_DATABASE_URL
 RHYTHM_SECRETS_ENCRYPTION_KEY
 RHYTHM_SCRIPT_RUNNER_TOKEN
 RHYTHM_BROWSER_RUNNER_TOKEN
+RHYTHM_ARTIFACT_STORE_URL
+RHYTHM_ARTIFACT_STORE_ACCESS_KEY
+RHYTHM_ARTIFACT_STORE_SECRET_KEY
 RHYTHM_ARTIFACT_STORE_BUCKET
 RHYTHM_ARTIFACT_STORE_REGION
 RHYTHM_ARTIFACT_STORE_KMS_KEY_ID
 ```
 
 The two runner tokens authenticate loopback-only processes and should be
-different random values. AWS access keys are not stored here; S3 uses Hydra
-workload identity. Application credentials created in Rhythm are encrypted in
-PostgreSQL and selected by plain alias. Hydra Vault is only the bootstrap file
-mount supplied by the platform.
+different random values. Custom S3-compatible endpoints need URL plus static
+access keys in this inventory; leave the URL empty to use AWS SDK endpoint
+resolution and Hydra workload identity. Application credentials created in
+Rhythm are encrypted in PostgreSQL and selected by plain alias. Hydra Vault is
+only the bootstrap file mount supplied by the platform.
 
 ## Database deployment before the pod
 
@@ -81,7 +85,7 @@ independent `.github/workflows/deploy-rhythm-database.yml` workflow:
 2. Generate and review `update-sql`.
 3. Confirm a managed PostgreSQL snapshot/PITR point.
 4. Apply Liquibase `update`.
-5. Confirm `000033_alert_investigation` is present with Liquibase `status`.
+5. Confirm `000034_ai_copilot` is present with Liquibase `status`.
 6. Deploy the standalone image.
 
 The pod uses `/health` for startup and GTM checks. This endpoint is
@@ -171,10 +175,15 @@ with the expanded schema. Database rollback is never automatic or destructive.
 ## Local validation
 
 The normal four-service Compose topology remains the default. The combined
-image is an opt-in profile and uses port 3200 so it can be tested separately:
+image is an opt-in profile and uses port 3200 so it can be tested separately.
+PostgreSQL is not started by the standalone service; migrate before the first
+boot so `000034_ai_copilot` is present.
 
 ```bash
-docker compose --profile standalone up -d --build rhythm-standalone
+docker compose up -d postgres
+docker compose --profile standalone build rhythm-standalone
+docker compose --profile standalone run --rm --entrypoint /opt/rhythm/bin/rhythm-migrate rhythm-standalone
+docker compose --profile standalone up -d rhythm-standalone
 curl -fsS http://localhost:3200/health
 curl -fsS http://localhost:3200/readyz
 docker compose --profile standalone stop rhythm-standalone

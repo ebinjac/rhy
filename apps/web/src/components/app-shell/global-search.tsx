@@ -14,7 +14,9 @@ import { Kbd } from "@workspace/ui/components/kbd"
 import {
   Activity,
   AppWindow,
+  BookOpen,
   Boxes,
+  Bot,
   Braces,
   CircleAlert,
   Clock3,
@@ -72,6 +74,50 @@ const emptyResults: SearchResultsContract = {
   runs: [],
   alerts: [],
   resources: [],
+}
+
+const jumpTargets = [
+  {
+    id: "ask-rhythm",
+    label: "Ask Rhythm",
+    detail: "Investigate with grounded evidence",
+    keywords: "ask rhythm ai copilot chat investigate compass",
+    always: true,
+    icon: Bot,
+    href: { to: "/ai" as const },
+  },
+  {
+    id: "ask-rhythm-settings",
+    label: "Ask Rhythm provider",
+    detail: "Configure Compass360 or OpenRouter",
+    keywords: "ask rhythm ai provider compass openrouter configuration",
+    icon: Settings2,
+    href: { to: "/configuration" as const, search: { kind: "ai" as const } },
+  },
+  {
+    id: "ui-monitoring",
+    label: "UI monitoring",
+    detail: "Browser journeys and visual checks",
+    keywords: "ui monitoring browser journey screenshot",
+    icon: MonitorCheck,
+    href: { to: "/ui-monitoring" as const },
+  },
+  {
+    id: "docs",
+    label: "Documentation",
+    detail: "Product guides and API reference",
+    keywords: "docs documentation help guide",
+    icon: BookOpen,
+    href: { to: "/docs/$" as const, params: { _splat: "" } },
+  },
+]
+
+function matchingJumpTargets(query: string) {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return jumpTargets.filter((item) => item.always)
+  return jumpTargets.filter((item) =>
+    `${item.label} ${item.detail} ${item.keywords}`.toLowerCase().includes(needle)
+  )
 }
 
 function readRecent(): RecentItem[] {
@@ -196,6 +242,11 @@ export function GlobalSearch() {
     window.localStorage.removeItem(RECENT_STORAGE_KEY)
   }
 
+  async function goJump(target: (typeof jumpTargets)[number]) {
+    handleOpenChange(false)
+    await navigate(target.href)
+  }
+
   async function goTo(item: RecentItem) {
     remember(item)
     handleOpenChange(false)
@@ -271,11 +322,13 @@ export function GlobalSearch() {
 
   const showMinHint =
     query.trim().length > 0 && query.trim().length < MIN_QUERY_LENGTH && !loading
+  const jumps = matchingJumpTargets(query)
   const showEmpty =
     !loading &&
     !error &&
     debouncedQuery.length >= MIN_QUERY_LENGTH &&
-    resultCount(results) === 0
+    resultCount(results) === 0 &&
+    matchingJumpTargets(debouncedQuery).length === 0
   const shortcutLabel = isMac ? "⌘K" : "Ctrl K"
 
   return (
@@ -308,7 +361,7 @@ export function GlobalSearch() {
         open={open}
         onOpenChange={handleOpenChange}
         title="Search Rhythm"
-        description="Search monitors, applications, logs, suites, runs, and alerts"
+        description="Search monitors, applications, logs, suites, runs, alerts, and Ask Rhythm"
         className="sm:max-w-xl"
       >
         <Command shouldFilter={false} loop>
@@ -316,7 +369,7 @@ export function GlobalSearch() {
             id={inputId}
             value={query}
             onValueChange={setQuery}
-            placeholder="Search monitors, applications, logs, suites…"
+            placeholder="Search monitors, applications, Ask Rhythm…"
             aria-label="Search Rhythm workspace"
           />
           <CommandList aria-label="Search results">
@@ -343,6 +396,28 @@ export function GlobalSearch() {
               </div>
             ) : null}
 
+            {!loading && !error && jumps.length > 0 ? (
+              <CommandGroup heading="Jump to">
+                {jumps.map((item) => (
+                  <CommandItem
+                    key={item.id}
+                    value={`jump-${item.id}`}
+                    onSelect={() => void goJump(item)}
+                  >
+                    <item.icon aria-hidden="true" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">
+                        {item.label}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {item.detail}
+                      </span>
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
+
             {!loading && !error && !query.trim() && recent.length > 0 ? (
               <CommandGroup heading="Recent">
                 {recent.map((item) => (
@@ -365,7 +440,7 @@ export function GlobalSearch() {
               </CommandGroup>
             ) : null}
 
-            {!loading && !error && !query.trim() && recent.length === 0 ? (
+            {!loading && !error && !query.trim() && recent.length === 0 && jumps.length === 0 ? (
               <div className="px-3 py-8 text-center text-sm text-muted-foreground">
                 Search by name, slug, tags, status, or alert title.
               </div>

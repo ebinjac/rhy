@@ -36,14 +36,20 @@ const NotificationsPanel = lazy(async () => ({
     .NotificationsPanel,
 }))
 const ProxiesPanel = lazy(async () => ({
-  default: (await import("@/features/configuration/proxies-panel")).ProxiesPanel,
+  default: (await import("@/features/configuration/proxies-panel"))
+    .ProxiesPanel,
 }))
 const SecretsPanel = lazy(async () => ({
-  default: (await import("@/features/configuration/secrets-panel")).SecretsPanel,
+  default: (await import("@/features/configuration/secrets-panel"))
+    .SecretsPanel,
 }))
 const TelemetryPanel = lazy(async () => ({
   default: (await import("@/features/configuration/telemetry-panel"))
     .TelemetryPanel,
+}))
+const AIProviderPanel = lazy(async () => ({
+  default: (await import("@/features/configuration/ai-provider-panel"))
+    .AIProviderPanel,
 }))
 
 const kinds = [
@@ -53,8 +59,19 @@ const kinds = [
   "auth",
   "notifications",
   "telemetry",
+  "ai",
 ] as const
 type Kind = (typeof kinds)[number]
+
+const kindLabels: Record<Kind, string> = {
+  secrets: "Secrets",
+  certificates: "Certificates",
+  proxies: "Proxies",
+  auth: "Auth",
+  notifications: "Notifications",
+  telemetry: "Telemetry",
+  ai: "Ask Rhythm",
+}
 
 const profileFields: Partial<
   Record<Kind, Array<{ key: string; label: string; placeholder: string }>>
@@ -89,6 +106,16 @@ export const Route = createFileRoute("/configuration")({
   }),
   loaderDeps: ({ search }) => ({ kind: search.kind }),
   loader: async ({ deps }) => {
+    if (deps.kind === "ai") {
+      return {
+        profiles: [] as Awaited<ReturnType<typeof listConfigurationProfiles>>,
+        secrets: [] as Awaited<ReturnType<typeof listConfigurationProfiles>>,
+        certificates: [] as Awaited<
+          ReturnType<typeof listConfigurationProfiles>
+        >,
+        proxies: [] as Awaited<ReturnType<typeof listConfigurationProfiles>>,
+      }
+    }
     const profiles = await listConfigurationProfiles({
       data: { kind: deps.kind },
     })
@@ -244,260 +271,274 @@ function ConfigurationPage() {
 
   return (
     <>
-      <div aria-live="polite" className="sr-only" role="status">{message}</div>
-    <PageContainer>
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <p className="text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
-            Governed reuse
-          </p>
-          <h1 className="mt-2 font-heading text-2xl font-semibold">
-            Configuration library
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {kind === "secrets"
-              ? "Named credential aliases for monitors, scripts, and integrations — encrypted at rest when stored in Rhythm."
-              : kind === "certificates"
-                ? "Validated TLS identities and trust bundles for secure monitor connections."
-                : kind === "proxies"
-                  ? "Governed outbound routes for monitor and ELF network traffic."
-                  : kind === "auth"
-                    ? "Secret-backed authentication policies for HTTP requests."
-                    : kind === "telemetry"
-                      ? "Governed provider connections and defaults for metric checks."
-                      : kind === "notifications"
-                        ? "SMTP, Slack, and webhook channels for alert delivery. Application destinations are configured per app."
-                        : "Certificate, proxy, authentication, notification, and telemetry profiles."}
-          </p>
+      <div aria-live="polite" className="sr-only" role="status">
+        {message}
+      </div>
+      <PageContainer>
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <p className="text-xs font-medium tracking-[0.14em] text-muted-foreground uppercase">
+              Governed reuse
+            </p>
+            <h1 className="mt-2 font-heading text-2xl font-semibold">
+              Configuration library
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {kind === "secrets"
+                ? "Named credential aliases for monitors, scripts, and integrations — encrypted at rest when stored in Rhythm."
+                : kind === "certificates"
+                  ? "Validated TLS identities and trust bundles for secure monitor connections."
+                  : kind === "proxies"
+                    ? "Governed outbound routes for monitor and ELF network traffic."
+                    : kind === "auth"
+                      ? "Secret-backed authentication policies for HTTP requests."
+                      : kind === "telemetry"
+                        ? "Governed provider connections and defaults for metric checks."
+                        : kind === "notifications"
+                          ? "SMTP, Slack, and webhook channels for alert delivery. Application destinations are configured per app."
+                          : kind === "ai"
+                            ? "Provider-neutral AI connectivity, encrypted credentials, capability verification, and bounded usage controls."
+                            : "Certificate, proxy, authentication, notification, and telemetry profiles."}
+            </p>
+          </div>
+          {kind !== "secrets" &&
+          kind !== "certificates" &&
+          kind !== "proxies" &&
+          kind !== "notifications" &&
+          kind !== "auth" &&
+          kind !== "telemetry" &&
+          kind !== "ai" ? (
+            <Button onClick={() => setOpen(!open)}>
+              <Plus /> New profile
+            </Button>
+          ) : null}
         </div>
-        {kind !== "secrets" &&
-        kind !== "certificates" &&
-        kind !== "proxies" &&
-        kind !== "notifications" &&
-        kind !== "auth" &&
-        kind !== "telemetry" ? (
-          <Button onClick={() => setOpen(!open)}>
-            <Plus /> New profile
-          </Button>
-        ) : null}
-      </div>
-      <div className="mt-7 flex gap-2 overflow-x-auto border-b pb-3">
-        {kinds.map((item) => (
-          <Button
-            key={item}
-            variant={kind === item ? "secondary" : "ghost"}
-            onClick={() => selectKind(item)}
-            className="capitalize"
-          >
-            {item}
-          </Button>
-        ))}
-      </div>
+        <div className="mt-7 flex gap-2 overflow-x-auto border-b pb-3">
+          {kinds.map((item) => (
+            <Button
+              key={item}
+              variant={kind === item ? "secondary" : "ghost"}
+              onClick={() => selectKind(item)}
+            >
+              {kindLabels[item]}
+            </Button>
+          ))}
+        </div>
 
-      {kind === "secrets" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <SecretsPanel
-            profiles={profiles}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : kind === "certificates" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <CertificatesPanel
-            profiles={profiles}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : kind === "proxies" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <ProxiesPanel
-            profiles={profiles}
-            secrets={secrets}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : kind === "notifications" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <NotificationsPanel
-            profiles={profiles}
-            secrets={secrets}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : kind === "auth" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <AuthPanel
-            profiles={profiles}
-            secrets={secrets}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : kind === "telemetry" ? (
-        <Suspense fallback={<ConfigPanelLoading />}>
-          <TelemetryPanel
-            profiles={profiles}
-            secrets={secrets}
-            certificates={certificates}
-            proxies={proxies}
-            onChanged={async () => {
-              await router.invalidate()
-            }}
-          />
-        </Suspense>
-      ) : (
-        <>
-          {open ? (
-            <section className="mt-5 rounded-xl border bg-muted/20 p-5">
-              <div className="grid gap-4 md:grid-cols-2">
-                <Field label="Name">
-                  <Input aria-label="Name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                  />
-                </Field>
-                <Field label="Profile type">
-                  <Input aria-label="Profile type"
-                    value={profileType}
-                    onChange={(event) => setProfileType(event.target.value)}
-                    placeholder={kind === "telemetry" ? "DYNATRACE" : "default"}
-                  />
-                </Field>
-                <Field label="Description" wide>
-                  <Input aria-label="Description"
-                    value={description}
-                    onChange={(event) => setDescription(event.target.value)}
-                  />
-                </Field>
-                {(profileFields[kind as Kind] ?? []).map((field) => (
-                  <Field label={field.label} key={field.key}>
+        {kind === "secrets" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <SecretsPanel
+              profiles={profiles}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "certificates" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <CertificatesPanel
+              profiles={profiles}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "proxies" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <ProxiesPanel
+              profiles={profiles}
+              secrets={secrets}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "notifications" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <NotificationsPanel
+              profiles={profiles}
+              secrets={secrets}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "auth" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <AuthPanel
+              profiles={profiles}
+              secrets={secrets}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "telemetry" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <TelemetryPanel
+              profiles={profiles}
+              secrets={secrets}
+              certificates={certificates}
+              proxies={proxies}
+              onChanged={async () => {
+                await router.invalidate()
+              }}
+            />
+          </Suspense>
+        ) : kind === "ai" ? (
+          <Suspense fallback={<ConfigPanelLoading />}>
+            <AIProviderPanel />
+          </Suspense>
+        ) : (
+          <>
+            {open ? (
+              <section className="mt-5 rounded-xl border bg-muted/20 p-5">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <Field label="Name">
                     <Input
-                      aria-label={field.label}
-                      value={fieldValues[field.key] ?? ""}
-                      onChange={(event) =>
-                        setFieldValues((current) => ({
-                          ...current,
-                          [field.key]: event.target.value,
-                        }))
-                      }
-                      placeholder={field.placeholder}
+                      aria-label="Name"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
                     />
                   </Field>
-                ))}
-                <details className="rounded-lg border md:col-span-2">
-                  <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                    Advanced JSON
-                  </summary>
-                  <div className="border-t p-4">
-                    <p className="mb-2 text-xs text-muted-foreground">
-                      Add provider-specific fields that are not available in the
-                      guided form. Guided values override matching JSON keys.
-                    </p>
-                    <Textarea
-                      aria-label="Advanced configuration JSON"
-                      className="min-h-28 font-mono"
-                      value={config}
-                      onChange={(event) => setConfig(event.target.value)}
+                  <Field label="Profile type">
+                    <Input
+                      aria-label="Profile type"
+                      value={profileType}
+                      onChange={(event) => setProfileType(event.target.value)}
+                      placeholder={
+                        kind === "telemetry" ? "DYNATRACE" : "default"
+                      }
                     />
-                  </div>
-                </details>
-              </div>
-              {message ? (
-                <p className="mt-3 text-xs text-destructive">{message}</p>
-              ) : null}
-              <div className="mt-4 flex justify-end">
-                <Button disabled={pending} onClick={() => void create()}>
-                  {pending ? (
-                    <LoaderCircle className="animate-spin" />
-                  ) : (
-                    <Plus />
-                  )}{" "}
-                  {editingId ? "Save changes" : "Create profile"}
-                </Button>
-              </div>
-            </section>
-          ) : null}
-          <div className="mt-6 grid gap-3 md:grid-cols-2">
-            {profiles.map((profile) => (
-              <article className="rounded-xl border p-5" key={profile.id}>
-                <div className="flex items-start gap-3">
-                  <div className="grid size-9 place-items-center rounded-lg bg-muted">
-                    <Boxes className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <h2 className="truncate font-medium">{profile.name}</h2>
-                      <Badge variant="secondary">{profile.profileType}</Badge>
+                  </Field>
+                  <Field label="Description" wide>
+                    <Input
+                      aria-label="Description"
+                      value={description}
+                      onChange={(event) => setDescription(event.target.value)}
+                    />
+                  </Field>
+                  {(profileFields[kind as Kind] ?? []).map((field) => (
+                    <Field label={field.label} key={field.key}>
+                      <Input
+                        aria-label={field.label}
+                        value={fieldValues[field.key] ?? ""}
+                        onChange={(event) =>
+                          setFieldValues((current) => ({
+                            ...current,
+                            [field.key]: event.target.value,
+                          }))
+                        }
+                        placeholder={field.placeholder}
+                      />
+                    </Field>
+                  ))}
+                  <details className="rounded-lg border md:col-span-2">
+                    <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
+                      Advanced JSON
+                    </summary>
+                    <div className="border-t p-4">
+                      <p className="mb-2 text-xs text-muted-foreground">
+                        Add provider-specific fields that are not available in
+                        the guided form. Guided values override matching JSON
+                        keys.
+                      </p>
+                      <Textarea
+                        aria-label="Advanced configuration JSON"
+                        className="min-h-28 font-mono"
+                        value={config}
+                        onChange={(event) => setConfig(event.target.value)}
+                      />
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {profile.description || "No description"}
-                    </p>
-                    <p className="mt-3 font-mono text-xs text-muted-foreground">
-                      {profile.id}
-                    </p>
-                    <div className="mt-4 flex flex-wrap gap-2">
-                      <Button
-                        onClick={() => edit(profile)}
-                        size="sm"
-                        variant="outline"
-                      >
-                        <FilePenLine />
-                        Edit
-                      </Button>
-                      <Button
-                        onClick={() => clone(profile)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        <Copy />
-                        Clone
-                      </Button>
-                      <Button
-                        onClick={() => setDeleteTarget(profile)}
-                        size="sm"
-                        variant="ghost"
-                      >
-                        <Trash2 />
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
+                  </details>
                 </div>
-              </article>
-            ))}
-            {!profiles.length ? (
-              <div className="col-span-full rounded-xl border border-dashed py-14 text-center">
-                <Boxes className="mx-auto size-7 text-muted-foreground" />
-                <p className="mt-3 font-medium">No {kind} profiles</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Create a governed reusable profile for monitor authors.
-                </p>
-              </div>
+                {message ? (
+                  <p className="mt-3 text-xs text-destructive">{message}</p>
+                ) : null}
+                <div className="mt-4 flex justify-end">
+                  <Button disabled={pending} onClick={() => void create()}>
+                    {pending ? (
+                      <LoaderCircle className="animate-spin" />
+                    ) : (
+                      <Plus />
+                    )}{" "}
+                    {editingId ? "Save changes" : "Create profile"}
+                  </Button>
+                </div>
+              </section>
             ) : null}
-          </div>
-          <DeleteProfileDialog
-            open={Boolean(deleteTarget)}
-            onOpenChange={(next) => {
-              if (!next) setDeleteTarget(null)
-            }}
-            title={`Delete “${deleteTarget?.name ?? "profile"}”?`}
-            description="Monitors that reference this profile may stop working. This cannot be undone."
-            confirming={deleting}
-            onConfirm={() => void confirmDelete()}
-            confirmLabel="Delete profile"
-          />
-        </>
-      )}
-    </PageContainer>
+            <div className="mt-6 grid gap-3 md:grid-cols-2">
+              {profiles.map((profile) => (
+                <article className="rounded-xl border p-5" key={profile.id}>
+                  <div className="flex items-start gap-3">
+                    <div className="grid size-9 place-items-center rounded-lg bg-muted">
+                      <Boxes className="size-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <h2 className="truncate font-medium">{profile.name}</h2>
+                        <Badge variant="secondary">{profile.profileType}</Badge>
+                      </div>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {profile.description || "No description"}
+                      </p>
+                      <p className="mt-3 font-mono text-xs text-muted-foreground">
+                        {profile.id}
+                      </p>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        <Button
+                          onClick={() => edit(profile)}
+                          size="sm"
+                          variant="outline"
+                        >
+                          <FilePenLine />
+                          Edit
+                        </Button>
+                        <Button
+                          onClick={() => clone(profile)}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          <Copy />
+                          Clone
+                        </Button>
+                        <Button
+                          onClick={() => setDeleteTarget(profile)}
+                          size="sm"
+                          variant="ghost"
+                        >
+                          <Trash2 />
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </article>
+              ))}
+              {!profiles.length ? (
+                <div className="col-span-full rounded-xl border border-dashed py-14 text-center">
+                  <Boxes className="mx-auto size-7 text-muted-foreground" />
+                  <p className="mt-3 font-medium">No {kind} profiles</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Create a governed reusable profile for monitor authors.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+            <DeleteProfileDialog
+              open={Boolean(deleteTarget)}
+              onOpenChange={(next) => {
+                if (!next) setDeleteTarget(null)
+              }}
+              title={`Delete “${deleteTarget?.name ?? "profile"}”?`}
+              description="Monitors that reference this profile may stop working. This cannot be undone."
+              confirming={deleting}
+              onConfirm={() => void confirmDelete()}
+              confirmLabel="Delete profile"
+            />
+          </>
+        )}
+      </PageContainer>
     </>
   )
 }

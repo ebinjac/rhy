@@ -42,11 +42,20 @@ import type {
   RunContract,
 } from "@/lib/api-client/contracts"
 import { getOperationalOverview } from "@/lib/api-client/overview"
+import { listConfigurationProfiles } from "@/lib/api-client/monitors"
 import { HintedLabel, InfoHint } from "@/components/info-hint"
 import { formatDateTime, formatFullDate } from "@/lib/format-date"
 
 export const Route = createFileRoute("/")({
-  loader: () => getOperationalOverview(),
+  loader: async () => {
+    const [overview, secrets] = await Promise.all([
+      getOperationalOverview(),
+      listConfigurationProfiles({ data: { kind: "secrets" } }).catch(
+        () => [] as Awaited<ReturnType<typeof listConfigurationProfiles>>
+      ),
+    ])
+    return { ...overview, credentialCount: secrets.length }
+  },
   component: OverviewPage,
 })
 
@@ -73,6 +82,7 @@ function OverviewPage() {
     applications,
     elfConfigured,
     counts,
+    credentialCount,
   } = Route.useLoaderData()
   const [focus, setFocus] = useState<FocusFilter>("attention")
 
@@ -148,7 +158,7 @@ function OverviewPage() {
       id: "configuration",
       label: "Configure credentials and integrations",
       description: "Add the profiles your monitors and log queries depend on.",
-      complete: elfConfigured,
+      complete: credentialCount > 0,
       to: "/configuration",
     },
     {

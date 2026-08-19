@@ -10,6 +10,7 @@ import type {
   DeploymentValidationRunContract,
   DeploymentValidationRunSummaryContract,
 } from "@/lib/api-client/contracts"
+import { API_LOADER_TIMEOUT_MS } from "@/lib/api-client/timeout"
 
 const checkSchema = z
   .object({
@@ -120,7 +121,7 @@ export const listSuites = createServerFn({ method: "GET" }).handler(
   async (): Promise<ValidationSuiteContract[]> => {
     const response = await fetch(`${baseURL()}/api/v1/suites`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     })
     if (!response.ok) throw new Error("Unable to load validation suites")
     return ((await response.json()) as ApiSuccess<ValidationSuiteContract[]>)

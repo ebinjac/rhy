@@ -1,0 +1,108 @@
+---
+title: Compass360 and Ask Rhythm
+description: Configure the provider-neutral Ask Rhythm copilot with Compass360 and understand its evidence, security, and execution boundaries.
+audience:
+  - platform-administrator
+  - sre-operator
+  - application-engineer
+status: preview
+since: 0.0.1
+lastReviewed: 2026-08-19
+owners:
+  - Rhythm Platform
+keywords:
+  - Compass360
+  - AI
+  - copilot
+  - Llama
+  - investigations
+---
+
+Ask Rhythm is a read-only operational copilot. It can explain monitor health,
+run failures, application and service health, active alerts, and ELF evidence
+using Rhythm-owned tools. Choose a specialist (incident, performance,
+application health, or ELF) on the conversation; that choice is stored on the
+active investigation and shapes the next grounded answer.
+
+Compass360 is the production provider. OpenRouter is an OpenAI-compatible
+option for local model routing at `https://openrouter.ai/api/v1`. The
+provider integration uses Rhythm's own normalized chat, tool,
+usage, and error contracts, so no vendor SDK is required.
+
+## Expected outcome
+
+After configuration, **Ask Rhythm** appears in the primary navigation and can
+answer grounded operational questions. A provider outage does not affect
+Rhythm startup, readiness, monitoring, alerts, or normal navigation.
+
+## Prerequisites
+
+- An approved Compass360 model identifier.
+- A Compass360 bearer credential obtained through the internal process.
+- Corporate trust for the configured `aexp.com` endpoint.
+- Administrator access to Rhythm configuration.
+
+## Configure Compass360
+
+1. Open **Configuration**.
+2. Select **Ask Rhythm**.
+3. Keep the provider type set to **Compass360**.
+4. Confirm the environment-specific base URL and `/v1/completions` path.
+5. Enter the approved model identifier.
+6. Enter the bearer credential. Rhythm encrypts it with AES-256-GCM in
+   PostgreSQL and never returns it after saving.
+7. Review concurrent-turn, tool-round, token, and daily request limits.
+8. Select **Save provider**.
+9. Select **Test connection**.
+
+For local OpenRouter, choose **OpenRouter** on the same AI page, keep the
+base URL `https://openrouter.ai/api/v1` and path `/chat/completions`, set
+the default model (for example `dots-studio/dots-3-note-preview:free`),
+enter the bearer token in **Models settings**, and optionally list fallback
+models in **Model router**. You can also seed those values from gitignored
+`.env` with `RHYTHM_AI_OPENROUTER_API_KEY` and `RHYTHM_AI_OPENROUTER_MODEL`.
+
+The test verifies authentication, a minimal sanitized JSON chat completion,
+and tool-call compatibility. It does not send monitor evidence.
+
+<SecurityNote>
+Never paste production credentials into an Ask Rhythm conversation. Provider
+credentials are write-only configuration values. Runtime prompts contain only
+masked, bounded evidence returned by authorized Rhythm read tools.
+</SecurityNote>
+
+## Ask an operational question
+
+1. Open **Ask Rhythm** from the sidebar.
+2. Start a conversation.
+3. Identify a monitor, run, application, service, or alert by name or ID.
+4. Review **Evidence and activity** to see the tools and citations used.
+5. Open the cited Rhythm resources before acting on a recommendation.
+
+Ask Rhythm has no database, arbitrary HTTP, filesystem, credential, raw-log,
+or unrestricted browser-evidence access. Retrieved content is treated as
+untrusted data and cannot add instructions or tools.
+
+## Validation boundary
+
+Ask Rhythm cannot directly run a monitor or change configuration. Validation
+requests must become time-limited proposals. The user reviews and confirms a
+proposal before existing PostgreSQL-backed workers execute it.
+
+## Retention and browser ownership
+
+Sanitized conversations expire after 30 days. In installations without user
+identity, a random HttpOnly browser cookie owns the conversation; only its hash
+is stored. Conversations are not shared between browsers.
+
+## Failure recovery
+
+- **Provider unavailable:** verify that the profile is active, has a stored
+  credential, and names an approved model.
+- **Authentication rejected:** rotate the write-only bearer credential.
+- **TLS or DNS failure:** verify corporate CA and the environment endpoint.
+- **Rate limited:** wait for the provider's retry window or reduce concurrency.
+- **Incomplete response:** the conversation and any completed evidence remain
+  stored; retry once after the provider recovers.
+
+Rhythm health probes intentionally do not call Compass360.

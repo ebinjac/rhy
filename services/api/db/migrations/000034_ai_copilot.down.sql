@@ -1,0 +1,9 @@
+DROP TABLE IF EXISTS rhythm.ai_usage_daily;
+DROP TABLE IF EXISTS rhythm.ai_message_feedback;
+DROP TABLE IF EXISTS rhythm.ai_proactive_insights;
+DROP TABLE IF EXISTS rhythm.ai_validation_runs;
+DROP TABLE IF EXISTS rhythm.ai_action_proposals;
+DROP TABLE IF EXISTS rhythm.ai_tool_calls;
+DROP TABLE IF EXISTS rhythm.ai_messages;
+DROP TABLE IF EXISTS rhythm.ai_conversations;
+DROP TABLE IF EXISTS rhythm.ai_provider_settings;

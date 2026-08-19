@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/rhythm-monitoring/rhythm/internal/agents"
+	copilot "github.com/rhythm-monitoring/rhythm/internal/ai"
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
 	"github.com/rhythm-monitoring/rhythm/internal/api"
 	"github.com/rhythm-monitoring/rhythm/internal/audit"
@@ -126,6 +127,7 @@ func main() {
 	var elfService *elf.Service
 	var dynatraceService *dynatrace.Service
 	var browserMonitorService *browsermonitors.Service
+	var aiService *copilot.Service
 	var retentionService *retention.Service
 	// Public API replicas need the scheduler service for schedule CRUD, while
 	// only control replicas start the scheduling loop below.
@@ -166,6 +168,20 @@ func main() {
 		)
 		investigationService = investigation.New(postgresPool, elfService, dynatraceService, logger)
 		alertService = alerts.New(postgresPool, elfService)
+		openedAI, aiErr := copilot.New(postgresPool, cfg.SecretsEncryptionKey, copilot.NewRhythmTools(monitorService, runService, alertService, elfService))
+		if aiErr != nil {
+			logger.Warn("AI copilot is unavailable", "error", aiErr)
+		} else {
+			aiService = openedAI
+			if cfg.AIOpenRouterAPIKey != "" {
+				seeded, seedErr := aiService.EnsureOpenRouterFromEnv(context.Background(), cfg.AIOpenRouterAPIKey, cfg.AIOpenRouterModel, cfg.DevelopmentActorID)
+				if seedErr != nil {
+					logger.Warn("bootstrap OpenRouter AI provider", "error", seedErr)
+				} else if seeded {
+					logger.Info("seeded OpenRouter AI provider from environment")
+				}
+			}
+		}
 	}
 	if postgresPool != nil && (roleAPI || roleControl || roleBrowser) {
 		browserRunner := browsermonitors.NewHTTPRunner(cfg.BrowserRunnerURL, cfg.BrowserRunnerToken)
@@ -275,6 +291,7 @@ func main() {
 		ELF:                 elfService,
 		Dynatrace:           dynatraceService,
 		BrowserMonitors:     browserMonitorService,
+		AI:                  aiService,
 		Authenticator:       authenticator,
 		AllowedOrigin:       cfg.AllowedOrigin,
 		AllowPrivateTargets: cfg.AllowPrivateTargets,
@@ -338,6 +355,9 @@ func main() {
 	}
 	if retentionService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control" || cfg.RuntimeRole == "background") {
 		retentionService.Start(shutdownContext)
+	}
+	if aiService != nil && (cfg.RuntimeRole == "all" || cfg.RuntimeRole == "control") {
+		aiService.StartRetention(shutdownContext)
 	}
 
 	go func() {

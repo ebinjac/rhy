@@ -26,6 +26,8 @@ func TestRolePermissions(t *testing.T) {
 		{"operator discovers dynatrace resources", RoleOperator, http.MethodPost, "/api/v1/applications/one/environments/two/dynatrace/resources/discover", true},
 		{"operator sends test notifications", RoleOperator, http.MethodPost, "/api/v1/internal/test-notifications/email", true},
 		{"operator cannot edit", RoleOperator, http.MethodPut, "/api/v1/monitors/one/draft", false},
+		{"viewer generates deployment AI report", RoleViewer, http.MethodPost, "/api/v1/ai/deployment-runs/one/report", true},
+		{"operator reads deployment AI report", RoleOperator, http.MethodGet, "/api/v1/ai/deployment-runs/one/report", true},
 		{"administrator controls agents", RoleAdministrator, http.MethodPost, "/api/v1/agents/one/revoke", true},
 	}
 	for _, test := range tests {

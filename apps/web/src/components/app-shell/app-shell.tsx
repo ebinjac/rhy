@@ -44,6 +44,7 @@ import {
   Check,
   SlidersHorizontal,
   Sparkles,
+  Bot,
 } from "lucide-react"
 
 import { ThemeToggle } from "@/components/app-shell/theme-toggle"
@@ -65,16 +66,37 @@ const DeferredAlertsInbox = lazy(() =>
   }))
 )
 
-const navigation = [
-  { label: "Overview", to: "/", icon: Gauge },
-  { label: "Monitors", to: "/monitors", icon: Activity },
-  { label: "UI monitoring", to: "/ui-monitoring", icon: MonitorCheck },
-  { label: "Applications", to: "/applications", icon: AppWindow },
-  { label: "ELF log search", to: "/elf", icon: FileSearch },
-  { label: "Alerts", to: "/alerts", icon: CircleAlert },
-  { label: "Validation suites", to: "/suites", icon: Boxes },
-  { label: "Audit log", to: "/audit", icon: ScrollText },
-  { label: "Configuration", to: "/configuration", icon: Settings2 },
+const navigationGroups = [
+  {
+    label: "Operate",
+    items: [
+      { label: "Overview", to: "/", icon: Gauge },
+      { label: "Alerts", to: "/alerts", icon: CircleAlert },
+      { label: "Ask Rhythm", to: "/ai", icon: Bot },
+    ],
+  },
+  {
+    label: "Synthetics",
+    items: [
+      { label: "API monitors", to: "/monitors", icon: Activity },
+      { label: "UI monitoring", to: "/ui-monitoring", icon: MonitorCheck },
+    ],
+  },
+  {
+    label: "Release",
+    items: [
+      { label: "Applications", to: "/applications", icon: AppWindow },
+      { label: "Validation suites", to: "/suites", icon: Boxes },
+      { label: "ELF log search", to: "/elf", icon: FileSearch },
+    ],
+  },
+  {
+    label: "Govern",
+    items: [
+      { label: "Configuration", to: "/configuration", icon: Settings2 },
+      { label: "Audit log", to: "/audit", icon: ScrollText },
+    ],
+  },
 ] as const
 
 function readSidebarOpenCookie() {
@@ -96,16 +118,21 @@ function AppSidebar() {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   return (
-    <Sidebar collapsible="icon" aria-label="Primary navigation">
-      <SidebarHeader className="border-b border-sidebar-border">
+    <Sidebar
+      collapsible="icon"
+      aria-label="Primary navigation"
+      className="border-sidebar-border"
+    >
+      <SidebarHeader className="border-b border-sidebar-border py-3 group-data-[collapsible=icon]:px-1.5 group-data-[collapsible=icon]:py-2.5">
         <Link
           to="/"
           aria-label="Rhythm home"
-          className="flex h-12 items-center rounded-lg px-2 transition-colors outline-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0 hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          className="flex min-h-12 items-center rounded-lg px-2 outline-none transition-colors hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:min-h-0 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0 group-data-[collapsible=icon]:mx-auto"
           onClick={() => setOpenMobile(false)}
         >
           <RhythmLogo
             decorative
+            onBrand
             className="w-full group-data-[collapsible=icon]:w-auto"
             wordmarkClassName="group-data-[collapsible=icon]:hidden"
           />
@@ -113,27 +140,31 @@ function AppSidebar() {
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {navigation.map((item) => (
-                <SidebarMenuItem key={item.label}>
-                  <SidebarMenuButton
-                    render={<Link aria-label={item.label} to={item.to} />}
-                    isActive={isNavActive(pathname, item.to)}
-                    tooltip={item.label}
-                    className="h-9 rounded-lg text-muted-foreground data-active:text-sidebar-accent-foreground"
-                    onClick={() => setOpenMobile(false)}
-                  >
-                    <item.icon aria-hidden="true" />
-                    <span>{item.label}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {navigationGroups.map((group) => (
+          <SidebarGroup key={group.label}>
+            <SidebarGroupLabel className="text-sidebar-foreground/90">
+              {group.label}
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {group.items.map((item) => (
+                  <SidebarMenuItem key={item.label}>
+                    <SidebarMenuButton
+                      render={<Link aria-label={item.label} to={item.to} />}
+                      isActive={isNavActive(pathname, item.to)}
+                      tooltip={item.label}
+                      className="h-9 rounded-lg text-sidebar-foreground/90 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-active:bg-sidebar-active data-active:text-sidebar-accent-foreground"
+                      onClick={() => setOpenMobile(false)}
+                    >
+                      <item.icon aria-hidden="true" />
+                      <span>{item.label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border">
@@ -142,7 +173,7 @@ function AppSidebar() {
             <SidebarMenuButton
               render={<Link aria-label="Rhythm" to="/rhythm" />}
               tooltip="Rhythm"
-              className="h-9 rounded-lg text-muted-foreground"
+              className="h-9 rounded-lg text-sidebar-foreground/90 hover:text-sidebar-accent-foreground"
               onClick={() => setOpenMobile(false)}
             >
               <Sparkles aria-hidden="true" />
@@ -159,7 +190,7 @@ function AppSidebar() {
                 />
               }
               tooltip="Documentation"
-              className="h-9 rounded-lg text-muted-foreground"
+              className="h-9 rounded-lg text-sidebar-foreground/90 hover:text-sidebar-accent-foreground"
               onClick={() => setOpenMobile(false)}
             >
               <BookOpen aria-hidden="true" />
@@ -201,7 +232,7 @@ function WorkspacePreferences() {
             <SidebarMenuButton
               aria-label="Open display preferences"
               tooltip="Display"
-              className="h-9 rounded-lg text-muted-foreground"
+              className="h-9 rounded-lg text-sidebar-foreground/90 hover:text-sidebar-accent-foreground"
             />
           }
         >
@@ -251,8 +282,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           Skip to content
         </a>
         <AppSidebar />
-        <SidebarInset>
-          <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur md:px-6">
+        <SidebarInset className="h-svh min-h-0 overflow-hidden">
+          <header className="sticky top-0 z-20 flex h-16 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur md:px-6">
             <SidebarTrigger />
             <DeferredShellSearch />
             <div className="ml-auto flex items-center gap-2">
@@ -260,7 +291,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               <ThemeToggle />
             </div>
           </header>
-          <div id="main-content" className="min-w-0 outline-none" tabIndex={-1}>
+          <div
+            id="main-content"
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto outline-none"
+            tabIndex={-1}
+          >
             {children}
           </div>
         </SidebarInset>
@@ -329,10 +364,9 @@ function useIdleReady() {
       cancelIdleCallback?: (id: number) => void
     }
     if (windowWithIdle.requestIdleCallback) {
-      const handle = windowWithIdle.requestIdleCallback(
-        () => setReady(true),
-        { timeout: 1200 }
-      )
+      const handle = windowWithIdle.requestIdleCallback(() => setReady(true), {
+        timeout: 1200,
+      })
       return () => windowWithIdle.cancelIdleCallback?.(handle)
     }
     const handle = window.setTimeout(() => setReady(true), 250)

@@ -433,6 +433,17 @@ async function proxyAPI(incoming, outgoing) {
       existing ? `${existing}, ${forwardedFor}` : forwardedFor
     )
   }
+  const disconnected = new AbortController()
+  incoming.once("aborted", () => disconnected.abort())
+  outgoing.once("close", () => {
+    if (!outgoing.writableFinished) disconnected.abort()
+  })
+  const timeout = AbortSignal.timeout(
+    incoming.url?.startsWith("/api/v1/ai/conversations/") &&
+      incoming.url?.endsWith("/messages")
+      ? 125_000
+      : 30_000
+  )
   const response = await nativeFetch(target, {
     method: incoming.method,
     headers,
@@ -442,7 +453,7 @@ async function proxyAPI(incoming, outgoing) {
         : Readable.toWeb(incoming),
     duplex: "half",
     redirect: "manual",
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.any([timeout, disconnected.signal]),
   })
   await sendResponse(incoming, outgoing, response)
 }

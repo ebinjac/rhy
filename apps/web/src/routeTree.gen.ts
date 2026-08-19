@@ -22,6 +22,7 @@ import { Route as ConfigurationRouteImport } from './routes/configuration'
 import { Route as AuditRouteImport } from './routes/audit'
 import { Route as ApplicationsRouteImport } from './routes/applications'
 import { Route as AlertsRouteImport } from './routes/alerts'
+import { Route as AiRouteImport } from './routes/ai'
 import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as UiMonitoringIndexRouteImport } from './routes/ui-monitoring/index'
@@ -124,6 +125,11 @@ const ApplicationsRoute = ApplicationsRouteImport.update({
 const AlertsRoute = AlertsRouteImport.update({
   id: '/alerts',
   path: '/alerts',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AiRoute = AiRouteImport.update({
+  id: '/ai',
+  path: '/ai',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AgentsRoute = AgentsRouteImport.update({
@@ -335,6 +341,7 @@ const MonitorsMonitorIdRunsRunIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
+  '/ai': typeof AiRoute
   '/alerts': typeof AlertsRouteWithChildren
   '/applications': typeof ApplicationsRouteWithChildren
   '/audit': typeof AuditRoute
@@ -388,6 +395,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
+  '/ai': typeof AiRoute
   '/audit': typeof AuditRoute
   '/configuration': typeof ConfigurationRoute
   '/healthz': typeof HealthzRoute
@@ -435,6 +443,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/agents': typeof AgentsRoute
+  '/ai': typeof AiRoute
   '/alerts': typeof AlertsRouteWithChildren
   '/applications': typeof ApplicationsRouteWithChildren
   '/audit': typeof AuditRoute
@@ -490,6 +499,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/agents'
+    | '/ai'
     | '/alerts'
     | '/applications'
     | '/audit'
@@ -543,6 +553,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/agents'
+    | '/ai'
     | '/audit'
     | '/configuration'
     | '/healthz'
@@ -589,6 +600,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/agents'
+    | '/ai'
     | '/alerts'
     | '/applications'
     | '/audit'
@@ -643,6 +655,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AgentsRoute: typeof AgentsRoute
+  AiRoute: typeof AiRoute
   AlertsRoute: typeof AlertsRouteWithChildren
   ApplicationsRoute: typeof ApplicationsRouteWithChildren
   AuditRoute: typeof AuditRoute
@@ -761,6 +774,13 @@ declare module '@tanstack/react-router' {
       path: '/alerts'
       fullPath: '/alerts'
       preLoaderRoute: typeof AlertsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/ai': {
+      id: '/ai'
+      path: '/ai'
+      fullPath: '/ai'
+      preLoaderRoute: typeof AiRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/agents': {
@@ -1153,6 +1173,7 @@ const UiMonitoringMonitorIdRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AgentsRoute: AgentsRoute,
+  AiRoute: AiRoute,
   AlertsRoute: AlertsRouteWithChildren,
   ApplicationsRoute: ApplicationsRouteWithChildren,
   AuditRoute: AuditRoute,

@@ -69,6 +69,8 @@ type Config struct {
 	DynatraceAllowedHosts   []string
 	SaharaIngestURL         string
 	SaharaTimeoutMS         int
+	AIOpenRouterAPIKey      string
+	AIOpenRouterModel       string
 }
 
 func Load() (Config, error) {
@@ -136,6 +138,8 @@ func Load() (Config, error) {
 		SMTPTo:                splitCSV(firstNonEmpty(os.Getenv("RHYTHM_SMTP_TO"), os.Getenv("SMTP_TO"))),
 		DynatraceAllowedHosts: splitCSV(valueOrDefault("RHYTHM_DYNATRACE_ALLOWED_HOSTS", "amex-prod.live.dynatrace.com,amex.live.dynatrace.com")),
 		SaharaIngestURL:       strings.TrimSpace(os.Getenv("RHYTHM_SAHARA_INGEST_URL")),
+		AIOpenRouterAPIKey:    strings.TrimSpace(os.Getenv("RHYTHM_AI_OPENROUTER_API_KEY")),
+		AIOpenRouterModel:     valueOrDefault("RHYTHM_AI_OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free"),
 	}
 	// AWS must use the SDK's normal regional endpoint unless an endpoint override
 	// was explicitly supplied. MinIO keeps the local Compose default.

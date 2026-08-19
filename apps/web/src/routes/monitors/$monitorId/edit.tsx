@@ -197,9 +197,9 @@ function EditMonitorPage() {
   }
 
   return (
-    <div className="min-h-full">
+    <div className="min-h-full min-w-0 max-w-full">
       <header className="sticky top-0 z-20 border-b bg-background/95 backdrop-blur-sm">
-        <PageContainer padding="header" className="flex items-center gap-3">
+        <PageContainer padding="header" className="flex min-w-0 items-center gap-3">
           <Button
             render={<Link to="/monitors" />}
             nativeButton={false}
@@ -258,7 +258,7 @@ function EditMonitorPage() {
           </Button>
         </PageContainer>
       </header>
-      <PageContainer as="main">
+      <PageContainer as="main" className="min-w-0">
         {state === "error" ? (
           <Alert className="mb-5" variant="destructive">
             <CircleAlert />
@@ -324,15 +324,17 @@ function EditMonitorPage() {
             templates.
           </p>
         </div>
-        <Suspense fallback={<EditorLoading label="Loading request workbench…" />}>
-          <RequestWorkbench
-            value={definition}
-            onChange={change}
-            monitorId={loaded.monitor.id}
-            revisionId={loaded.revision.id}
-            secrets={loaded.secrets}
-          />
-        </Suspense>
+        <div className="min-w-0 max-w-full">
+          <Suspense fallback={<EditorLoading label="Loading request workbench…" />}>
+            <RequestWorkbench
+              value={definition}
+              onChange={change}
+              monitorId={loaded.monitor.id}
+              revisionId={loaded.revision.id}
+              secrets={loaded.secrets}
+            />
+          </Suspense>
+        </div>
         <section className="mt-6 rounded-xl border p-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
             <div className="min-w-56 flex-1">

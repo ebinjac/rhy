@@ -1,0 +1,41 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-08-19T12:27:46.237Z",
+        "reason": "User specified Geist for shadcn Typeset on Ask Rhythm assistant markdown only"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist variable",
+        "createdAt": "2026-08-19T12:27:46.266Z",
+        "reason": "User specified Geist Variable for shadcn Typeset on Ask Rhythm assistant markdown only"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist mono variable",
+        "createdAt": "2026-08-19T12:27:46.293Z",
+        "reason": "User specified Geist Mono for shadcn Typeset on Ask Rhythm assistant markdown only"
+      },
+      {
+        "rule": "overused-font",
+        "value": "instrument sans",
+        "createdAt": "2026-08-19T12:28:02.517Z",
+        "reason": "Incumbent product shell face; user directed to keep Amex-blue + white product identity"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "*",
+        "files": [
+          "apps/web/src/components/app-shell/app-shell.tsx"
+        ],
+        "createdAt": "2026-08-19T12:39:06.939Z",
+        "reason": "Pre-existing sidebar type sizes; Ask Rhythm only needs min-h-0 overflow on this shared parent"
+      }
+    ]
+  }
+}

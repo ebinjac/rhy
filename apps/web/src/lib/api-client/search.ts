@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start"
 import { z } from "zod"
 
 import type { ApiSuccess, SearchResultsContract } from "@/lib/api-client/contracts"
+import { API_LOADER_TIMEOUT_MS } from "@/lib/api-client/timeout"
 
 export const searchWorkspace = createServerFn({ method: "GET" })
   .validator(
@@ -18,7 +19,7 @@ export const searchWorkspace = createServerFn({ method: "GET" })
     })
     const response = await fetch(`${baseURL}/api/v1/search?${params}`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     })
     if (!response.ok) {
       throw new Error(`Rhythm search failed with status ${response.status}`)

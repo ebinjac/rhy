@@ -1,6 +1,23 @@
 @import "tailwindcss" source(none);
+@import "./typeset.css";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
+:root {
+  --font-geist: "Geist Variable", sans-serif;
+  --font-geist-mono: "Geist Mono Variable", monospace;
+}
+
+.typeset-chat {
+  --typeset-font-body: var(--font-geist);
+  --typeset-font-heading: var(--font-geist);
+  --typeset-font-mono: var(--font-geist-mono);
+  --typeset-size: 15px;
+  --typeset-leading: 1.75;
+  --typeset-flow: 1.25em;
+}
 
 @font-face {
   font-family: "Instrument Sans Variable";
@@ -71,18 +88,20 @@
   --chart-4: oklch(0.48 0.08 254);
   --chart-5: oklch(0.7 0.08 254);
   --radius: 0.45rem;
-  --sidebar: oklch(0.975 0.01 254);
-  --sidebar-foreground: oklch(0.18 0.025 254);
-  --sidebar-primary: oklch(0.515 0.172 253.7);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.94 0.02 254);
-  --sidebar-accent-foreground: oklch(0.22 0.03 254);
-  --sidebar-border: oklch(0.9 0.015 254);
-  --sidebar-ring: oklch(0.515 0.172 253.7);
-  /* Rhythm brand mark — Amex blue tile */
+  /* Rhythm brand mark — Amex blue tile (same as light --primary) */
   --rhythm-mark-tile: oklch(0.515 0.172 253.7);
   --rhythm-mark-on: oklch(1 0 0);
   --rhythm-mark-accent: oklch(0.72 0.1 230);
+  /* Branded chrome: darker Amex navy field, same-hue washes (hue locked 253.7 — do not mix white in oklch) */
+  --sidebar: oklch(0.515 0.172 253.7);
+  --sidebar-foreground: var(--rhythm-mark-on);
+  --sidebar-primary: var(--rhythm-mark-on);
+  --sidebar-primary-foreground: var(--sidebar);
+  --sidebar-accent: oklch(0.30 0.11 253.7);
+  --sidebar-accent-foreground: var(--rhythm-mark-on);
+  --sidebar-active: oklch(39.658% 0.15924 260.016);
+  --sidebar-border: oklch(0.46 0.10 253.7);
+  --sidebar-ring: var(--rhythm-mark-on);
 }
 
 .dark {
@@ -116,17 +135,18 @@
   --chart-3: oklch(0.65 0.09 200);
   --chart-4: oklch(0.55 0.08 254);
   --chart-5: oklch(0.78 0.06 254);
-  --sidebar: oklch(0.13 0.006 254);
-  --sidebar-foreground: oklch(0.97 0.004 254);
-  --sidebar-primary: oklch(0.68 0.14 253.7);
-  --sidebar-primary-foreground: oklch(0.12 0.01 254);
-  --sidebar-accent: oklch(0.2 0.008 254);
-  --sidebar-accent-foreground: oklch(0.97 0.004 254);
-  --sidebar-border: oklch(0.97 0.004 254 / 10%);
-  --sidebar-ring: oklch(0.68 0.13 253.7);
   --rhythm-mark-tile: oklch(0.545 0.172 253.7);
   --rhythm-mark-on: oklch(1 0 0);
   --rhythm-mark-accent: oklch(0.78 0.08 230);
+  --sidebar: oklch(54.529% 0.17243 253.731);
+  --sidebar-foreground: var(--rhythm-mark-on);
+  --sidebar-primary: var(--rhythm-mark-on);
+  --sidebar-primary-foreground: var(--sidebar);
+  --sidebar-accent: oklch(0.30 0.11 253.7);
+  --sidebar-accent-foreground: var(--rhythm-mark-on);
+  --sidebar-active: oklch(0.25 0.10 253.7);
+  --sidebar-border: oklch(0.46 0.10 253.7);
+  --sidebar-ring: var(--rhythm-mark-on);
 }
 
 @theme inline {
@@ -172,12 +192,13 @@
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --font-sans: "Instrument Sans Variable", sans-serif;
   --font-heading: "Instrument Sans Variable", sans-serif;
-  --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono",
-    monospace;
+  --font-mono: "Geist Mono Variable", ui-monospace, "SFMono-Regular", Consolas,
+    "Liberation Mono", monospace;
 }
 
 @layer base {

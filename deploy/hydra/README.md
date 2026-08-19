@@ -150,9 +150,13 @@ only where the process requires it.
 must be the same value for all four services in an environment. The browser
 runner token must match between callers and `rhythm-browser-executor`.
 
-S3 uses Hydra workload identity; do not add long-lived AWS access keys. Values
-from the secret file are loaded directly into process memory. The launcher does
-not write an `.env` file and never logs secret values.
+Populate `RHYTHM_ARTIFACT_STORE_URL`, `RHYTHM_ARTIFACT_STORE_ACCESS_KEY`, and
+`RHYTHM_ARTIFACT_STORE_SECRET_KEY` in Vault when using a custom S3-compatible
+endpoint. Leave the URL empty to use AWS SDK endpoint resolution and Hydra
+workload identity. Helm values set `RHYTHM_ARTIFACT_STORE_PATH_STYLE` for
+path-style Amex endpoints; do not commit live access keys. Values from the
+secret file are loaded directly into process memory. The launcher does not
+write an `.env` file and never logs secret values.
 
 This Hydra mount injects infrastructure bootstrap credentials only. It is not
 an application secret provider. Secrets created in Rhythm have one storage

@@ -118,3 +118,70 @@ func TestNormalizeDeploymentReportCoercesNilCollections(t *testing.T) {
 		t.Fatal("report result slices should be non-nil")
 	}
 }
+
+func TestBuildDeploymentReportFactsOmitsSeriesAndLeadsWithFailures(t *testing.T) {
+	started := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	ended := started.Add(90 * time.Second)
+	run := DeploymentRun{
+		ID: "run-1", Status: "FAILED", GateDecision: "BLOCK", FailureReason: "Required monitor regressed",
+		StartedAt: &started, EndedAt: &ended,
+		Deployment: DeploymentDetails{Version: "v2.18.0", Environment: "prod", Commit: "7f31c2a", DeploymentStart: started},
+		Configuration: DeploymentConfiguration{BaselineWindow: "24h", SampleCount: 10},
+		SuiteSnapshot: Suite{Name: "Checkout gate"},
+		Report: DeploymentReport{
+			SuiteName: "Checkout gate", Recommendation: "Block the release.",
+			Reasons:  []string{"Checkout p95 crossed both guardrails."},
+			Warnings: []string{"Optional ELF check failed."},
+			Monitors: []MonitorComparison{
+				{
+					MonitorID: "mon-ok", MonitorName: "Health", Required: true, Classification: "NORMAL",
+					Baseline: Distribution{P95MS: 80, SuccessRate: 100, SampleCount: 10, Series: []MetricSeriesPoint{{ValueMS: 80}}},
+					Post:     Distribution{P95MS: 82, SuccessRate: 100, SampleCount: 10},
+					Samples:  []DeploymentSample{{SampleNumber: 1, Status: "SUCCESS", MonitorRunID: "ok-run"}},
+				},
+				{
+					MonitorID: "mon-fail", MonitorName: "Checkout", Required: true, Classification: "REGRESSED",
+					Reasons: []string{"p95 400ms → 900ms"},
+					Baseline: Distribution{P95MS: 400, SuccessRate: 100, SampleCount: 10},
+					Post:     Distribution{P95MS: 900, SuccessRate: 50, SampleCount: 10, FailureCount: 5},
+					Steps: []StepComparison{
+						{StepName: "Pay", Classification: "REGRESSED", Baseline: Distribution{P95MS: 200}, Post: Distribution{P95MS: 800, FailureCount: 2}},
+						{StepName: "Lookup", Classification: "NORMAL", Baseline: Distribution{P95MS: 40}, Post: Distribution{P95MS: 42}},
+					},
+					Samples: []DeploymentSample{
+						{SampleNumber: 1, Status: "FAILED", FailureCategory: "ASSERTION", MonitorRunID: "fail-run", DurationMS: 910},
+						{SampleNumber: 2, Status: "SUCCESS", MonitorRunID: "ok-run-2"},
+					},
+				},
+			},
+			ELFResults: []CheckResult{{Name: "500 errors", Required: false, Status: "FAILED", FailureReason: "12 hits after deploy", QueryID: "q-1"}},
+		},
+	}
+	facts := BuildDeploymentReportFacts(run)
+	if facts.SuiteName != "Checkout gate" || facts.GateDecision != "BLOCK" || facts.Environment != "prod" {
+		t.Fatalf("unexpected identity: %#v", facts)
+	}
+	if facts.DurationSeconds == nil || *facts.DurationSeconds != 90 {
+		t.Fatalf("duration = %#v", facts.DurationSeconds)
+	}
+	if facts.Counts.FailedMonitors != 1 || facts.Counts.FailedELF != 1 {
+		t.Fatalf("counts = %#v", facts.Counts)
+	}
+	if len(facts.Monitors) != 2 || facts.Monitors[0].Name != "Checkout" {
+		t.Fatalf("failed monitors should sort first: %#v", facts.Monitors)
+	}
+	if len(facts.Monitors[0].FailedSteps) != 1 || facts.Monitors[0].FailedSteps[0].Name != "Pay" {
+		t.Fatalf("failed steps = %#v", facts.Monitors[0].FailedSteps)
+	}
+	if facts.Monitors[0].PassedSamples != 1 || len(facts.Monitors[0].FailedSamples) != 1 {
+		t.Fatalf("sample split = passed %d failed %#v", facts.Monitors[0].PassedSamples, facts.Monitors[0].FailedSamples)
+	}
+	body, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatalf("marshal facts: %v", err)
+	}
+	encoded := string(body)
+	if strings.Contains(encoded, `"series"`) || strings.Contains(encoded, "password") {
+		t.Fatalf("facts leaked series or secrets: %s", encoded)
+	}
+}

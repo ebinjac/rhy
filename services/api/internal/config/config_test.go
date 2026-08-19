@@ -63,6 +63,21 @@ func TestPostgresStorageDefaultsToPostgresQueueAndAnonymousUnrestrictedAccess(t 
 	}
 }
 
+func TestOpenRouterAIKeyIsOptionalAndNotRequired(t *testing.T) {
+	t.Setenv("RHYTHM_AI_OPENROUTER_API_KEY", "sk-or-v1-local-test")
+	t.Setenv("RHYTHM_AI_OPENROUTER_MODEL", "dots-studio/dots-3-note-preview:free")
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("load configuration: %v", err)
+	}
+	if config.AIOpenRouterAPIKey != "sk-or-v1-local-test" {
+		t.Fatalf("openrouter key=%q", config.AIOpenRouterAPIKey)
+	}
+	if config.AIOpenRouterModel != "dots-studio/dots-3-note-preview:free" {
+		t.Fatalf("openrouter model=%q", config.AIOpenRouterModel)
+	}
+}
+
 func TestSaharaIngestURLIsOptional(t *testing.T) {
 	t.Setenv("RHYTHM_SAHARA_INGEST_URL", "https://saharaingest-dev.aexp.com/api/v1/events")
 	t.Setenv("RHYTHM_SAHARA_TIMEOUT_MS", "8000")

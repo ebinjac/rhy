@@ -13,6 +13,14 @@ import { CircleHelp, Search } from "lucide-react"
 
 const topics = [
   {
+    title: "Ask Rhythm",
+    body: "Read-only operational copilot. It searches monitors, runs, applications, alerts, and ELF queries, then cites the evidence. Choose a specialist on the conversation (incident, performance, application health, or ELF). It cannot run checks or change configuration.",
+  },
+  {
+    title: "UI monitoring",
+    body: "Browser journeys that open pages, click, fill, assert, and capture screenshots. Separate from API monitors. Evidence objects require a configured artifact store.",
+  },
+  {
     title: "API response time",
     body: "The target-facing time: DNS, proxy connection, TCP, TLS, request write, server wait, and download. Queueing, preparation, scripts, extraction, and assertions are shown separately.",
   },
@@ -73,8 +81,8 @@ export function HelpDrawer() {
         <SheetHeader>
           <SheetTitle>Help and glossary</SheetTitle>
           <SheetDescription>
-            Concise explanations for monitoring, logs, and deployment
-            validation.
+            Concise explanations for monitoring, Ask Rhythm, logs, and
+            deployment validation.
           </SheetDescription>
         </SheetHeader>
         <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6">

@@ -184,6 +184,9 @@ func Can(principal Principal, method, path string) bool {
 		}
 		return HasRole(principal, RoleEditor) || HasRole(principal, RoleOperator) || HasRole(principal, RoleViewer)
 	}
+	if strings.HasPrefix(path, "/api/v1/ai/conversations") || strings.HasPrefix(path, "/api/v1/ai/messages/") || strings.HasPrefix(path, "/api/v1/ai/deployment-runs") {
+		return HasRole(principal, RoleEditor) || HasRole(principal, RoleOperator) || HasRole(principal, RoleViewer)
+	}
 	if HasRole(principal, RoleEditor) {
 		if strings.HasPrefix(path, "/api/v1/agents") || strings.HasPrefix(path, "/api/v1/alerts/") || strings.HasPrefix(path, "/api/v1/config/secrets") {
 			return false

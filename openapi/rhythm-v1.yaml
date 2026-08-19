@@ -18,6 +18,7 @@ tags:
   - name: ELF
   - name: Validation suites
   - name: Deployment validation
+  - name: AI copilot
 paths:
   /livez:
     get:
@@ -77,6 +78,165 @@ paths:
                     properties:
                       data: { $ref: "#/components/schemas/Principal" }
         "401": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/settings:
+    get:
+      tags: [AI copilot]
+      operationId: getAISettings
+      summary: Get the active provider-neutral AI configuration without its credential
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Error" }
+    put:
+      tags: [AI copilot]
+      operationId: saveAISettings
+      summary: Save Compass360 or OpenRouter provider settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AIProviderSettingsInput"
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/settings/test:
+    post:
+      tags: [AI copilot]
+      operationId: testAISettings
+      summary: Verify provider authentication, a JSON chat completion, and tool-call compatibility
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "422": { $ref: "#/components/responses/Success" }
+  /api/v1/ai/capabilities:
+    get:
+      tags: [AI copilot]
+      operationId: getAICapabilities
+      summary: Get normalized capabilities of the active provider
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "428": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/conversations:
+    get:
+      tags: [AI copilot]
+      operationId: listAIConversations
+      summary: List sanitized conversations owned by this browser session
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+    post:
+      tags: [AI copilot]
+      operationId: createAIConversation
+      summary: Start a browser-owned AI investigation
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, maxLength: 120 }
+                contextType: { type: string }
+                contextId: { type: string }
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+  /api/v1/ai/conversations/{conversationId}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      tags: [AI copilot]
+      operationId: getAIConversation
+      summary: Get one sanitized conversation and its retained messages
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+    delete:
+      tags: [AI copilot]
+      operationId: deleteAIConversation
+      summary: Delete a conversation owned by this browser session
+      responses:
+        "204": { description: Conversation deleted }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      tags: [AI copilot]
+      operationId: updateAIConversation
+      summary: Update the specialist or resource context for a conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contextType: { type: string }
+                contextId: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/conversations/{conversationId}/messages:
+    post:
+      tags: [AI copilot]
+      operationId: sendAIMessage
+      summary: Send a grounded Ask Rhythm question and receive a JSON chat completion
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, minLength: 1, maxLength: 32768 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "428": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/messages/{messageId}/feedback:
+    post:
+      tags: [AI copilot]
+      operationId: saveAIMessageFeedback
+      summary: Record helpful or not-helpful feedback for an owned assistant message
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating: { type: string, enum: [HELPFUL, NOT_HELPFUL] }
+                comment: { type: string, maxLength: 1000 }
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+  /api/v1/ai/deployment-runs/{deploymentRunId}/report:
+    parameters:
+      - name: deploymentRunId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [AI copilot]
+      operationId: getAIDeploymentReport
+      summary: Get the persisted AI deployment validation report for a completed run
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+    post:
+      tags: [AI copilot]
+      operationId: generateAIDeploymentReport
+      summary: Generate a grounded Markdown deployment validation report from server-assembled run facts
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "428": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
   /api/v1/overview:
     get:
       tags: [Health]
@@ -668,6 +828,11 @@ components:
       in: path
       required: true
       schema: { type: string, format: uuid }
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   responses:
     Success:
       description: Successful response
@@ -721,6 +886,50 @@ components:
           type: array
           uniqueItems: true
           items: { type: string, enum: [ADMINISTRATOR, EDITOR, OPERATOR, VIEWER] }
+    AIProviderSettingsInput:
+      type: object
+      additionalProperties: false
+      required:
+        - name
+        - providerType
+        - environment
+        - baseUrl
+        - completionPath
+        - defaultModel
+        - timeoutSeconds
+        - maxConcurrency
+        - maxToolRounds
+        - maxInputTokens
+        - maxOutputTokens
+        - dailyRequestLimit
+        - active
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        providerType: { type: string, enum: [COMPASS360, OPENROUTER, OPENROUTER_DEMO] }
+        environment: { type: string }
+        baseUrl: { type: string, format: uri }
+        completionPath: { type: string, default: /v1/completions, description: OpenAI-compatible path. OpenRouter uses /chat/completions against https://openrouter.ai/api/v1. }
+        defaultModel: { type: string, minLength: 1 }
+        approvedModels:
+          type: array
+          uniqueItems: true
+          description: Model-router fallbacks. OpenRouter sends these as the `models` array after the default model.
+          items: { type: string }
+        requiredCapabilities:
+          type: object
+          additionalProperties: { type: boolean }
+        proxyUrl: { type: string }
+        timeoutSeconds: { type: integer, minimum: 5, maximum: 120 }
+        maxConcurrency: { type: integer, minimum: 1, maximum: 32 }
+        maxToolRounds: { type: integer, minimum: 1, maximum: 8 }
+        maxInputTokens: { type: integer, minimum: 256, maximum: 131072 }
+        maxOutputTokens: { type: integer, minimum: 128, maximum: 32768 }
+        dailyRequestLimit: { type: integer, minimum: 1, maximum: 1000000 }
+        active: { type: boolean }
+        apiKey:
+          type: string
+          writeOnly: true
+          description: Write-only bearer credential encrypted with AES-256-GCM in PostgreSQL.
     OpenSearchAlertServiceAssignmentInput:
       type: object
       additionalProperties: false

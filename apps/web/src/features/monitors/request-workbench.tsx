@@ -11,6 +11,7 @@ import {
 } from "react"
 import type { ReactNode } from "react"
 import { Badge } from "@workspace/ui/components/badge"
+import { CodeEditor, type CodeEditorHandle } from "@/components/code-editor"
 import { EditorLoading } from "@/components/editor-loading"
 import { InfoHint } from "@/components/info-hint"
 import { Button } from "@workspace/ui/components/button"
@@ -294,31 +295,31 @@ export function RequestWorkbench({
   return (
     <section
       aria-labelledby="request-workbench-heading"
-      className="overflow-hidden rounded-xl border bg-background"
+      className="min-w-0 max-w-full overflow-hidden rounded-xl border bg-background"
     >
-      <div className="flex flex-col gap-3 border-b bg-muted/20 p-3 xl:flex-row xl:items-center">
+      <div className="flex min-w-0 flex-col gap-3 border-b bg-muted/20 p-3 xl:flex-row xl:items-center">
         <Tabs
           value={selectedStepID}
           onValueChange={(nextStepId) => {
             if (nextStepId) setSelectedStepID(nextStepId)
           }}
-          className="min-w-0 flex-1 gap-0"
+          className="min-w-0 w-full flex-1 gap-0 overflow-hidden"
         >
-          <div className="min-w-0 overflow-x-auto">
+          <div className="min-w-0 w-full max-w-full overflow-x-auto overscroll-x-contain">
             <TabsList
               aria-label="Workflow steps"
               variant="line"
-              className="h-auto w-max max-w-none justify-start gap-2 py-1"
+              className="h-auto w-max max-w-none flex-nowrap justify-start gap-2 py-1"
             >
               {value.steps.map((candidate, index) => (
                 <TabsTrigger
                   value={candidate.id}
-                  className="h-auto w-40 max-w-[12rem] min-w-0 flex-none shrink-0 justify-start overflow-hidden rounded-lg border bg-background px-3 py-2 text-left whitespace-normal data-active:border-primary data-active:bg-primary/5"
+                  className="h-auto w-40 max-w-[10rem] min-w-0 flex-none shrink-0 justify-start overflow-hidden rounded-lg border bg-background px-3 py-2 text-left data-active:border-primary data-active:bg-primary/5"
                   aria-label={`Step ${index + 1}: ${candidate.name}`}
                   title={candidate.name}
                   key={candidate.id}
                 >
-                  <span className="flex w-full min-w-0 flex-col items-stretch">
+                  <span className="flex w-full min-w-0 flex-col items-stretch overflow-hidden">
                     <span className="text-xs font-medium text-muted-foreground">
                       Step {index + 1}
                     </span>
@@ -331,7 +332,7 @@ export function RequestWorkbench({
             </TabsList>
           </div>
         </Tabs>
-        <div className="grid grid-cols-2 gap-2 sm:flex sm:shrink-0">
+        <div className="grid min-w-0 grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:justify-end">
           <VariableCatalogSheet entries={variableCatalog} />
           <Button
             type="button"
@@ -416,7 +417,7 @@ export function RequestWorkbench({
           onChange={(metric) => updateStep({ metric })}
         />
       ) : (
-        <div>
+        <div className="min-w-0 max-w-full overflow-hidden">
           <div className="p-3">
             <InputGroup className="h-11 w-full min-w-0 items-stretch overflow-hidden rounded-lg border-border">
               <label
@@ -514,7 +515,7 @@ export function RequestWorkbench({
               if (section) setActiveSection(section as RequestWorkbenchSection)
             }}
             orientation="vertical"
-            className="flex-col gap-0 border-t lg:flex-row"
+            className="min-w-0 max-w-full flex-col gap-0 overflow-hidden border-t lg:flex-row"
           >
             <div className="border-b p-3 lg:hidden">
               <label
@@ -587,7 +588,7 @@ export function RequestWorkbench({
               </TabsList>
             </div>
 
-            <div className="min-w-0 flex-1 p-4 md:min-h-[390px] md:p-5">
+            <div className="min-w-0 flex-1 overflow-x-hidden p-4 md:min-h-[390px] md:p-5">
               <TabsContent
                 id={`request-section-${step.id}-params`}
                 tabIndex={-1}
@@ -631,6 +632,7 @@ export function RequestWorkbench({
                 id={`request-section-${step.id}-body`}
                 tabIndex={-1}
                 value="body"
+                className="min-w-0 overflow-hidden"
               >
                 <BodyEditor
                   stepId={step.id}
@@ -658,6 +660,7 @@ export function RequestWorkbench({
                 id={`request-section-${step.id}-pre-request`}
                 tabIndex={-1}
                 value="pre-request"
+                className="min-w-0 overflow-hidden"
               >
                 <Suspense
                   fallback={
@@ -694,6 +697,7 @@ export function RequestWorkbench({
                 id={`request-section-${step.id}-assertions`}
                 tabIndex={-1}
                 value="assertions"
+                className="min-w-0 overflow-hidden"
               >
                 <Suspense
                   fallback={
@@ -1125,6 +1129,13 @@ function AuthEditor({
   )
 }
 
+function bodyLanguage(type: string) {
+  if (type === "json") return "json"
+  if (type === "xml") return "xml"
+  if (type === "graphql") return "graphql"
+  return "plaintext"
+}
+
 function BodyEditor({
   stepId,
   value,
@@ -1136,8 +1147,11 @@ function BodyEditor({
   onChange: (value: RequestDefinition["steps"][0]["request"]["body"]) => void
   variables: VariableCatalogEntry[]
 }) {
+  const editorRef = useRef<CodeEditorHandle>(null)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const content = typeof value.content === "string" ? value.content : ""
   return (
-    <div>
+    <div className="min-w-0 max-w-full overflow-hidden">
       <SectionHeading
         icon={Braces}
         title="Request body"
@@ -1167,22 +1181,46 @@ function BodyEditor({
           This request has no body.
         </div>
       ) : (
-        <div className="mt-4">
-          <label className="sr-only" htmlFor={`request-body-${stepId}`}>
-            Request body
-          </label>
-          <TemplateValueInput
+        <div className="mt-4 min-w-0">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <label
+              className="text-xs font-medium"
+              htmlFor={`request-body-${stepId}`}
+            >
+              Request body
+            </label>
+            <VariablePicker
+              entries={variables}
+              open={pickerOpen}
+              onOpenChange={setPickerOpen}
+              onInsert={(entry, explicit) => {
+                editorRef.current?.insertText(
+                  explicit ? entry.explicitTemplate : entry.template
+                )
+              }}
+              label=""
+            />
+          </div>
+          <div
             id={`request-body-${stepId}`}
-            className="min-h-64 resize-y font-mono text-sm leading-6"
-            multiline
-            value={value.content}
-            onChange={(content) => onChange({ ...value, content })}
-            placeholder={bodyPlaceholder(value.type)}
-            entries={variables}
-          />
+            className="h-[360px] min-w-0 overflow-hidden rounded-xl border"
+          >
+            <CodeEditor
+              key={value.type}
+              ref={editorRef}
+              ariaLabel="Request body"
+              language={bodyLanguage(value.type)}
+              allowTemplates={value.type === "json"}
+              height="100%"
+              placeholder={bodyPlaceholder(value.type)}
+              value={content}
+              onChange={(next) => onChange({ ...value, content: next })}
+              onTemplateTrigger={() => setPickerOpen(true)}
+            />
+          </div>
           <div className="mt-2 flex justify-between text-xs text-muted-foreground">
             <span>Templates and step outputs are supported.</span>
-            <span>{value.content.length} characters</span>
+            <span>{content.length.toLocaleString()} characters</span>
           </div>
         </div>
       )}
@@ -1747,8 +1785,11 @@ function AssertionEditor({
       <OrderedRows empty="No assertions configured. Without assertions, only transport failures fail this step.">
         {rows.map((item, index) => (
           <div
-            className="mb-3 grid gap-3 rounded-lg border bg-muted/15 p-3 last:mb-0 lg:mb-0 lg:grid-cols-[32px_28px_160px_1.2fr_150px_1fr_44px] lg:items-center lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent lg:px-0"
+            className="mb-3 rounded-lg border bg-muted/15 p-3 last:mb-0 lg:mb-0 lg:rounded-none lg:border-x-0 lg:border-t-0 lg:bg-transparent lg:px-0 lg:py-2"
             key={item.id}
+          >
+          <div
+            className="grid gap-3 lg:grid-cols-[32px_28px_160px_1.2fr_150px_1fr_44px] lg:items-center"
           >
             <span className="font-mono text-xs text-muted-foreground">
               {index + 1}
@@ -1784,19 +1825,21 @@ function AssertionEditor({
                 ))}
               </SelectContent>
             </Select>
-            <Input
-              aria-label={`Expression for assertion ${index + 1}`}
-              className="font-mono"
-              value={item.expression}
-              onChange={(event) =>
-                update(item.id, { expression: event.target.value })
-              }
-              placeholder={
-                item.type === "json-schema"
-                  ? "Inline JSON Schema"
-                  : "Selector / source"
-              }
-            />
+            {item.type === "json-schema" ? (
+              <p className="text-xs text-muted-foreground lg:px-1">
+                Schema below
+              </p>
+            ) : (
+              <Input
+                aria-label={`Expression for assertion ${index + 1}`}
+                className="font-mono"
+                value={item.expression}
+                onChange={(event) =>
+                  update(item.id, { expression: event.target.value })
+                }
+                placeholder="Selector / source"
+              />
+            )}
             <Select
               value={item.operator ?? "equals"}
               onValueChange={(operator) => {
@@ -1840,6 +1883,20 @@ function AssertionEditor({
             >
               <Trash2 />
             </Button>
+          </div>
+          {item.type === "json-schema" ? (
+            <div className="mt-3 h-[220px] min-w-0 overflow-hidden rounded-xl border">
+              <CodeEditor
+                ariaLabel={`JSON Schema for assertion ${index + 1}`}
+                language="json"
+                allowTemplates
+                height="100%"
+                placeholder='{\n  "type": "object"\n}'
+                value={item.expression}
+                onChange={(expression) => update(item.id, { expression })}
+              />
+            </div>
+          ) : null}
           </div>
         ))}
       </OrderedRows>

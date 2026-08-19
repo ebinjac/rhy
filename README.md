@@ -7,14 +7,14 @@ Synthetic API monitoring, workflow validation, and deployment assurance.
 Docker Desktop and Docker Compose are the only requirements.
 
 ```bash
-docker compose up -d postgres minio
+docker compose up -d postgres
 docker compose build rhythm-control
 docker compose run --rm --entrypoint /opt/rhythm/bin/rhythm-migrate rhythm-control
 docker compose up --build -d rhythm-frontdoor rhythm-control rhythm-api-executor rhythm-browser-executor
 docker compose ps
 ```
 
-The local application uses the same four runtime boundaries as Hydra: `rhythm-frontdoor`, `rhythm-control`, `rhythm-api-executor`, and `rhythm-browser-executor`. PostgreSQL and MinIO are local stand-ins for managed PostgreSQL and AWS S3. The migration is an ephemeral command, not a fifth running Rhythm service. PostgreSQL is Rhythm's durable queue and coordination store.
+The local application uses the same four runtime boundaries as Hydra: `rhythm-frontdoor`, `rhythm-control`, `rhythm-api-executor`, and `rhythm-browser-executor`. PostgreSQL is the local stand-in for managed PostgreSQL. Browser artifacts go to the S3-compatible store configured in the gitignored `.env` (`RHYTHM_ARTIFACT_STORE_*`; see `.env.example`). Compose still ships a MinIO service if you point those variables back at `http://minio:9000`. The migration is an ephemeral command, not a fifth running Rhythm service. PostgreSQL is Rhythm's durable queue and coordination store.
 
 ```text
 Frontend:   http://localhost:3100
@@ -42,7 +42,45 @@ docker compose down -v # also removes local Rhythm data
 
 Configure ELF connection settings in the product (**ELF → Settings**) against your production or shared OpenSearch URL. Local Compose no longer starts OpenSearch, Dashboards, `elf-seed`, or `demo-log-generator`.
 
-The frontend container runs the production TanStack server. PostgreSQL data and MinIO artifacts are retained in named Docker volumes.
+The frontend container runs the production TanStack server. PostgreSQL data is retained in a named Docker volume. Artifact objects live in the configured S3 bucket.
+
+### Standalone profile (one container)
+
+The combined image is the local analog of the Hydra presentation pod. It still
+needs PostgreSQL and a completed migration. Port 3200 avoids colliding with the
+four-service stack on 3100.
+
+```bash
+docker compose up -d postgres
+docker compose --profile standalone build rhythm-standalone
+docker compose --profile standalone run --rm --entrypoint /opt/rhythm/bin/rhythm-migrate rhythm-standalone
+docker compose --profile standalone up -d rhythm-standalone
+curl -fsS http://localhost:3200/health
+curl -fsS http://localhost:3200/readyz
+```
+
+```text
+Frontend: http://localhost:3200
+API:      http://localhost:3200/api/v1
+Health:   http://localhost:3200/health
+```
+
+UI work does not need an image rebuild. Keep standalone on 3200 and run Vite:
+
+```bash
+npm run dev:web
+```
+
+```text
+HMR UI: http://localhost:3000
+API:    standalone :3200 (Vite proxies /api/v1)
+```
+
+Rebuild `rhythm-standalone` only for Go/API, Dockerfile, or production web packaging changes.
+
+Do not enable monitor schedules until a manual run succeeds. UI monitors also
+need artifact-store variables in `.env` (or MinIO pointed at `http://minio:9000`).
+Optional Ask Rhythm seeding uses `RHYTHM_AI_OPENROUTER_API_KEY` in `.env`.
 
 ## Implemented product surfaces
 
@@ -62,11 +100,12 @@ Primary UI routes:
 
 ```text
 /                     System overview
-/monitors             Monitor operations
+/monitors             API monitor operations
 /monitors/new         New workflow workbench
+/ui-monitoring        Browser journeys
 /alerts               Alert inbox
+/ai                   Ask Rhythm
 /suites               Deployment validation gates
-/agents               Execution agent fleet
 /audit                Audit history
 /configuration        Governed profile library
 ```

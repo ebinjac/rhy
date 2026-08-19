@@ -10,6 +10,7 @@ import type {
   RunContract,
 } from "@/lib/api-client/contracts"
 import { toMonitorSummary } from "@/lib/api-client/monitors"
+import { API_LOADER_TIMEOUT_MS } from "@/lib/api-client/timeout"
 
 export type OverviewContract = {
   monitors: MonitorSummary[]
@@ -42,7 +43,7 @@ export const getOperationalOverview = createServerFn({
   const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
   const response = await fetch(`${baseURL}/api/v1/overview`, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(5000),
+    signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
   })
   if (!response.ok) {
     throw new Error(`Rhythm overview returned ${response.status}`)

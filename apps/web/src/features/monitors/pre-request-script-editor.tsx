@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { OnMount } from "@monaco-editor/react"
 import type * as Monaco from "monaco-editor"
 import { Badge } from "@workspace/ui/components/badge"
-import { EditorLoading } from "@/components/editor-loading"
+import { CodeEditor, useDesktopEditor } from "@/components/code-editor"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { Input } from "@workspace/ui/components/input"
@@ -27,7 +27,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
-import { Textarea } from "@workspace/ui/components/textarea"
 import {
   AlignLeft,
   BookOpen,
@@ -60,10 +59,6 @@ import { normalizeScriptDefinition } from "@/features/monitors/script-definition
 import type { ScriptDefinition } from "@/features/monitors/script-definition"
 import type { VariableCatalogEntry } from "@/features/monitors/variable-catalog"
 import { VariableCatalogSheet } from "@/features/monitors/variable-picker"
-
-const MonacoEditor = lazy(async () => ({
-  default: (await import("@monaco-editor/react")).default,
-}))
 
 type ScriptRequest = {
   method: string
@@ -355,9 +350,7 @@ export function PreRequestScriptEditor({
       : rhythmStarter
   const snippets = isTest ? testSnippets : commonSnippets
   const canPreview = Boolean(monitorId && revisionId)
-  const [mounted, setMounted] = useState(false)
-  const [desktop, setDesktop] = useState(true)
-  const [dark, setDark] = useState(false)
+  const desktop = useDesktopEditor()
   const [running, setRunning] = useState(false)
   const [minimap, setMinimap] = useState(false)
   const [result, setResult] = useState<ScriptResultContract | null>(null)
@@ -376,25 +369,6 @@ export function PreRequestScriptEditor({
     },
     []
   )
-  useEffect(() => {
-    setMounted(true)
-    const media = window.matchMedia("(min-width: 768px)")
-    const update = () => setDesktop(media.matches)
-    const updateTheme = () =>
-      setDark(document.documentElement.classList.contains("dark"))
-    const observer = new MutationObserver(updateTheme)
-    update()
-    updateTheme()
-    media.addEventListener("change", update)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    })
-    return () => {
-      media.removeEventListener("change", update)
-      observer.disconnect()
-    }
-  }, [])
   function change(code: string) {
     onChange(normalizeScriptDefinition({ ...value, code }))
     setResult(null)
@@ -784,47 +758,21 @@ export function PreRequestScriptEditor({
           as part of the complete request workflow.
         </p>
       ) : null}
-      <div className="relative min-h-[360px] bg-muted/25">
-        {mounted && desktop ? (
-          <Suspense fallback={<EditorLoading label="Loading editor…" />}>
-            <MonacoEditor
-              height="420px"
-              language="javascript"
-              theme={dark ? "vs-dark" : "light"}
-              value={value.code}
-              onChange={(code) => change(code ?? "")}
-              onMount={mount}
-              options={{
-                fontSize: 13,
-                lineHeight: 21,
-                fontLigatures: true,
-                minimap: { enabled: minimap },
-                automaticLayout: true,
-                scrollBeyondLastLine: false,
-                wordWrap: "on",
-                padding: { top: 14, bottom: 14 },
-                tabSize: 2,
-                formatOnPaste: true,
-                quickSuggestions: true,
-                accessibilitySupport: "auto",
-              }}
-            />
-          </Suspense>
-        ) : (
-          <div className="p-3">
-            <p className="mb-2 text-xs text-muted-foreground">
-              Compact editor · use a desktop browser for autocomplete and
-              advanced navigation.
-            </p>
-            <Textarea
-              className="min-h-[330px] resize-y bg-background font-mono text-[13px] leading-5 text-foreground"
-              spellCheck={false}
-              value={value.code}
-              onChange={(event) => change(event.target.value)}
-              aria-label={`JavaScript ${isTest ? "Tests" : "pre-request"} code`}
-            />
-          </div>
-        )}
+      <div className="relative min-h-[360px] min-w-0 overflow-hidden bg-muted/25">
+        <CodeEditor
+          ariaLabel={`JavaScript ${isTest ? "Tests" : "pre-request"} code`}
+          language="javascript"
+          height={420}
+          value={value.code}
+          onChange={change}
+          onMount={mount}
+          fallbackHint="Compact editor · use a desktop browser for autocomplete and advanced navigation."
+          options={{
+            minimap: { enabled: minimap },
+            quickSuggestions: true,
+            padding: { top: 14, bottom: 14 },
+          }}
+        />
       </div>
       <div className="flex flex-wrap items-center gap-3 border-t bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
         <span>{value.code.length.toLocaleString()} / 65,536 characters</span>
@@ -1010,23 +958,26 @@ function PackageLibrary({
                   <Trash2 />
                 </Button>
               </div>
-              <Textarea
-                className="mt-3 min-h-40 font-mono text-xs"
-                aria-label={`Package ${item.name || index + 1} CommonJS code`}
-                placeholder={
-                  'module.exports = {\n  functionName() {\n    return "value";\n  },\n};'
-                }
-                value={item.code}
-                onChange={(event) =>
-                  onChange(
-                    packages.map((candidate, candidateIndex) =>
-                      candidateIndex === index
-                        ? { ...candidate, code: event.target.value }
-                        : candidate
+              <div className="mt-3 h-[240px] min-w-0 overflow-hidden rounded-xl border">
+                <CodeEditor
+                  ariaLabel={`Package ${item.name || index + 1} CommonJS code`}
+                  language="javascript"
+                  height="100%"
+                  placeholder={
+                    'module.exports = {\n  functionName() {\n    return "value";\n  },\n};'
+                  }
+                  value={item.code}
+                  onChange={(code) =>
+                    onChange(
+                      packages.map((candidate, candidateIndex) =>
+                        candidateIndex === index
+                          ? { ...candidate, code }
+                          : candidate
+                      )
                     )
-                  )
-                }
-              />
+                  }
+                />
+              </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 {item.code.length.toLocaleString()} / 65,536 characters ·
                 package source is versioned with this monitor revision.

@@ -21,7 +21,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
-import { Textarea } from "@workspace/ui/components/textarea"
 import {
   ArrowLeft,
   Braces,
@@ -33,6 +32,7 @@ import {
   Upload,
 } from "lucide-react"
 
+import { CodeEditor } from "@/components/code-editor"
 import {
   MonitorImportError,
   parseCurlCommand,
@@ -128,8 +128,8 @@ export function MonitorImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[min(760px,calc(100dvh-2rem))] gap-4 overflow-hidden p-0 sm:max-w-3xl">
-        <DialogHeader className="px-5 pt-5 pr-14">
+      <DialogContent className="flex h-[min(92dvh,720px)] max-h-[min(92dvh,720px)] min-h-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
+        <DialogHeader className="shrink-0 px-5 pt-5 pr-14 pb-4">
           <DialogTitle>Import an API workflow</DialogTitle>
           <DialogDescription>
             Bring a Postman Collection v2.0/v2.1 JSON file into one ordered
@@ -140,14 +140,15 @@ export function MonitorImportDialog({
         {draft ? (
           <ImportReview draft={draft} />
         ) : (
-          <div className="min-h-0 px-5">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden px-5">
             <Tabs
+              className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden"
               value={kind}
               onValueChange={(value) => changeKind(value as ImportKind)}
             >
               <TabsList
                 aria-label="Import source"
-                className="h-11 w-full sm:h-8 sm:w-fit"
+                className="h-11 w-full shrink-0 sm:h-8 sm:w-fit"
               >
                 <TabsTrigger className="min-h-10 px-4 sm:min-h-0" value="postman">
                   <FileJson /> Postman collection
@@ -156,10 +157,13 @@ export function MonitorImportDialog({
                   <Braces /> cURL
                 </TabsTrigger>
               </TabsList>
-              <TabsContent value="postman" className="mt-4 space-y-4">
+              <TabsContent
+                value="postman"
+                className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+              >
                 <button
                   type="button"
-                  className="flex min-h-36 w-full flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 px-6 py-5 text-center transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  className="flex min-h-24 w-full shrink-0 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 px-6 py-4 text-center transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => fileInput.current?.click()}
                   onDrop={(event) => {
                     event.preventDefault()
@@ -167,7 +171,7 @@ export function MonitorImportDialog({
                   }}
                   onDragOver={(event) => event.preventDefault()}
                 >
-                  <Upload className="mb-3 size-6 text-primary" />
+                  <Upload className="mb-2 size-5 text-primary" />
                   <span className="font-medium">
                     {fileName || "Choose or drop a Postman collection"}
                   </span>
@@ -183,52 +187,66 @@ export function MonitorImportDialog({
                   onChange={(event) => void readFile(event.target.files?.[0])}
                   aria-label="Choose Postman collection JSON"
                 />
-                <div>
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                   <label
-                    className="text-xs font-medium"
+                    className="mb-2 shrink-0 text-xs font-medium"
                     htmlFor="postman-import-source"
                   >
                     Or paste collection JSON
                   </label>
-                  <Textarea
+                  <div
                     id="postman-import-source"
-                    className="mt-2 min-h-40 resize-y font-mono text-xs"
-                    spellCheck={false}
-                    placeholder={'{\n  "info": { "name": "Payments API" },\n  "item": []\n}'}
-                    value={source}
-                    onChange={(event) => {
-                      setSource(event.target.value)
-                      setFileName("")
-                      setError("")
-                    }}
-                  />
+                    className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border"
+                  >
+                    <CodeEditor
+                      ariaLabel="Postman collection JSON"
+                      language="json"
+                      allowTemplates
+                      height="100%"
+                      placeholder={'{\n  "info": { "name": "Payments API" },\n  "item": []\n}'}
+                      value={source}
+                      onChange={(next) => {
+                        setSource(next)
+                        setFileName("")
+                        setError("")
+                      }}
+                    />
+                  </div>
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">
+                <p className="shrink-0 text-xs leading-5 text-muted-foreground">
                   Postman v3 is a multi-file YAML format. Export or migrate it
                   to Collection v2.1 JSON before importing into Rhythm.
                 </p>
               </TabsContent>
-              <TabsContent value="curl" className="mt-4 space-y-3">
-                <div>
+              <TabsContent
+                value="curl"
+                className="mt-4 flex min-h-0 flex-1 flex-col gap-3 overflow-hidden"
+              >
+                <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
                   <label
-                    className="text-xs font-medium"
+                    className="mb-2 shrink-0 text-xs font-medium"
                     htmlFor="curl-import-source"
                   >
                     cURL command
                   </label>
-                  <Textarea
+                  <div
                     id="curl-import-source"
-                    className="mt-2 min-h-64 resize-y font-mono text-xs"
-                    spellCheck={false}
-                    placeholder={`curl --request POST \\\n  --url https://api.example.com/orders \\\n  --header 'Content-Type: application/json' \\\n  --data '{"amount":1250}'`}
-                    value={source}
-                    onChange={(event) => {
-                      setSource(event.target.value)
-                      setError("")
-                    }}
-                  />
+                    className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-xl border"
+                  >
+                    <CodeEditor
+                      ariaLabel="cURL command"
+                      language="plaintext"
+                      height="100%"
+                      placeholder={`curl --request POST \\\n  --url https://api.example.com/orders \\\n  --header 'Content-Type: application/json' \\\n  --data '{"amount":1250}'`}
+                      value={source}
+                      onChange={(next) => {
+                        setSource(next)
+                        setError("")
+                      }}
+                    />
+                  </div>
                 </div>
-                <p className="text-xs leading-5 text-muted-foreground">
+                <p className="shrink-0 text-xs leading-5 text-muted-foreground">
                   Rhythm parses the command locally—it never executes it.
                   Likely tokens, passwords, cookies, and JSON credentials are
                   replaced with secret placeholders.
@@ -240,7 +258,7 @@ export function MonitorImportDialog({
 
         {error ? (
           <Alert
-            className="mx-5 w-auto shrink-0 rounded-lg"
+            className="mx-5 mt-3 w-auto shrink-0 rounded-lg"
             variant="destructive"
             role="alert"
           >

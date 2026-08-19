@@ -489,7 +489,7 @@ function NewMonitorPage() {
     <form
       onSubmit={handleSubmit}
       noValidate
-      className="min-h-full"
+      className="min-h-full min-w-0 max-w-full"
       aria-busy={isSubmitting || previewing}
     >
       <header className="sticky top-16 z-10 border-b bg-background/95 backdrop-blur-sm">
@@ -607,7 +607,7 @@ function NewMonitorPage() {
         </PageContainer>
       </header>
 
-      <PageContainer as="main" padding="compact">
+      <PageContainer as="main" padding="compact" className="min-w-0">
         {importNotice ? (
           <Alert className="mb-5" role="status" aria-live="polite">
             <Upload />
@@ -1000,7 +1000,7 @@ function NewMonitorPage() {
         </div>
 
         <section
-          className="mt-8"
+          className="mt-8 min-w-0 max-w-full"
           aria-labelledby="request-workbench-heading"
         >
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">

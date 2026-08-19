@@ -23,7 +23,7 @@ spec:
     engine: liquibase
     changelog: dbscripts/main_changelog.xml
     workflow: .github/workflows/deploy-rhythm-database.yml
-    requiredChangeSet: 000033_alert_investigation
+    requiredChangeSet: 000035_ai_deployment_reports
     deployBeforeApplications: true
   services:
     - name: rhythm-standalone

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/rhythm-monitoring/rhythm/internal/agents"
+	copilot "github.com/rhythm-monitoring/rhythm/internal/ai"
 	"github.com/rhythm-monitoring/rhythm/internal/alerts"
 	"github.com/rhythm-monitoring/rhythm/internal/audit"
 	"github.com/rhythm-monitoring/rhythm/internal/authz"
@@ -53,6 +54,7 @@ type Dependencies struct {
 	ELF                 *elf.Service
 	Dynatrace           *dynatrace.Service
 	BrowserMonitors     *browsermonitors.Service
+	AI                  *copilot.Service
 	Authenticator       authz.Authenticator
 	AllowedOrigin       string
 	AllowPrivateTargets bool
@@ -77,6 +79,7 @@ type server struct {
 	elf                 *elf.Service
 	dynatrace           *dynatrace.Service
 	browserMonitors     *browsermonitors.Service
+	ai                  *copilot.Service
 	authenticator       authz.Authenticator
 	allowedOrigin       string
 	allowPrivateTargets bool
@@ -117,13 +120,26 @@ type errorResponse struct {
 type requestIDContextKey struct{}
 
 func NewServer(dependencies Dependencies) http.Handler {
-	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, sahara: dependencies.Sahara, investigation: dependencies.Investigation, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, browserMonitors: dependencies.BrowserMonitors, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}, webhookRateLimiter: dependencies.WebhookRateLimiter}
+	s := &server{logger: dependencies.Logger, monitors: dependencies.Monitors, runs: dependencies.Runs, scheduler: dependencies.Scheduler, alerts: dependencies.Alerts, audit: dependencies.Audit, library: dependencies.Library, suites: dependencies.Suites, agents: dependencies.Agents, notifications: dependencies.Notifications, sahara: dependencies.Sahara, investigation: dependencies.Investigation, scripts: dependencies.Scripts, elf: dependencies.ELF, dynatrace: dependencies.Dynatrace, browserMonitors: dependencies.BrowserMonitors, ai: dependencies.AI, authenticator: dependencies.Authenticator, allowedOrigin: dependencies.AllowedOrigin, allowPrivateTargets: dependencies.AllowPrivateTargets, checks: dependencies.Checks, webhookLimits: map[string]*webhookRateWindow{}, previewCancels: map[string]context.CancelFunc{}, webhookRateLimiter: dependencies.WebhookRateLimiter}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", s.liveness)
 	mux.HandleFunc("GET /readyz", s.readiness)
 	mux.HandleFunc("GET /healthz", s.liveness)
 	mux.HandleFunc("GET /health", s.liveness)
 	mux.HandleFunc("GET /api/v1/session", s.getSession)
+	mux.HandleFunc("GET /api/v1/ai/settings", s.getAISettings)
+	mux.HandleFunc("PUT /api/v1/ai/settings", s.saveAISettings)
+	mux.HandleFunc("POST /api/v1/ai/settings/test", s.testAISettings)
+	mux.HandleFunc("GET /api/v1/ai/capabilities", s.getAICapabilities)
+	mux.HandleFunc("GET /api/v1/ai/conversations", s.listAIConversations)
+	mux.HandleFunc("POST /api/v1/ai/conversations", s.createAIConversation)
+	mux.HandleFunc("GET /api/v1/ai/conversations/{conversationId}", s.getAIConversation)
+	mux.HandleFunc("PATCH /api/v1/ai/conversations/{conversationId}", s.updateAIConversation)
+	mux.HandleFunc("DELETE /api/v1/ai/conversations/{conversationId}", s.deleteAIConversation)
+	mux.HandleFunc("POST /api/v1/ai/conversations/{conversationId}/messages", s.sendAIMessage)
+	mux.HandleFunc("POST /api/v1/ai/messages/{messageId}/feedback", s.saveAIMessageFeedback)
+	mux.HandleFunc("GET /api/v1/ai/deployment-runs/{deploymentRunId}/report", s.getAIDeploymentReport)
+	mux.HandleFunc("POST /api/v1/ai/deployment-runs/{deploymentRunId}/report", s.generateAIDeploymentReport)
 	mux.HandleFunc("GET /api/v1/overview", s.getOverview)
 	mux.HandleFunc("GET /api/v1/monitors", s.listMonitors)
 	mux.HandleFunc("POST /api/v1/monitors", s.createMonitor)

@@ -4,6 +4,7 @@
     "opensearch",
     "opensearch-alerting",
     "dynatrace",
+    "compass360-ai",
     "smtp",
     "slack",
     "generic-webhooks",

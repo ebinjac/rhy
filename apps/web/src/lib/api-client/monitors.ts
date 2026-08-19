@@ -24,6 +24,7 @@ import type {
   ScriptResultContract,
 } from "@/lib/api-client/contracts"
 import { z } from "zod"
+import { API_LOADER_TIMEOUT_MS } from "@/lib/api-client/timeout"
 
 type MonitorListApplication = {
   id: string
@@ -47,11 +48,11 @@ export const listMonitors = createServerFn({ method: "GET" }).handler(
     const [monitorsResponse, applicationsResponse] = await Promise.all([
       fetch(`${baseURL}/api/v1/monitors`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }),
       fetch(`${baseURL}/api/v1/applications`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }),
     ])
     if (!monitorsResponse.ok) {
@@ -123,11 +124,11 @@ export const listMonitorPage = createServerFn({ method: "GET" })
     const [monitorsResponse, applicationsResponse] = await Promise.all([
       fetch(`${baseURL}/api/v1/monitors?${parameters}`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }),
       fetch(`${baseURL}/api/v1/applications`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }),
     ])
     if (!monitorsResponse.ok) {
@@ -180,12 +181,12 @@ export const getMonitorSummary = createServerFn({ method: "GET" })
         `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}`,
         {
           headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
         }
       ),
       fetch(`${baseURL}/api/v1/applications`, {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }),
     ])
     if (!monitorResponse.ok) {
@@ -274,7 +275,7 @@ export const cancelMonitorDraftPreview = createServerFn({ method: "POST" })
           {
             method: "POST",
             headers: { Accept: "application/json" },
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
           }
         )
         if (!response.ok) return { ok: false }
@@ -316,7 +317,7 @@ export const createMonitor = createServerFn({ method: "POST" })
             "enabled" | "schedule"
           >
         ),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       })
       if (!response.ok) {
         const failure = (await response.json()) as ApiErrorResponse
@@ -537,7 +538,7 @@ async function getCreatedMonitor(
     `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}`,
     {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     }
   )
   if (!response.ok) return null
@@ -552,7 +553,7 @@ async function getCreatedMonitorSchedule(
     `${baseURL}/api/v1/monitors/${encodeURIComponent(monitorId)}/schedule`,
     {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     }
   )
   if (response.status === 404) return null
@@ -742,7 +743,7 @@ export const listMonitorRuns = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/runs?${parameters}`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok)
@@ -768,7 +769,7 @@ export const getMonitorMetrics = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics?window=${data.window}&maxPoints=400`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok)
@@ -790,7 +791,7 @@ export const getMonitorMetricsSummary = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/metrics/summary?window=${data.window}`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok)
@@ -848,7 +849,7 @@ export const getRun = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok)
@@ -865,7 +866,7 @@ export const getRunDiagnostics = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/runs/${encodeURIComponent(data.runId)}/diagnostics`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok)
@@ -887,7 +888,7 @@ export const validatePreRequestScript = createServerFn({ method: "POST" })
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ code: data.code }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       })
       if (!response.ok)
         throw new Error(`Unable to validate script (${response.status})`)
@@ -934,7 +935,7 @@ export const previewPreRequestScript = createServerFn({ method: "POST" })
           request: data.request,
           response: data.response,
         }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok) {
@@ -956,7 +957,7 @@ export const cancelRun = createServerFn({ method: "POST" })
         {
           method: "POST",
           headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
         }
       )
       if (response.ok) return { ok: true }
@@ -973,7 +974,7 @@ export const listRecentRuns = createServerFn({ method: "GET" }).handler(
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     const response = await fetch(`${baseURL}/api/v1/runs`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     })
     if (!response.ok) throw new Error("Unable to load recent runs")
     return ((await response.json()) as ApiSuccess<RunContract[]>).data
@@ -991,7 +992,7 @@ export const getMonitorDraft = createServerFn({ method: "GET" })
         `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}`,
         {
           headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
         }
       )
       if (!monitorResponse.ok) throw new Error("Unable to load monitor")
@@ -1003,7 +1004,7 @@ export const getMonitorDraft = createServerFn({ method: "GET" })
         `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/revisions/${encodeURIComponent(monitorEnvelope.data.currentDraftRevisionId)}`,
         {
           headers: { Accept: "application/json" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
         }
       )
       if (!revisionResponse.ok) throw new Error("Unable to load monitor draft")
@@ -1120,7 +1121,7 @@ export const getMonitorSchedule = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/schedule`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (response.status === 404) return null
@@ -1196,7 +1197,7 @@ export const listAlerts = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/alerts?state=${data.state}`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok) throw new Error("Unable to load alerts")
@@ -1223,7 +1224,7 @@ export const mutateAlert = createServerFn({ method: "POST" })
           {
             method: "POST",
             headers: { Accept: "application/json" },
-            signal: AbortSignal.timeout(5000),
+            signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
           }
         )
         if (!response.ok) {
@@ -1248,7 +1249,7 @@ export const listAuditEvents = createServerFn({ method: "GET" }).handler(
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     const response = await fetch(`${baseURL}/api/v1/audit-events`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     })
     if (!response.ok) throw new Error("Unable to load audit history")
     return ((await response.json()) as ApiSuccess<AuditEventContract[]>).data
@@ -1263,7 +1264,7 @@ export const listMonitorRevisions = createServerFn({ method: "GET" })
       `${baseURL}/api/v1/monitors/${encodeURIComponent(data.monitorId)}/revisions`,
       {
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok) throw new Error("Unable to load revisions")
@@ -1281,7 +1282,7 @@ export const restoreMonitorRevision = createServerFn({ method: "POST" })
       {
         method: "POST",
         headers: { Accept: "application/json" },
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
       }
     )
     if (!response.ok) {
@@ -1299,6 +1300,7 @@ const profileKind = z.enum([
   "auth",
   "notifications",
   "telemetry",
+  "ai",
 ])
 export const listConfigurationProfiles = createServerFn({ method: "GET" })
   .validator(z.object({ kind: profileKind }))
@@ -1306,7 +1308,7 @@ export const listConfigurationProfiles = createServerFn({ method: "GET" })
     const baseURL = process.env.RHYTHM_API_URL ?? "http://localhost:8080"
     const response = await fetch(`${baseURL}/api/v1/config/${data.kind}`, {
       headers: { Accept: "application/json" },
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
     })
     if (!response.ok) throw new Error("Unable to load configuration profiles")
     return (
@@ -1347,7 +1349,7 @@ export const createConfigurationProfile = createServerFn({ method: "POST" })
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(API_LOADER_TIMEOUT_MS),
         })
         if (!response.ok) {
           const failure = (await response.json()) as ApiErrorResponse

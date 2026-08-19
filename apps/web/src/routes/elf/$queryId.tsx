@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { createFileRoute, Link, useRouter } from "@tanstack/react-router"
 import { Badge } from "@workspace/ui/components/badge"
-import { EditorLoading } from "@/components/editor-loading"
+import { CodeEditor } from "@/components/code-editor"
 import { Button } from "@workspace/ui/components/button"
 import { Input } from "@workspace/ui/components/input"
 import {
@@ -17,7 +17,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@workspace/ui/components/tabs"
-import { Textarea } from "@workspace/ui/components/textarea"
 import {
   ArrowLeft,
   ArrowRight,
@@ -52,9 +51,6 @@ import { PageContainer } from "@/components/page-container"
 import { DEFAULT_ELF_TIME_FIELD, inspectTimeField } from "@/lib/elf-time-field"
 import { formatDateTime } from "@/lib/format-date"
 
-const MonacoEditor = lazy(async () => ({
-  default: (await import("@monaco-editor/react")).default,
-}))
 export const Route = createFileRoute("/elf/$queryId")({
   loader: async ({ params }) => ({
     ...(await getELFQuery({ data: { queryId: params.queryId } })),
@@ -92,8 +88,6 @@ function ELFWorkbench() {
   const [problems, setProblems] = useState<
     Array<{ path: string; message: string }>
   >([])
-  const [desktop, setDesktop] = useState(false)
-  const [darkEditor, setDarkEditor] = useState(false)
   const [timeFieldOverride, setTimeFieldOverride] = useState<string | null>(
     null
   )
@@ -108,24 +102,6 @@ function ELFWorkbench() {
     }
     previousDetectedTimeField.current = detectedTimeField
   }, [detectedTimeField])
-  useEffect(() => {
-    const media = window.matchMedia("(min-width: 768px)")
-    const sync = () => setDesktop(media.matches)
-    const syncTheme = () =>
-      setDarkEditor(document.documentElement.classList.contains("dark"))
-    sync()
-    syncTheme()
-    const observer = new MutationObserver(syncTheme)
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    })
-    media.addEventListener("change", sync)
-    return () => {
-      media.removeEventListener("change", sync)
-      observer.disconnect()
-    }
-  }, [])
   function body() {
     try {
       return JSON.parse(code) as Record<string, JsonValue>
@@ -530,41 +506,21 @@ function ELFWorkbench() {
                   Format
                 </Button>
               </div>
-              {desktop ? (
-                <Suspense
-                  fallback={<EditorLoading label="Loading query editor…" />}
-                >
-                  <MonacoEditor
-                    height="520px"
-                    language="json"
-                    theme={darkEditor ? "vs-dark" : "light"}
-                    value={code}
-                    onChange={(value) => {
-                      setCode(value ?? "")
-                      setProblems([])
-                    }}
-                    options={{
-                      ariaLabel: "OpenSearch query JSON",
-                      automaticLayout: true,
-                      fontSize: 13,
-                      lineHeight: 21,
-                      minimap: { enabled: false },
-                      scrollBeyondLastLine: false,
-                      wordWrap: "on",
-                      formatOnPaste: true,
-                      padding: { top: 14, bottom: 14 },
-                    }}
-                  />
-                </Suspense>
-              ) : (
-                <Textarea
-                  aria-label="OpenSearch query JSON"
-                  className="min-h-[420px] resize-y rounded-none border-0 font-mono text-xs leading-5"
+              <div className="h-[520px] min-w-0 overflow-hidden">
+                <CodeEditor
+                  ariaLabel="OpenSearch query JSON"
+                  language="json"
+                  height="100%"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  spellCheck={false}
+                  onChange={(next) => {
+                    setCode(next)
+                    setProblems([])
+                  }}
+                  options={{
+                    padding: { top: 14, bottom: 14 },
+                  }}
                 />
-              )}
+              </div>
               <div className="border-t p-4">
                 <ExploreHints onConfigureCheck={() => setMode("check")} />
               </div>

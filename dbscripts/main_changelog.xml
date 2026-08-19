@@ -143,4 +143,12 @@
         <sqlFile path="${migrationRoot}/000033_alert_investigation.up.sql" relativeToChangelogFile="false"/>
         <rollback><sqlFile path="${migrationRoot}/000033_alert_investigation.down.sql" relativeToChangelogFile="false"/></rollback>
     </changeSet>
+    <changeSet id="000034_ai_copilot" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000034_ai_copilot.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000034_ai_copilot.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
+    <changeSet id="000035_ai_deployment_reports" author="rhythm" runInTransaction="true">
+        <sqlFile path="${migrationRoot}/000035_ai_deployment_reports.up.sql" relativeToChangelogFile="false"/>
+        <rollback><sqlFile path="${migrationRoot}/000035_ai_deployment_reports.down.sql" relativeToChangelogFile="false"/></rollback>
+    </changeSet>
 </databaseChangeLog>
